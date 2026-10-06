@@ -23,10 +23,14 @@ export interface KioscoTemplateBundle {
 const COMMANDS: CommandDef[] = [
   { command: 'venta', description: 'Registrar una venta', action: 'registrar_venta' },
   { command: 'stock', description: 'Consultar stock', action: 'consultar_stock' },
+  { command: 'compra', description: 'Entró mercadería (compra)', action: 'registrar_compra' },
   { command: 'caja', description: 'Caja del día', action: 'consultar_caja_hoy' },
   { command: 'resumen', description: 'Resumen del mes', action: 'consultar_resumen_mes' },
   { command: 'ventas', description: 'Últimas ventas', action: 'consultar_ventas' },
   { command: 'producto', description: 'Crear un producto', action: 'crear_producto' },
+  { command: 'ajustar', description: 'Contar o ajustar stock', action: 'fijar_stock' },
+  { command: 'gasto', description: 'Sacar plata (gasto)', action: 'registrar_gasto' },
+  { command: 'entrada', description: 'Entró plata', action: 'registrar_entrada' },
 ];
 
 export function createKioscoTemplate(deps: KioscoTemplateDeps): KioscoTemplateBundle {
@@ -50,7 +54,7 @@ export function createKioscoTemplate(deps: KioscoTemplateDeps): KioscoTemplateBu
         '• *"Vendí 3 Coca y 2 alfajores"*',
         '• *"Vendí dos yerbas a 5000 cada una"*',
         '',
-        '📌 Tocá /ayuda para ver los comandos, o usá los botones de abajo.',
+        '📌 Tenés botones abajo para lo más usado, o tocá /menu para ver todo.',
       ].join('\n'),
     systemPrompt: (businessName, referenceDate, hints) =>
       buildKioscoSystemPrompt(businessName, referenceDate, hints),
@@ -72,18 +76,25 @@ export function createKioscoTemplate(deps: KioscoTemplateDeps): KioscoTemplateBu
       { label: '💰 Caja', action: 'consultar_caja_hoy' },
     ],
     menu: [
-      { label: '🛒 Registrar venta', action: 'registrar_venta' },
-      { label: '📦 Stock', action: 'consultar_stock' },
-      { label: '🧾 Caja de hoy', action: 'consultar_caja_hoy' },
-      { label: '📊 Resumen del mes', action: 'consultar_resumen_mes' },
+      { label: '🛒 Registrar una venta', action: 'registrar_venta' },
       { label: '➕ Crear producto', action: 'crear_producto' },
+      { label: '📦 Entró mercadería (compra)', action: 'registrar_compra' },
+      { label: '🔢 Contar / ajustar stock', action: 'fijar_stock' },
+      { label: '📦 Consultar stock', action: 'consultar_stock' },
+      { label: '💰 Caja de hoy', action: 'consultar_caja_hoy' },
+      { label: '💸 Sacar plata (gasto)', action: 'registrar_gasto' },
+      { label: '💵 Entró plata', action: 'registrar_entrada' },
+      { label: '📊 Resumen del mes', action: 'consultar_resumen_mes' },
+      { label: '🧾 Últimas ventas', action: 'consultar_ventas' },
+      { label: '✏️ Cambiar producto', action: 'modificar_producto' },
+      { label: '🗑️ Dar de baja producto', action: 'eliminar_producto' },
     ],
     menuCommands: [
       { command: 'venta', description: '🛒 Registrar una venta' },
       { command: 'stock', description: '📦 Consultar stock' },
-      { command: 'caja', description: '🧾 Caja del día' },
+      { command: 'compra', description: '📦 Entró mercadería' },
+      { command: 'caja', description: '💰 Caja del día' },
       { command: 'resumen', description: '📊 Resumen del mes' },
-      { command: 'ventas', description: '🧾 Últimas ventas' },
       { command: 'producto', description: '➕ Crear un producto' },
     ],
   };

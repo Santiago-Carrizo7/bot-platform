@@ -17,11 +17,11 @@ export interface CreateBotDeps {
 }
 
 const BASE_COMMANDS = [
-  { command: 'start', description: 'Comenzar / vincular invitación' },
-  { command: 'menu', description: 'Ver el menú del negocio' },
-  { command: 'ayuda', description: 'Ayuda y comandos' },
+  { command: 'start', description: 'Comenzar' },
+  { command: 'menu', description: 'Ver el menú' },
+  { command: 'ayuda', description: 'Ayuda' },
   { command: 'negocios', description: 'Cambiar de negocio' },
-  { command: 'cancelar', description: 'Cancelar la conversación actual' },
+  { command: 'cancelar', description: 'Cancelar lo que estoy haciendo' },
 ];
 
 export function createBot(deps: CreateBotDeps): Bot<BotContext> {
@@ -132,8 +132,9 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
     logger.error('Error no capturado en Grammy', { updateId: err.ctx.update.update_id, error: err.error });
   });
 
+  // Lo del negocio primero (lenguaje del usuario), lo técnico después.
   void bot.api
-    .setMyCommands([...BASE_COMMANDS, ...(flowDeps.template.menuCommands ?? [])])
+    .setMyCommands([...(flowDeps.template.menuCommands ?? []), ...BASE_COMMANDS])
     .catch((err) => logger.warn('No se pudo actualizar el menú de comandos en Telegram', err));
 
   return bot;
