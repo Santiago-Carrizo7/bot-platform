@@ -223,8 +223,10 @@ async function handleCommand(
     return md('Conversación cancelada. No se guardó nada.');
   }
   if (name === 'start' || name === 'menu' || name === 'ayuda') {
+    const hint = await deps.template.welcomeHint?.(tenant).catch(() => null);
+    const hintText = hint ? `\n\n${hint}` : '';
     return {
-      ...md(`${deps.template.welcome(tenant.business.name, firstName)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}`),
+      ...md(`${deps.template.welcome(tenant.business.name, firstName)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}${hintText}`),
       inlineKeyboard: menuKeyboard(deps.template),
     };
   }

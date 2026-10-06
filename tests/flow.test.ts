@@ -105,6 +105,7 @@ function setup(opts: {
   aiLimit?: number;
   aiUsed?: number;
   inviteBotUsername?: string;
+  template?: TemplateDefinition;
 } = {}): Fixture {
   const businesses = new FakeBusinessRepo();
   const users = new FakeUserRepo();
@@ -132,7 +133,7 @@ function setup(opts: {
   aiUsage.count = opts.aiUsed ?? 0;
   const invitations = new FakeInvitationRepo();
   const deps: FlowDeps = {
-    template,
+    template: opts.template ?? template,
     interpreter: stubInterpreter(opts.aiQueue ?? []),
     conversations,
     businesses,
@@ -361,6 +362,31 @@ describe('pipeline de mensajes', () => {
     const reply = await text(f, '/invitar');
     expect(reply.text).toContain('no están disponibles');
     expect(f.invitations.store.size).toBe(0);
+  });
+
+  it('/menu con welcomeHint del template: agrega la pista de onboarding', async () => {
+    const f = setup({
+      template: { ...template, welcomeHint: async () => '⚠️ Cargá tu primer producto.' },
+    });
+    const reply = await text(f, '/menu');
+    expect(reply.text).toContain('⚠️ Cargá tu primer producto.');
+    expect(reply.inlineKeyboard).toBeDefined();
+  });
+
+  it('/menu sin welcomeHint: no agrega nada', async () => {
+    const f = setup();
+    const reply = await text(f, '/menu');
+    expect(reply.text).not.toContain('⚠️');
+  });
+
+  it('recién vinculado como OWNER: el bienvenido menciona /invitar', async () => {
+    const f = setup({ role: 'OWNER' });
+    const reply = await handleText(
+      f.deps,
+      { resolution: { ...f.resolution, justJoined: true }, text: '/start', now: NOW }
+    );
+    expect(reply.text).toContain('dueño');
+    expect(reply.text).toContain('/invitar');
   });
 
   it('registry: escritura sin summarize y nombres duplicados fallan en construcción', async () => {

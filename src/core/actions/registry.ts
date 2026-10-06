@@ -83,6 +83,11 @@ export interface TemplateDefinition {
   resolveHints?: (tenant: TenantContext) => Promise<string>;
   actions: ActionDef<unknown>[];
   commands: CommandDef[];
+  /**
+   * Pista contextual que se agrega al /start, /menu y /ayuda (opcional).
+   * Ej: guiar el alta inicial si el negocio todavía no tiene datos.
+   */
+  welcomeHint?: (tenant: TenantContext) => Promise<string | null>;
   menu: MenuItem[];
   /**
    * Barra persistente de atajos (reply keyboard). Pocos botones (4-6), con las

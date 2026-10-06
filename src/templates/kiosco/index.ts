@@ -69,6 +69,14 @@ export function createKioscoTemplate(deps: KioscoTemplateDeps): KioscoTemplateBu
     },
     actions: buildKioscoActions({ products, sales, cash }),
     commands: COMMANDS,
+    welcomeHint: async (tenant) => {
+      const existing = await products.list(tenant.business.id, { limit: 1 });
+      if (existing.length > 0) return null;
+      return (
+        '⚠️ Todavía no cargaste productos. Tocá *➕ Crear producto* o escribime nombre y precio ' +
+        '(ej. *"Coca 3500"*).'
+      );
+    },
     replyMenu: [
       { label: '🛒 Vender', action: 'registrar_venta' },
       { label: '📦 Stock', action: 'consultar_stock' },
