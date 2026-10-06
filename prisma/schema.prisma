@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================ CORE ============================
+
+enum BusinessStatus {
+  TRIAL
+  ACTIVE
+  READ_ONLY
+  SUSPENDED
+}
+
+enum MembershipRole {
+  OWNER
+  EMPLOYEE
+}
+
+enum ConversationPhase {
+  IDLE
+  COLLECTING
+  CONFIRMING
+}
+
+model Business {
+  id                    String         @id @default(uuid())
+  name                  String
+  templateId            String
+  status                BusinessStatus @default(TRIAL)
+  trialStartedAt        DateTime?
+  trialDays             Int            @default(10)
+  activatedAt           DateTime?
+  subscriptionExpiresAt DateTime?
+  graceDays             Int            @default(7)
+  timezone              String         @default("America/Argentina/Buenos_Aires")
+  currency              String         @default("ARS")
+  config                Json           @default("{}")
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  memberships           Membership[]
+  invitations           Invitation[]
+  conversations         ConversationState[]
+  auditLogs             AuditLog[]
+  aiUsage               AiUsageLog[]
+  // Tablas del template gastos (referencia). Otros templates agregan las suyas.
+  categories            Category[]
+  expenses              Expense[]
+  budgets               Budget[]
+
+  @@map("businesses")
+}
+
+model User {
+  id          String       @id @default(uuid())
+  telegramId  String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+
+  @@map("users")
+}
+
+model Membership {
+  id          String         @id @default(uuid())
+  businessId  String
+  business    Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        MembershipRole @default(EMPLOYEE)
+  lastUsedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@index([businessId])
+  @@map("memberships")
+}
+
+model Invitation {
+  id              String         @id @default(uuid())
+  businessId      String
+  business        Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  role            MembershipRole @default(EMPLOYEE)
+  tokenHash       String         @unique
+  expiresAt       DateTime
+  usedAt          DateTime?
+  usedByUserId    String?
+  revokedAt       DateTime?
+  createdByUserId String?
+  createdAt       DateTime       @default(now())
+
+  @@index([businessId])
+  @@map("invitations")
+}
+
+model ConversationState {
+  businessId  String
+  business    Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId      String
+  phase       ConversationPhase @default(IDLE)
+  actionName  String?
+  data        Json              @default("{}")
+  expiresAt   DateTime?
+  updatedAt   DateTime          @updatedAt
+
+  @@id([businessId, userId])
+  @@map("conversation_states")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  actorUserId String?
+  action      String
+  entityType  String?
+  entityId    String?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@map("audit_logs")
+}
+
+model AiUsageLog {
+  id          String   @id @default(uuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId      String?
+  provider    String
+  model       String
+  createdAt   DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@map("ai_usage_logs")
+}
+
+// ==================== TEMPLATE: gastos ====================
+
+model Category {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name       String
+  icon       String?
+  isSystem   Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  expenses   Expense[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("categories")
+}
+
+model Expense {
+  id           String    @id @default(uuid())
+  businessId   String
+  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId       String
+  amount       Decimal   @db.Decimal(12, 2)
+  description  String
+  category     String
+  categoryId   String?
+  categoryRef  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  date         DateTime
+  installments Int       @default(1)
+  currency     String    @default("ARS")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([businessId, date])
+  @@index([businessId, category])
+  @@map("expenses")
+}
+
+model Budget {
+  id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId     String
+  category   String
+  amount     Decimal  @db.Decimal(12, 2)
+  currency   String   @default("ARS")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([businessId, userId, category])
+  @@index([businessId])
+  @@map("budgets")
+}
