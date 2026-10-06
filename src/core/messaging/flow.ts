@@ -108,6 +108,16 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     return handleCommand(deps, tenant, resolution, trimmed, input.firstName, now, access.subscriptionReminder);
   }
 
+  // Botones de la barra persistente: match exacto → acción directa, sin IA.
+  // Un tap abandona la conversación en curso (incluso una confirmación pendiente),
+  // igual que cambiar de acción por texto.
+  const menuHit = deps.template.replyMenu?.find((m) => m.label === trimmed);
+  if (menuHit) {
+    const menuAction = deps.template.actions.find((a) => a.name === menuHit.action);
+    if (!menuAction) return md(MSG_UNKNOWN);
+    return startAction(deps, tenant, resolution.user.id, menuAction, {}, now, access, true);
+  }
+
   const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
   if (active && active.phase === 'CONFIRMING' && active.actionName) {
     const lower = trimmed.toLowerCase();

@@ -65,6 +65,12 @@ export function createKioscoTemplate(deps: KioscoTemplateDeps): KioscoTemplateBu
     },
     actions: buildKioscoActions({ products, sales, cash }),
     commands: COMMANDS,
+    replyMenu: [
+      { label: '🛒 Vender', action: 'registrar_venta' },
+      { label: '📦 Stock', action: 'consultar_stock' },
+      { label: '➕ Entró mercadería', action: 'registrar_compra' },
+      { label: '💰 Caja', action: 'consultar_caja_hoy' },
+    ],
     menu: [
       { label: '🛒 Registrar venta', action: 'registrar_venta' },
       { label: '📦 Stock', action: 'consultar_stock' },

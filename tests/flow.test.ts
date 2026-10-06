@@ -66,6 +66,10 @@ const template: TemplateDefinition = {
     { command: 'total', action: 'consultar_total' },
   ],
   menu: [{ label: 'Registrar gasto', action: 'registrar_gasto' }],
+  replyMenu: [
+    { label: '📦 Total', action: 'consultar_total' },
+    { label: '➕ Gasto', action: 'registrar_gasto' },
+  ],
 };
 
 /** Intérprete stub con respuestas encoladas. */
@@ -289,6 +293,33 @@ describe('pipeline de mensajes', () => {
   it('cupo diario de IA excedido: no llama al modelo', async () => {
     const f = setup({ aiLimit: 5, aiUsed: 5, aiQueue: [{ action: 'consultar_total', params: {} }] });
     await expect(text(f, 'hola')).rejects.toThrow(/Límite diario/);
+  });
+
+  it('tap en botón de la barra (lectura): ejecuta sin llamar a la IA', async () => {
+    const f = setup({ aiQueue: [{ action: 'consultar_total', params: {} }] });
+    const reply = await text(f, '📦 Total');
+    expect(reply.text).toContain('Total: $ 5.000');
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+    expect(writeCalls).toBe(0);
+  });
+
+  it('tap en botón de la barra (escritura): abre la conversación con el intro', async () => {
+    const f = setup({ aiQueue: [{ action: 'registrar_gasto', params: {} }] });
+    const reply = await text(f, '➕ Gasto');
+    expect(reply.text).toContain('Para registrar necesito monto y descripción');
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+    const conv = await f.conversations.get(f.tenant.business.id, 'user-1');
+    expect(conv?.phase).toBe('COLLECTING');
+    expect(conv?.actionName).toBe('registrar_gasto');
+  });
+
+  it('tap en otro botón durante la confirmación: abandona y cambia de acción', async () => {
+    const f = setup({ aiQueue: [{ action: 'registrar_gasto', params: { amount: 5000, description: 'Saeta' } }] });
+    const pending = await text(f, 'gasté 5000 en Saeta');
+    expect(pending.text).toContain('¿Confirmar?');
+    const reply = await text(f, '📦 Total');
+    expect(reply.text).toContain('Total: $ 5.000');
+    expect(writeCalls).toBe(0);
   });
 
   it('registry: escritura sin summarize y nombres duplicados fallan en construcción', async () => {

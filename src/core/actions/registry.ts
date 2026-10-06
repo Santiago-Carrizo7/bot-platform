@@ -58,6 +58,15 @@ export interface MenuItem {
   action: string;
 }
 
+/**
+ * Atajo del teclado persistente (reply keyboard). El tap llega como texto
+ * y se mapea por igualdad exacta a la acción (determinístico, sin IA).
+ */
+export interface ReplyMenuItem {
+  label: string;
+  action: string;
+}
+
 export interface TemplateDefinition {
   id: string;
   label: string;
@@ -75,6 +84,11 @@ export interface TemplateDefinition {
   actions: ActionDef<unknown>[];
   commands: CommandDef[];
   menu: MenuItem[];
+  /**
+   * Barra persistente de atajos (reply keyboard). Pocos botones (4-6), con las
+   * acciones más usadas en lenguaje del usuario. Si no se define, no hay barra.
+   */
+  replyMenu?: ReplyMenuItem[];
   /** Comandos que aparecen en el botón Menú de Telegram (base + template). */
   menuCommands?: { command: string; description: string }[];
 }

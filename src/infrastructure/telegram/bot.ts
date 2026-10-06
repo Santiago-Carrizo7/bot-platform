@@ -28,6 +28,8 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   const { token, templateId, flowDeps, resolver, sttService } = deps;
   const bot = new Bot<BotContext>(token);
   const limiter = new InMemoryRateLimiter();
+  // Barra persistente de atajos del template (2 botones por fila).
+  const quickRows = toRows((flowDeps.template.replyMenu ?? []).map((m) => m.label), 2);
 
   // Identidad + tenant en cada update, antes que cualquier handler.
   bot.use(async (ctx, next) => {
@@ -59,25 +61,31 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   // Comandos base + comandos del template → todos pasan por el pipeline.
   const templateCommands = flowDeps.template.commands.map((c) => c.command);
   bot.command(['start', 'menu', 'ayuda', 'cancelar', 'negocios', ...templateCommands], async (ctx) => {
-    await replySafely(ctx, () =>
-      handleText(flowDeps, {
-        resolution: requireResolution(ctx),
-        text: ctx.message?.text ?? '',
-        firstName: ctx.from?.first_name,
-        now: new Date(),
-      })
+    await replySafely(
+      ctx,
+      () =>
+        handleText(flowDeps, {
+          resolution: requireResolution(ctx),
+          text: ctx.message?.text ?? '',
+          firstName: ctx.from?.first_name,
+          now: new Date(),
+        }),
+      quickRows
     );
   });
 
   // Texto libre (freestyle) → pipeline.
   bot.on('message:text', async (ctx) => {
-    await replySafely(ctx, () =>
-      handleText(flowDeps, {
-        resolution: requireResolution(ctx),
-        text: ctx.message.text,
-        firstName: ctx.from?.first_name,
-        now: new Date(),
-      })
+    await replySafely(
+      ctx,
+      () =>
+        handleText(flowDeps, {
+          resolution: requireResolution(ctx),
+          text: ctx.message.text,
+          firstName: ctx.from?.first_name,
+          now: new Date(),
+        }),
+      quickRows
     );
   });
 
@@ -97,23 +105,27 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
         firstName: ctx.from?.first_name,
         now: new Date(),
       });
-    });
+    }, quickRows);
   });
 
   // Botones inline (confirmar/cancelar/menú/negocios).
   bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => undefined);
-    await replySafely(ctx, async () => {
-      const resolution = requireResolution(ctx);
-      if (!resolution.tenant) {
-        return { text: 'Necesitás una invitación para usar este bot.' };
-      }
-      return handleCallback(flowDeps, {
-        resolution,
-        data: ctx.callbackQuery.data,
-        now: new Date(),
-      });
-    });
+    await replySafely(
+      ctx,
+      async () => {
+        const resolution = requireResolution(ctx);
+        if (!resolution.tenant) {
+          return { text: 'Necesitás una invitación para usar este bot.' };
+        }
+        return handleCallback(flowDeps, {
+          resolution,
+          data: ctx.callbackQuery.data,
+          now: new Date(),
+        });
+      },
+      quickRows
+    );
   });
 
   bot.catch((err) => {
@@ -156,20 +168,35 @@ async function transcribeUpdate(
   return sttService.transcribe(audioBuffer, voiceOrAudio.mime_type ?? 'audio/ogg');
 }
 
-async function replySafely(ctx: BotContext, run: () => Promise<BotReply>): Promise<void> {
+/** Parte las etiquetas en filas de N botones para el reply keyboard. */
+function toRows(labels: string[], perRow: number): string[][] {
+  const rows: string[][] = [];
+  for (let i = 0; i < labels.length; i += perRow) {
+    rows.push(labels.slice(i, i + perRow));
+  }
+  return rows;
+}
+
+async function replySafely(
+  ctx: BotContext,
+  run: () => Promise<BotReply>,
+  keyboardRows: string[][] = []
+): Promise<void> {
   try {
     await ctx.replyWithChatAction('typing').catch(() => undefined);
     const reply = await run();
-    await ctx.reply(reply.text, {
-      parse_mode: reply.parseMode,
-      reply_markup: reply.inlineKeyboard
-        ? {
-            inline_keyboard: reply.inlineKeyboard.map((row) =>
-              row.map((b) => ({ text: b.text, callback_data: b.callbackData }))
-            ),
-          }
-        : undefined,
-    });
+    // Un mensaje lleva un solo reply_markup: el inline (confirmar/menú) gana;
+    // si no hay, se muestra la barra persistente (ya visible desde antes igual).
+    const reply_markup = reply.inlineKeyboard
+      ? {
+          inline_keyboard: reply.inlineKeyboard.map((row) =>
+            row.map((b) => ({ text: b.text, callback_data: b.callbackData }))
+          ),
+        }
+      : keyboardRows.length > 0
+        ? { keyboard: keyboardRows.map((row) => row.map((text) => ({ text }))), resize_keyboard: true }
+        : undefined;
+    await ctx.reply(reply.text, { parse_mode: reply.parseMode, reply_markup });
   } catch (error) {
     // Los AppError son mensajes para el usuario; el resto es inesperado.
     if (error instanceof AppError) {
