@@ -1,4 +1,5 @@
-import { Bot } from 'grammy';
+import { Bot, webhookCallback } from 'grammy';
+import type { RequestHandler } from 'express';
 import { AppError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
 import type { FlowDeps, BotReply } from '../../core/messaging/flow.js';
@@ -167,6 +168,27 @@ async function transcribeUpdate(
   if (!response.ok) throw new AppError('No se pudo descargar el audio desde Telegram.');
   const audioBuffer = Buffer.from(await response.arrayBuffer());
   return sttService.transcribe(audioBuffer, voiceOrAudio.mime_type ?? 'audio/ogg');
+}
+
+/**
+ * Rutas de webhook (una por bot) para montar en Express.
+ * Telegram empuja cada update con POST; el header secreto lo valida grammY.
+ */
+export interface TelegramWebhookRoute {
+  method: 'post';
+  path: string;
+  handler: RequestHandler;
+}
+
+export function buildTelegramWebhookRoutes(
+  bots: Array<{ templateId: string; bot: Bot<BotContext> }>,
+  secretToken: string
+): TelegramWebhookRoute[] {
+  return bots.map(({ templateId, bot }) => ({
+    method: 'post' as const,
+    path: `/telegram/${templateId}`,
+    handler: webhookCallback(bot, 'express', { secretToken }) as unknown as RequestHandler,
+  }));
 }
 
 /** Parte las etiquetas en filas de N botones para el reply keyboard. */

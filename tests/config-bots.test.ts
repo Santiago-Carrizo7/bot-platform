@@ -33,6 +33,19 @@ describe('configuredBots', () => {
     expect(() => loadConfig({ ...BASE_ENV, TELEGRAM_BOT_TOKEN_GASTOS: '' } as NodeJS.ProcessEnv)).toThrow();
   });
 
+  it('webhook: la URL exige secret, y sin URL no pide nada', () => {
+    expect(() =>
+      loadConfig({ ...BASE_ENV, TELEGRAM_WEBHOOK_URL: 'https://mi-app.onrender.com' } as NodeJS.ProcessEnv)
+    ).toThrow(/TELEGRAM_WEBHOOK_SECRET/);
+    const config = loadConfig({
+      ...BASE_ENV,
+      TELEGRAM_WEBHOOK_URL: 'https://mi-app.onrender.com',
+      TELEGRAM_WEBHOOK_SECRET: 'secreto-largo-de-webhook',
+    } as NodeJS.ProcessEnv);
+    expect(config.TELEGRAM_WEBHOOK_URL).toBe('https://mi-app.onrender.com');
+    expect(loadConfig({ ...BASE_ENV } as NodeJS.ProcessEnv).TELEGRAM_WEBHOOK_URL).toBeUndefined();
+  });
+
   it('TELEGRAM_POLLING: on por defecto, off para desarrollo local sin Telegram', () => {
     expect(loadConfig({ ...BASE_ENV } as NodeJS.ProcessEnv).TELEGRAM_POLLING).toBe('on');
     expect(

@@ -1,4 +1,4 @@
-import express, { type Express, type NextFunction, type Request, type Response, type Router } from 'express';
+import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response, type Router } from 'express';
 
 export type { Router };
 import cors from 'cors';
@@ -32,12 +32,20 @@ export interface TemplateRouter {
   router: Router;
 }
 
+export interface ExtraRoute {
+  method: 'get' | 'post';
+  path: string;
+  handler: RequestHandler;
+}
+
 export interface CreateAppDeps {
   memberships: MembershipService;
   users: UserService;
   apiSecret: string;
   /** Routers aportados por templates (ya scropeados por negocio vía req.auth). */
   templateRouters?: TemplateRouter[];
+  /** Rutas públicas extra (ej. webhooks de Telegram). Van sin auth HMAC. */
+  extraRoutes?: ExtraRoute[];
   corsOrigins?: string[];
 }
 
@@ -102,6 +110,11 @@ export function createExpressApp(deps: CreateAppDeps): Express {
     api.use(`/v1/${id}`, router);
   }
   app.use('/api', api);
+
+  for (const route of deps.extraRoutes ?? []) {
+    if (route.method === 'post') app.post(route.path, route.handler);
+    else app.get(route.path, route.handler);
+  }
 
   // Manejador centralizado de errores (debe ir último).
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -1,8 +1,11 @@
 import type { Server } from 'node:http';
 import { loadConfig } from '../core/config/config.js';
+import { ConfigError } from '../core/errors/errors.js';
 import { logger } from '../core/logging/logger.js';
 import { prisma } from '../infrastructure/persistence/prisma.js';
 import { buildBots, buildCoreServices, buildHttpApp, type RunningBot } from './container.js';
+import { buildTelegramWebhookRoutes } from '../infrastructure/telegram/bot.js';
+import type { ExtraRoute } from '../infrastructure/http/server.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
 import { createKioscoTemplate } from '../templates/kiosco/index.js';
 
@@ -28,7 +31,24 @@ async function bootstrap() {
     logger.info('Validando tokens de Telegram...');
     bots = await buildBots(config, core, templates);
   }
-  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }]);
+
+  // Modo webhook: Telegram empuja cada update al servidor (una ruta por bot).
+  // Sin URL pública se usa long polling. Con polling off no hay ni uno ni otro.
+  const webhookBase = config.TELEGRAM_WEBHOOK_URL?.replace(/\/+$/, '');
+  let extraRoutes: ExtraRoute[] = [];
+  if (webhookBase && bots.length > 0) {
+    const secret = config.TELEGRAM_WEBHOOK_SECRET;
+    if (!secret) {
+      throw new ConfigError('TELEGRAM_WEBHOOK_SECRET es obligatorio cuando se define TELEGRAM_WEBHOOK_URL.');
+    }
+    for (const { templateId, bot } of bots) {
+      const url = `${webhookBase}/telegram/${templateId}`;
+      await bot.api.setWebhook(url, { secret_token: secret });
+      logger.info(`Webhook registrado para '${templateId}': ${url}`);
+    }
+    extraRoutes = buildTelegramWebhookRoutes(bots, secret);
+  }
+  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }], extraRoutes);
 
   let httpServer: Server | undefined;
   await new Promise<void>((resolve) => {
@@ -54,7 +74,9 @@ async function bootstrap() {
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 
-  if (bots.length > 0) {
+  if (webhookBase && bots.length > 0) {
+    logger.info('Modo webhook: Telegram empuja los updates al servidor.');
+  } else if (bots.length > 0) {
     logger.info('Iniciando long polling...');
     await Promise.all(
       bots.map(async ({ templateId, bot }) => {

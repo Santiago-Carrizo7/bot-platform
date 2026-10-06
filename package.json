@@ -16,7 +16,8 @@
     "prisma:push": "prisma db push",
     "prisma:diff": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",
     "invite": "tsx scripts/invite.ts",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "webhook": "tsx scripts/webhook.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

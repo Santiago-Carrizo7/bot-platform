@@ -14,6 +14,10 @@ const configSchema = z.object({
   TELEGRAM_BOT_TOKEN_KIOSCO: z.string().min(1).optional(),
   // Modo local sin Telegram (solo HTTP/API): TELEGRAM_POLLING=off.
   TELEGRAM_POLLING: z.enum(['on', 'off']).default('on'),
+  // Webhook: si se define la URL pública, Telegram empuja los updates al
+  // servidor (una ruta por bot) en vez de long polling.
+  TELEGRAM_WEBHOOK_URL: z.string().url('TELEGRAM_WEBHOOK_URL debe ser una URL pública https').optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
 
   // Proveedor de IA de texto
   AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),
@@ -29,6 +33,14 @@ const configSchema = z.object({
   // Negocio: trial y período de gracia (días)
   TRIAL_DAYS: z.coerce.number().int().positive().default(10),
   GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+}).superRefine((val, ctx) => {
+  if (val.TELEGRAM_WEBHOOK_URL && !val.TELEGRAM_WEBHOOK_SECRET) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['TELEGRAM_WEBHOOK_SECRET'],
+      message: 'TELEGRAM_WEBHOOK_SECRET es obligatorio cuando se define TELEGRAM_WEBHOOK_URL (mínimo 16 caracteres)',
+    });
+  }
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
