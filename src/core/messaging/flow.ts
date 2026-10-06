@@ -436,19 +436,23 @@ function mergeData(base: Record<string, unknown>, incoming: Record<string, unkno
   return merged;
 }
 
-/** Campos requeridos por el schema que aún no tienen valor. */
+/**
+ * Campos requeridos por el schema que aún no tienen valor. Soporta paths
+ * anidados (ej. items con cantidad faltante → reporta la hoja "cantidad").
+ */
 export function missingFields(input: z.ZodType<unknown>, data: unknown): string[] {
   const result = input.safeParse(data);
   if (result.success) return [];
   const missing = new Set<string>();
   for (const issue of result.error.issues) {
-    if (
-      issue.code === 'invalid_type' &&
-      (issue as { received?: unknown }).received === 'undefined' &&
-      issue.path.length > 0
-    ) {
-      missing.add(String(issue.path[0]));
-    }
+    if (issue.path.length === 0) continue;
+    const leaf = String(issue.path[issue.path.length - 1]);
+    const isMissing =
+      (issue.code === 'invalid_type' && (issue as { received?: unknown }).received === 'undefined') ||
+      (issue.code === 'too_small' && issue.path.length > 0);
+    if (!isMissing) continue;
+    // Índices numéricos (items.0.cantidad) → pedir por la hoja.
+    missing.add(/^\d+$/.test(leaf) ? String(issue.path.slice(0, -1).join('.')) || leaf : leaf);
   }
   return [...missing];
 }

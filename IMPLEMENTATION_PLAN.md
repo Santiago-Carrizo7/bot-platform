@@ -65,17 +65,26 @@ Objetivo: paridad funcional con `bot-gastos` sobre el nuevo Core.
 - **Gate obligatorio:** `Functional parity with bot-gastos` (texto, audio, IA,
   registro, consultas, API si se incluyó, tests en verde).
 
-## Phase 3 — Kiosco (primer vertical comercial)
+## Phase 3 — Kiosco (primer vertical comercial) ✅ (primera pasada completa)
 
-- [ ] Tablas: `Product`, `Sale` (+líneas), `Purchase`, `MoneyMovement`,
-  `StockMovement`. `businessId` en todas.
-- [ ] Actions: productos (CRUD + stock inicial), stock (consultar/ajustar/movimientos),
-  ventas (multi-producto, cantidades, total, descuento de stock), compras/gastos,
-  consultas (día/mes/histórico/stock; evaluar "stock bajo" solo si encaja).
-- [ ] Menú + freestyle + audio + confirmación, convergiendo en las mismas actions.
-- [ ] Seeds mínimas por negocio (categorías/unidades base si hacen falta).
-- [ ] Tests del template (incl. descuento de stock y confirmación).
-- **Gate:** flujo kiosco extremo a extremo en staging con datos de prueba.
+- [x] Tablas: `Product`, `Sale` (+`SaleItem`), `Purchase`, `MoneyMovement`,
+  `StockMovement`. `businessId` en todas (migración aplicada en dev y test).
+- [x] Actions (12): productos (crear/modificar/eliminar + stock inicial),
+  stock (consultar, stock bajo, fijar), ventas (multi-producto, cantidades,
+  total calculado, descuento de stock), compras (con entrada opcional a stock),
+  gastos, entradas, caja del día, resumen del mes, historial de ventas.
+- [x] Menú + freestyle + audio + confirmación, convergiendo en las mismas actions.
+  Sin seeds globales (cada kiosco carga sus productos); sin API propia (bot-first).
+- [x] Tests del template (12: total/descuento/movimientos, producto faltante,
+  stock negativo con aviso, compra con stock, fijar stock, stock bajo,
+  resumen día, flujo freestyle→confirmación→auditoría).
+- [x] Gates en verde: `typecheck` ✓, `test` ✓ (67 tests), `build` ✓.
+- Decisiones tomadas: stock puede quedar negativo (avisa, no bloquea); baja de
+  producto lógica (conserva historial); compras/gastos/entradas en `MoneyMovement`
+  (`IN`/`OUT`); ventas/compras/gastos/entradas generan movimientos de caja
+  automáticamente; hints del prompt con catálogo real (nombre/precio/stock).
+- **Gate pendiente:** flujo extremo a extremo en staging con datos reales
+  (requiere token de Telegram) → Phase 4.
 
 ## Phase 4 — First real client validation
 

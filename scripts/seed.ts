@@ -32,7 +32,7 @@ async function main() {
     process.exit(1);
   }
   const templateId = arg('template') ?? 'gastos';
-  if (templateId !== 'gastos') {
+  if (templateId !== 'gastos' && templateId !== 'kiosco') {
     console.error(`Template '${templateId}' no implementado todavía.`);
     process.exit(1);
   }
@@ -43,8 +43,14 @@ async function main() {
 
   // Seeds del template.
   const memberships = new MembershipService(new PrismaMembershipRepository(prisma));
-  const gastos = createGastosTemplate({ db: prisma, memberships, apiSecret: config.API_SECRET });
-  await gastos.seedBusiness(business.id);
+  if (templateId === 'gastos') {
+    const gastos = createGastosTemplate({ db: prisma, memberships, apiSecret: config.API_SECRET });
+    await gastos.seedBusiness(business.id);
+  } else {
+    const { createKioscoTemplate } = await import('../src/templates/kiosco/index.js');
+    const kiosco = createKioscoTemplate({ db: prisma });
+    await kiosco.seedBusiness(business.id);
+  }
 
   // Invitación de OWNER (o membership directa si se pasa el telegram id).
   const ownerTelegramId = arg('owner-telegram-id');

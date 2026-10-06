@@ -4,6 +4,7 @@ import { logger } from '../core/logging/logger.js';
 import { prisma } from '../infrastructure/persistence/prisma.js';
 import { buildBots, buildCoreServices, buildHttpApp } from './container.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
+import { createKioscoTemplate } from '../templates/kiosco/index.js';
 
 async function bootstrap() {
   const config = loadConfig();
@@ -17,7 +18,8 @@ async function bootstrap() {
     memberships: core.memberships,
     apiSecret: config.API_SECRET,
   });
-  const templates = [gastos.template];
+  const kiosco = createKioscoTemplate({ db: prisma });
+  const templates = [gastos.template, kiosco.template];
 
   const bots = buildBots(config, core, templates);
   const app = buildHttpApp(core, [gastos.router]);
