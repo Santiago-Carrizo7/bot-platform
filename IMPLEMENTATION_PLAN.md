@@ -16,36 +16,36 @@ en verde. Si un gate falla, se corrige antes de avanzar.
 - [x] ADRs iniciales en `docs/adr/` (monolito, tenancy, bot por vertical, tablas
   tipadas, registro estático, dispatch vs tools, confirmación, trial).
 - [x] `ARQUITECTURA.md` marcado como superseded (referencia histórica).
-- [ ] Scaffold: `package.json` (pnpm), `tsconfig`, `.env.example`, `Dockerfile`,
+- [x] Scaffold: `package.json` (pnpm), `tsconfig`, `.env.example`, `Dockerfile`,
   `docker-compose.yml`, `.gitignore`, CI mínima (`typecheck/test/build`).
-- [ ] Prisma: schema core + migración inicial (validada con `prisma migrate diff`;
+- [x] Prisma: schema core + migración inicial (validada con `prisma migrate diff`;
   aplicada contra DB local cuando haya motor disponible).
-- [ ] Tests: vitest configurado; estructura `tests/` con fakes en memoria.
+- [x] Tests: vitest configurado; estructura `tests/` con fakes en memoria.
 
 ## Phase 1 — Core extraction
 
 Objetivo: base que compila, testea y resuelve tenant sin dominio de negocio.
 
-- [ ] `TenantContext` (bot → usuario Telegram → membership → business) + resolver.
-- [ ] `Business` (+ `status`: `TRIAL|ACTIVE|READ_ONLY|SUSPENDED`; trial 10 días desde
+- [x] `TenantContext` (bot → usuario Telegram → membership → business) + resolver.
+- [x] `Business` (+ `status`: `TRIAL|ACTIVE|READ_ONLY|SUSPENDED`; trial 10 días desde
   primera acción real de negocio; gracia configurable; expiración → `READ_ONLY`).
-- [ ] `User` (por `telegramId`) + `Membership` + roles `OWNER|EMPLOYEE` (+ helper
+- [x] `User` (por `telegramId`) + `Membership` + roles `OWNER|EMPLOYEE` (+ helper
   `requireRole`, owner-only para invitaciones/revocación/auditoría).
-- [ ] Invitaciones: crear (token aleatorio, hash, expiración, 1 uso, rol), consumir
+- [x] Invitaciones: crear (token aleatorio, hash, expiración, 1 uso, rol), consumir
   vía `/start <TOKEN>` (deep link), revocar, auditar. Script manual `scripts/`.
-- [ ] Telegram runtime compartido: contexto, middleware identidad+membership,
+- [x] Telegram runtime compartido: contexto, middleware identidad+membership,
   comandos base (`/start`, `/ayuda`, `/cancelar`), error boundary, rate limit,
   descarga de audio, teclados inline.
-- [ ] IA: `IAIProvider` + OpenRouter + intérprete genérico (`{action, params}`,
+- [x] IA: `IAIProvider` + OpenRouter + intérprete genérico (`{action, params}`,
   whitelist, Zod, 1 reintento). STT: contrato + provider OpenAI-compatible + servicio.
-- [ ] `Action Registry` base (tipos `Action`/`Command`, registro por template).
-- [ ] Conversación multi-mensaje: `ConversationState` con TTL, slot-filling por
+- [x] `Action Registry` base (tipos `Action`/`Command`, registro por template).
+- [x] Conversación multi-mensaje: `ConversationState` con TTL, slot-filling por
   campos faltantes (guiado por errores Zod + prompts del template), `/cancelar`.
-- [ ] Confirmación: toda `Action` de escritura pasa por Sí/No antes de ejecutar.
-- [ ] Auditoría: `AuditLog` + helper de Core; actor obligatorio en mutaciones.
-- [ ] API base: Express app, auth HMAC (`API_SECRET`, expiración, `businessId`
+- [x] Confirmación: toda `Action` de escritura pasa por Sí/No antes de ejecutar.
+- [x] Auditoría: `AuditLog` + helper de Core; actor obligatorio en mutaciones.
+- [x] API base: Express app, auth HMAC (`API_SECRET`, expiración, `businessId`
   firmado), error handler, `/health`. Sin rutas de dominio aún.
-- [ ] Tests: tenant isolation, invitaciones (válida/expirada/usada/revocada),
+- [x] Tests: tenant isolation, invitaciones (válida/expirada/usada/revocada),
   roles, trial (inicio en 1ª escritura; lecturas no lo inician), `READ_ONLY`
   bloquea escrituras, confirmación obligatoria, dispatch, interpretación con mock.
 - **Gate:** gates en verde + bot responde `/start`/`/ayuda` resolviendo tenant.
@@ -54,13 +54,13 @@ Objetivo: base que compila, testea y resuelve tenant sin dominio de negocio.
 
 Objetivo: paridad funcional con `bot-gastos` sobre el nuevo Core.
 
-- [ ] `templates/gastos/`: actions (`registrar_gasto` con confirmación; lecturas:
+- [x] `templates/gastos/`: actions (`registrar_gasto` con confirmación; lecturas:
   últimos, total, resumen), commands (`/gastos`, `/total`, `/presupuesto`,
   `/categorias`, `/vincular` con token HMAC), menú, prompts, seeds de categorías.
-- [ ] Dominio + persistencia portados con `businessId` (`Expense`, `Category`,
+- [x] Dominio + persistencia portados con `businessId` (`Expense`, `Category`,
   `Budget` por usuario dentro del negocio); repos sin `prisma` crudo expuesto.
-- [ ] API de gastos (si aporta a la arquitectura; con auth HMAC + scope por negocio).
-- [ ] Tests existentes adaptados (parser, whitelist, STT, formatters) + tenant
+- [x] API de gastos (si aporta a la arquitectura; con auth HMAC + scope por negocio).
+- [x] Tests existentes adaptados (parser, whitelist, STT, formatters) + tenant
   isolation del template.
 - **Gate obligatorio:** `Functional parity with bot-gastos` (texto, audio, IA,
   registro, consultas, API si se incluyó, tests en verde).
@@ -122,3 +122,18 @@ diseña ni se implementa antes.
   negocio, API completa con scope por negocio, seeds, scripts seed/smoke.
   Paridad funcional con bot-gastos verificada (texto/voz vía pipeline, IA,
   registro, consultas, presupuestos, categorías, vincular con token HMAC).
+- 2026-10-06: staging en Render + Supabase (plan free + cron-job cada 12 min
+  contra /health para que no duerma). Tokens de bot opcionales + validación con
+  getMe() al arrancar (un token inválido ya no mata el deploy con un 404
+  críptico). Checkboxes de fases 0-2 marcados (estaban completadas).
+- 2026-10-06: Sprint A (bot intuitivo). Teclado persistente en Core
+  (`TemplateDefinition.replyMenu`, match exacto sin IA, gana el inline en
+  confirmaciones) + barra del kiosco (Vender/Stock/Entró mercadería/Caja).
+  Menú inline completo con las 12 actions en criollo + comandos
+  (compra/ajustar/gasto/entrada) + `setMyCommands` con lo del negocio primero.
+  `/invitar` desde el bot (OWNER; empleado por defecto, `/invitar dueno` para
+  dueño). `welcomeHint` en /start//menu//ayuda (kiosco guía el alta si no hay
+  productos). `TELEGRAM_POLLING=off` para dev local sin Telegram.
+  API namespaced: `/api/v1/<templateId>/*` (`/api/me` y `/health` quedan);
+  smoke actualizado. Convención documentada en `server.ts` + `docs/OPERACIONES.md`.
+  Gates en verde (81 tests).

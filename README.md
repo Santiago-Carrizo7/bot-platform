@@ -31,6 +31,20 @@ pnpm dev
 Con `TEST_DATABASE_URL` apuntando a otra DB se activa además el test de
 aislamiento multi-tenant contra Postgres real.
 
+## Loop de desarrollo
+
+Local = código + tests. Ver el bot = staging (Render, auto-deploy desde `main`).
+
+```bash
+git pull
+pnpm typecheck && pnpm test && pnpm build
+git push   # Render redespliega solo → probar en Telegram
+```
+
+Nunca correr `pnpm dev` con el token real mientras Render está arriba (error 409:
+dos pollers con el mismo token). Para dev local sin Telegram:
+`TELEGRAM_POLLING=off` en `.env`. Detalle operativo en `docs/OPERACIONES.md`.
+
 ## Uso
 
 ```bash

@@ -18,12 +18,26 @@ export interface AuthenticatedRequest extends Request {
   auth?: RequestContext;
 }
 
+/**
+ * Convención de rutas (congelada):
+ * - `GET /health` → pública, liveness (la usa cron-job para que Render no duerma).
+ * - `/api/*` → auth HMAC (Bearer firmado: userId + businessId + expiración).
+ * - `/api/me` → identidad general (core).
+ * - `/api/v1/<templateId>/*` → router propio de cada template (evita colisiones:
+ *   dos templates pueden querer `/summary`).
+ * - Respuestas: `{ data }` en éxito, `{ error, message }` en fallo.
+ */
+export interface TemplateRouter {
+  id: string;
+  router: Router;
+}
+
 export interface CreateAppDeps {
   memberships: MembershipService;
   users: UserService;
   apiSecret: string;
   /** Routers aportados por templates (ya scropeados por negocio vía req.auth). */
-  templateRouters?: Router[];
+  templateRouters?: TemplateRouter[];
   corsOrigins?: string[];
 }
 
@@ -84,8 +98,8 @@ export function createExpressApp(deps: CreateAppDeps): Express {
       },
     });
   });
-  for (const router of deps.templateRouters ?? []) {
-    api.use(router);
+  for (const { id, router } of deps.templateRouters ?? []) {
+    api.use(`/v1/${id}`, router);
   }
   app.use('/api', api);
 

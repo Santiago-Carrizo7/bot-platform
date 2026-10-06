@@ -32,4 +32,11 @@ describe('configuredBots', () => {
   it('token vacío se rechaza en la validación de env', () => {
     expect(() => loadConfig({ ...BASE_ENV, TELEGRAM_BOT_TOKEN_GASTOS: '' } as NodeJS.ProcessEnv)).toThrow();
   });
+
+  it('TELEGRAM_POLLING: on por defecto, off para desarrollo local sin Telegram', () => {
+    expect(loadConfig({ ...BASE_ENV } as NodeJS.ProcessEnv).TELEGRAM_POLLING).toBe('on');
+    expect(
+      loadConfig({ ...BASE_ENV, TELEGRAM_POLLING: 'off' } as NodeJS.ProcessEnv).TELEGRAM_POLLING
+    ).toBe('off');
+  });
 });

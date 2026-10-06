@@ -12,6 +12,8 @@ const configSchema = z.object({
   // Todos opcionales: arranca solo lo configurado (un string vacío también falla).
   TELEGRAM_BOT_TOKEN_GASTOS: z.string().min(1).optional(),
   TELEGRAM_BOT_TOKEN_KIOSCO: z.string().min(1).optional(),
+  // Modo local sin Telegram (solo HTTP/API): TELEGRAM_POLLING=off.
+  TELEGRAM_POLLING: z.enum(['on', 'off']).default('on'),
 
   // Proveedor de IA de texto
   AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),

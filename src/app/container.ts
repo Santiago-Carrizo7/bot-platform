@@ -26,7 +26,7 @@ import { OpenRouterProvider } from '../infrastructure/ai/openrouter.provider.js'
 import { OpenAICompatibleSTTProvider } from '../infrastructure/stt/openai-compatible-stt.provider.js';
 import { createBot, type CreateBotDeps } from '../infrastructure/telegram/bot.js';
 import type { BotContext } from '../infrastructure/telegram/bot-context.js';
-import { createExpressApp, type Router } from '../infrastructure/http/server.js';
+import { createExpressApp, type TemplateRouter } from '../infrastructure/http/server.js';
 
 export interface CoreServices {
   users: UserService;
@@ -141,7 +141,7 @@ export async function buildBots(
   return running;
 }
 
-export function buildHttpApp(core: CoreServices, templateRouters: Router[] = []): Express {
+export function buildHttpApp(core: CoreServices, templateRouters: TemplateRouter[] = []): Express {
   return createExpressApp({
     memberships: core.memberships,
     users: core.users,

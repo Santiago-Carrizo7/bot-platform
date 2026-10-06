@@ -2,7 +2,7 @@ import type { Server } from 'node:http';
 import { loadConfig } from '../core/config/config.js';
 import { logger } from '../core/logging/logger.js';
 import { prisma } from '../infrastructure/persistence/prisma.js';
-import { buildBots, buildCoreServices, buildHttpApp } from './container.js';
+import { buildBots, buildCoreServices, buildHttpApp, type RunningBot } from './container.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
 import { createKioscoTemplate } from '../templates/kiosco/index.js';
 
@@ -21,9 +21,14 @@ async function bootstrap() {
   const kiosco = createKioscoTemplate({ db: prisma });
   const templates = [gastos.template, kiosco.template];
 
-  logger.info('Validando tokens de Telegram...');
-  const bots = await buildBots(config, core, templates);
-  const app = buildHttpApp(core, [gastos.router]);
+  let bots: RunningBot[] = [];
+  if (config.TELEGRAM_POLLING === 'off') {
+    logger.info('Telegram desactivado (TELEGRAM_POLLING=off): solo HTTP/API.');
+  } else {
+    logger.info('Validando tokens de Telegram...');
+    bots = await buildBots(config, core, templates);
+  }
+  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }]);
 
   let httpServer: Server | undefined;
   await new Promise<void>((resolve) => {
@@ -49,14 +54,16 @@ async function bootstrap() {
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 
-  logger.info('Iniciando long polling...');
-  await Promise.all(
-    bots.map(async ({ templateId, bot }) => {
-      await bot.start({
-        onStart: (info) => logger.info(`Bot '${templateId}' como @${info.username}`),
-      });
-    })
-  );
+  if (bots.length > 0) {
+    logger.info('Iniciando long polling...');
+    await Promise.all(
+      bots.map(async ({ templateId, bot }) => {
+        await bot.start({
+          onStart: (info) => logger.info(`Bot '${templateId}' como @${info.username}`),
+        });
+      })
+    );
+  }
 }
 
 bootstrap().catch((error) => {

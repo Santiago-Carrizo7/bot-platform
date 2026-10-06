@@ -28,7 +28,7 @@ async function main() {
   await core.memberships.ensureMembership(business.id, user.id, 'OWNER');
   const token = signApiToken(config.API_SECRET, { userId: user.id, businessId: business.id }, 600);
 
-  const app = buildHttpApp(core, [gastos.router]);
+  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }]);
   const server = await new Promise<ReturnType<typeof app.listen>>((res) => {
     const s = app.listen(0, () => res(s));
   });
@@ -46,35 +46,35 @@ async function main() {
     const me = (await r.json()) as { data: { businessId: string; role: string } };
     assert(me.data.businessId === business.id && me.data.role === 'OWNER', '/api/me devuelve negocio y rol');
 
-    r = await fetch(`${base}/api/expenses`, {
+    r = await fetch(`${base}/api/v1/gastos/expenses`, {
       method: 'POST', headers, body: JSON.stringify({ amount: 5000, description: 'Saeta', category: 'transporte' }),
     });
-    assert(r.status === 201, 'POST /api/expenses crea gasto');
+    assert(r.status === 201, 'POST /api/v1/gastos/expenses crea gasto');
     const created = (await r.json()) as { data: { id: string; amount: number } };
     assert(created.data.amount === 5000, 'monto serializado como número');
 
-    r = await fetch(`${base}/api/expenses?limit=5`, { headers });
-    assert(r.ok && ((await r.json()) as { data: unknown[] }).data.length === 1, 'GET /api/expenses lista 1');
+    r = await fetch(`${base}/api/v1/gastos/expenses?limit=5`, { headers });
+    assert(r.ok && ((await r.json()) as { data: unknown[] }).data.length === 1, 'GET /api/v1/gastos/expenses lista 1');
 
-    r = await fetch(`${base}/api/summary`, { headers });
+    r = await fetch(`${base}/api/v1/gastos/summary`, { headers });
     const summary = (await r.json()) as { data: { total: number; count: number } };
-    assert(summary.data.total === 5000 && summary.data.count === 1, 'GET /api/summary totaliza');
+    assert(summary.data.total === 5000 && summary.data.count === 1, 'GET /api/v1/gastos/summary totaliza');
 
-    r = await fetch(`${base}/api/budgets`, {
+    r = await fetch(`${base}/api/v1/gastos/budgets`, {
       method: 'POST', headers, body: JSON.stringify({ category: 'transporte', amount: 20000 }),
     });
-    assert(r.status === 201, 'POST /api/budgets fija presupuesto');
+    assert(r.status === 201, 'POST /api/v1/gastos/budgets fija presupuesto');
 
-    r = await fetch(`${base}/api/budgets`, { headers });
+    r = await fetch(`${base}/api/v1/gastos/budgets`, { headers });
     const budgets = (await r.json()) as { data: Array<{ spentAmount: number }> };
-    assert(budgets.data.length === 1 && budgets.data[0].spentAmount === 5000, 'GET /api/budgets con progreso');
+    assert(budgets.data.length === 1 && budgets.data[0].spentAmount === 5000, 'GET /api/v1/gastos/budgets con progreso');
 
-    r = await fetch(`${base}/api/expenses/${created.data.id}`, { method: 'DELETE', headers });
-    assert(r.status === 204, 'DELETE /api/expenses/:id elimina');
+    r = await fetch(`${base}/api/v1/gastos/expenses/${created.data.id}`, { method: 'DELETE', headers });
+    assert(r.status === 204, 'DELETE /api/v1/gastos/expenses/:id elimina');
 
     // Token manipulado (otro negocio) debe fallar.
     const forged = signApiToken(config.API_SECRET, { userId: user.id, businessId: 'negocio-ajeno' }, 600);
-    r = await fetch(`${base}/api/expenses`, { headers: { Authorization: `Bearer ${forged}` } });
+    r = await fetch(`${base}/api/v1/gastos/expenses`, { headers: { Authorization: `Bearer ${forged}` } });
     assert(r.status === 403, 'token con businessId ajeno es rechazado (403)');
 
     console.log('SMOKE OK');
