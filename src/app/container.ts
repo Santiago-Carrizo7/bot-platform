@@ -83,6 +83,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
     businesses: businessRepo,
     membershipRepo,
     audit,
+    invitations,
     aiUsage: aiUsageRepo,
     aiProviderName: aiProvider.name,
     aiModel: config.OPENROUTER_MODEL,
@@ -96,12 +97,18 @@ export interface RunningBot {
   bot: Bot<BotContext>;
 }
 
-/** Crea un bot de Telegram por vertical configurado (registro estático). */
-export function buildBots(
+/**
+ * Crea un bot de Telegram por vertical configurado (registro estático).
+ * Valida cada token con getMe() ANTES de arrancar el polling: un token
+ * inválido se detecta acá con un mensaje claro, en vez de morir con un 404
+ * críptico en deleteWebhook. Además captura el username para los deep links
+ * de invitación del comando /invitar.
+ */
+export async function buildBots(
   config: AppConfig,
   core: CoreServices,
   templates: TemplateDefinition[]
-): RunningBot[] {
+): Promise<RunningBot[]> {
   const byId = new Map(templates.map((t) => [t.id, t]));
   const running: RunningBot[] = [];
   for (const binding of configuredBots(config)) {
@@ -109,36 +116,29 @@ export function buildBots(
     if (!template) {
       throw new Error(`Hay token configurado para el template '${binding.templateId}' pero no está registrado en el composition root.`);
     }
+    const flowDeps = { ...core.flowBase, template };
     const botDeps: CreateBotDeps = {
       token: binding.token,
       templateId: binding.templateId,
-      flowDeps: { ...core.flowBase, template },
+      flowDeps,
       resolver: core.resolver,
       sttService: core.stt,
     };
-    running.push({ templateId: binding.templateId, bot: createBot(botDeps) });
+    const bot = createBot(botDeps);
+    try {
+      const me = await bot.api.getMe();
+      logger.info(`Token válido para '${binding.templateId}': @${me.username}`);
+      flowDeps.inviteBotUsername = me.username;
+    } catch {
+      throw new Error(
+        `Token de Telegram inválido para el template '${binding.templateId}'. ` +
+          `Revisá la variable TELEGRAM_BOT_TOKEN_${binding.templateId.toUpperCase()} en el servidor.`
+      );
+    }
+    running.push({ templateId: binding.templateId, bot });
     logger.info(`Bot registrado para el template '${binding.templateId}'`);
   }
   return running;
-}
-
-/**
- * Valida los tokens contra Telegram ANTES de arrancar el polling.
- * Un token inválido se detecta acá con un mensaje claro, en vez de morir
- * con un 404 críptico en deleteWebhook durante el arranque.
- */
-export async function verifyBotTokens(bots: RunningBot[]): Promise<void> {
-  for (const { templateId, bot } of bots) {
-    try {
-      const me = await bot.api.getMe();
-      logger.info(`Token válido para '${templateId}': @${me.username}`);
-    } catch {
-      throw new Error(
-        `Token de Telegram inválido para el template '${templateId}'. ` +
-          `Revisá la variable TELEGRAM_BOT_TOKEN_${templateId.toUpperCase()} en el servidor.`
-      );
-    }
-  }
 }
 
 export function buildHttpApp(core: CoreServices, templateRouters: Router[] = []): Express {

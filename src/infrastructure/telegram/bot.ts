@@ -60,7 +60,7 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
 
   // Comandos base + comandos del template → todos pasan por el pipeline.
   const templateCommands = flowDeps.template.commands.map((c) => c.command);
-  bot.command(['start', 'menu', 'ayuda', 'cancelar', 'negocios', ...templateCommands], async (ctx) => {
+  bot.command(['start', 'menu', 'ayuda', 'cancelar', 'negocios', 'invitar', ...templateCommands], async (ctx) => {
     await replySafely(
       ctx,
       () =>

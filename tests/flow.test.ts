@@ -14,10 +14,12 @@ import {
   FakeAuditRepo,
   FakeBusinessRepo,
   FakeConversationRepo,
+  FakeInvitationRepo,
   FakeMembershipRepo,
   FakeUserRepo,
   makeBusiness,
 } from './fakes.js';
+import { InvitationService } from '../src/core/identity/invitation.service.js';
 import type { TenantContext } from '../src/core/tenant/entities.js';
 
 const NOW = new Date('2026-10-06T12:00:00Z');
@@ -92,6 +94,7 @@ interface Fixture {
   conversations: FakeConversationRepo;
   audit: FakeAuditRepo;
   businesses: FakeBusinessRepo;
+  invitations: FakeInvitationRepo;
 }
 
 function setup(opts: {
@@ -101,6 +104,7 @@ function setup(opts: {
   aiQueue?: Array<{ action: string; params: Record<string, unknown> }>;
   aiLimit?: number;
   aiUsed?: number;
+  inviteBotUsername?: string;
 } = {}): Fixture {
   const businesses = new FakeBusinessRepo();
   const users = new FakeUserRepo();
@@ -126,6 +130,7 @@ function setup(opts: {
   membershipRepo.store.set(membership.id, membership);
 
   aiUsage.count = opts.aiUsed ?? 0;
+  const invitations = new FakeInvitationRepo();
   const deps: FlowDeps = {
     template,
     interpreter: stubInterpreter(opts.aiQueue ?? []),
@@ -133,6 +138,8 @@ function setup(opts: {
     businesses,
     membershipRepo,
     audit: new AuditService(auditRepo),
+    invitations: new InvitationService(invitations, auditRepo),
+    inviteBotUsername: opts.inviteBotUsername ?? 'mi_bot',
     aiUsage,
     aiProviderName: 'Mock',
     aiModel: 'mock-1',
@@ -140,7 +147,7 @@ function setup(opts: {
   };
   const tenant: TenantContext = { business, membership, user, botTemplateId: 'gastos' };
   const resolution: ResolutionInfo = { user, tenant, justJoined: false, memberships: [], needsInvitation: false };
-  return { deps, tenant, resolution, conversations, audit: auditRepo, businesses };
+  return { deps, tenant, resolution, conversations, audit: auditRepo, businesses, invitations };
 }
 
 const text = (f: Fixture, t: string, now: Date = NOW) =>
@@ -320,6 +327,40 @@ describe('pipeline de mensajes', () => {
     const reply = await text(f, '📦 Total');
     expect(reply.text).toContain('Total: $ 5.000');
     expect(writeCalls).toBe(0);
+  });
+
+  it('/invitar como OWNER: devuelve deep link de empleado válido 7 días', async () => {
+    const f = setup({ role: 'OWNER' });
+    const reply = await text(f, '/invitar');
+    expect(reply.text).toContain('https://t.me/mi_bot?start=');
+    expect(reply.text).toContain('7 días');
+    const stored = [...f.invitations.store.values()];
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ role: 'EMPLOYEE', businessId: f.tenant.business.id });
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+  });
+
+  it('/invitar dueno: genera invitación de OWNER', async () => {
+    const f = setup({ role: 'OWNER' });
+    const reply = await text(f, '/invitar dueno');
+    expect(reply.text).toContain('https://t.me/mi_bot?start=');
+    expect(reply.text).toContain('socio');
+    expect([...f.invitations.store.values()][0]).toMatchObject({ role: 'OWNER' });
+  });
+
+  it('/invitar como EMPLOYEE: denegado sin crear nada', async () => {
+    const f = setup({ role: 'EMPLOYEE' });
+    const reply = await text(f, '/invitar');
+    expect(reply.text).toContain('Solo el dueño');
+    expect(f.invitations.store.size).toBe(0);
+  });
+
+  it('/invitar sin username configurado: mensaje claro en vez de link roto', async () => {
+    const f = setup({ role: 'OWNER' });
+    delete f.deps.inviteBotUsername;
+    const reply = await text(f, '/invitar');
+    expect(reply.text).toContain('no están disponibles');
+    expect(f.invitations.store.size).toBe(0);
   });
 
   it('registry: escritura sin summarize y nombres duplicados fallan en construcción', async () => {

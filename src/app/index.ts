@@ -2,7 +2,7 @@ import type { Server } from 'node:http';
 import { loadConfig } from '../core/config/config.js';
 import { logger } from '../core/logging/logger.js';
 import { prisma } from '../infrastructure/persistence/prisma.js';
-import { buildBots, buildCoreServices, buildHttpApp, verifyBotTokens } from './container.js';
+import { buildBots, buildCoreServices, buildHttpApp } from './container.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
 import { createKioscoTemplate } from '../templates/kiosco/index.js';
 
@@ -21,7 +21,8 @@ async function bootstrap() {
   const kiosco = createKioscoTemplate({ db: prisma });
   const templates = [gastos.template, kiosco.template];
 
-  const bots = buildBots(config, core, templates);
+  logger.info('Validando tokens de Telegram...');
+  const bots = await buildBots(config, core, templates);
   const app = buildHttpApp(core, [gastos.router]);
 
   let httpServer: Server | undefined;
@@ -47,9 +48,6 @@ async function bootstrap() {
   };
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
-
-  logger.info('Validando tokens de Telegram...');
-  await verifyBotTokens(bots);
 
   logger.info('Iniciando long polling...');
   await Promise.all(

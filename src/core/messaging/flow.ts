@@ -12,6 +12,7 @@ import type { ActionContext, ActionDef, TemplateDefinition } from '../actions/re
 import { ActionInterpreter } from '../ai/interpreter.js';
 import { roleSatisfies } from '../identity/roles.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { InvitationService } from '../identity/invitation.service.js';
 
 export interface InlineButton {
   text: string;
@@ -53,6 +54,9 @@ export interface FlowDeps {
   businesses: IBusinessRepository;
   membershipRepo: IMembershipRepository;
   audit: AuditService;
+  invitations: InvitationService;
+  /** Username del bot (sin @) para armar deep links de invitación. */
+  inviteBotUsername?: string;
   aiUsage: IAiUsageRepository;
   aiProviderName: string;
   aiModel: string;
@@ -91,8 +95,12 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     return md(MSG_NEEDS_INVITATION);
   }
   if (resolution.justJoined) {
+    const inviteHint =
+      resolution.tenant.membership.role === 'OWNER'
+        ? '\n\nComo dueño podés sumar a tu equipo con /invitar.'
+        : '';
     return md(
-      `${deps.template.welcome(resolution.tenant.business.name, input.firstName)}\n\nYa quedaste vinculado como *${roleLabel(resolution.tenant.membership.role)}*.`
+      `${deps.template.welcome(resolution.tenant.business.name, input.firstName)}\n\nYa quedaste vinculado como *${roleLabel(resolution.tenant.membership.role)}*.${inviteHint}`
     );
   }
 
@@ -219,6 +227,25 @@ async function handleCommand(
       ...md(`${deps.template.welcome(tenant.business.name, firstName)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}`),
       inlineKeyboard: menuKeyboard(deps.template),
     };
+  }
+  if (name === 'invitar') {
+    if (tenant.membership.role !== 'OWNER') {
+      return md('Solo el dueño del negocio puede generar invitaciones.');
+    }
+    if (!deps.inviteBotUsername) {
+      return md('Las invitaciones no están disponibles en este servidor.');
+    }
+    const arg = text.slice(1).split(/\s+/)[1]?.toLowerCase();
+    const role = arg === 'dueno' || arg === 'dueño' ? 'OWNER' : 'EMPLOYEE';
+    const created = await deps.invitations.create(tenant.business.id, role, {
+      createdByUserId: resolution.user.id,
+      ttlHours: 7 * 24,
+      botUsername: deps.inviteBotUsername,
+    });
+    const whom = role === 'OWNER' ? 'tu socio' : 'tu empleado';
+    return md(
+      `Pasale este enlace a ${whom} (vale 7 días, un solo uso):\n${created.deepLink}`
+    );
   }
   if (name === 'negocios') {
     if (resolution.memberships.length <= 1) {
