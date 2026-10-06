@@ -66,6 +66,8 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
   real). Para ver el estado: `pnpm webhook -- --template kiosco`.
 - Al prender el servidor en modo webhook se registra solo (`setWebhook`); al
   redeployar se re-registra sin perder mensajes (Telegram reintenta la entrega).
+- Si el log dice `secret token contains illegal characters`: el secret tiene
+  caracteres fuera de `[A-Za-z0-9_-]` → regenerar con `openssl rand -hex 24`.
 
 ## 6. Env vars de Render (dashboard → Environment)
 
@@ -76,7 +78,8 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 `TRIAL_DAYS=10` · `GRACE_DAYS=7`. (Render inyecta `PORT` solo; no pisarlo.)
 `TELEGRAM_BOT_TOKEN_GASTOS` solo cuando se instancie ese vertical.
 Webhook: `TELEGRAM_WEBHOOK_URL=https://<app>.onrender.com` +
-`TELEGRAM_WEBHOOK_SECRET` (generar con `openssl rand -base64 24`).
+`TELEGRAM_WEBHOOK_SECRET` (generar con `openssl rand -hex 24`; Telegram solo
+acepta letras, números, `_` y `-`, así que NO usar base64 común).
 
 ## 7. El bot no responde (checklist en orden)
 

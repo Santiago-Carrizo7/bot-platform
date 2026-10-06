@@ -17,7 +17,16 @@ const configSchema = z.object({
   // Webhook: si se define la URL pública, Telegram empuja los updates al
   // servidor (una ruta por bot) en vez de long polling.
   TELEGRAM_WEBHOOK_URL: z.string().url('TELEGRAM_WEBHOOK_URL debe ser una URL pública https').optional(),
-  TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Telegram solo acepta [A-Za-z0-9_-] (1-256 chars): base64 común (+/=) lo rechaza.
+  TELEGRAM_WEBHOOK_SECRET: z
+    .string()
+    .min(16)
+    .max(256)
+    .regex(
+      /^[A-Za-z0-9_-]+$/,
+      'TELEGRAM_WEBHOOK_SECRET solo admite letras, números, _ y - (generar con: openssl rand -hex 24)'
+    )
+    .optional(),
 
   // Proveedor de IA de texto
   AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),

@@ -44,6 +44,14 @@ describe('configuredBots', () => {
     } as NodeJS.ProcessEnv);
     expect(config.TELEGRAM_WEBHOOK_URL).toBe('https://mi-app.onrender.com');
     expect(loadConfig({ ...BASE_ENV } as NodeJS.ProcessEnv).TELEGRAM_WEBHOOK_URL).toBeUndefined();
+    // base64 común (+/=) lo rechaza Telegram: debe fallar en config, no en deploy.
+    expect(() =>
+      loadConfig({
+        ...BASE_ENV,
+        TELEGRAM_WEBHOOK_URL: 'https://mi-app.onrender.com',
+        TELEGRAM_WEBHOOK_SECRET: 'secreto+con/cosas=mal',
+      } as NodeJS.ProcessEnv)
+    ).toThrow(/solo admite letras/);
   });
 
   it('TELEGRAM_POLLING: on por defecto, off para desarrollo local sin Telegram', () => {
