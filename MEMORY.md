@@ -5,8 +5,10 @@
 
 ## Estado actual
 - Phase 0–3 completadas con gates en verde (67 tests + smoke HTTP/DB 13/13 OK).
-- Templates: `gastos` (referencia) y `kiosco` (12 actions, primer vertical).
-- Siguiente: Phase 4 (staging + primer trial real). Telegram real aún no probado.
+- Templates: `gastos` (referencia, sin instanciar en Telegram) y `kiosco`
+  (12 actions, primer vertical). Repo en GitHub con push al día.
+- Siguiente: Phase 4 (staging + primer trial real). Falta crear el bot del kiosco
+  en BotFather (ver candidatos abajo) y poner su token en `.env`.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express /
   OpenRouter / Groq Whisper / vitest.
 - Docs pilar: `AGENTS.md` (reglas) → `MEMORY.md` (esto) → `CONSTITUTION.md` (normas)
@@ -29,16 +31,12 @@
   poner tokens de BotFather). No commitear `.env`.
 - En Windows usar `pnpm.cmd`; git inicializado (commit `b16cd8f` fases 0-2).
   Falta crear el repo en GitHub y hacer push (ver pasos abajo).
-- Kiosco decide: stock negativo avisa sin bloquear; baja lógica de productos;
-  dinero en `MoneyMovement`; sin API propia (bot-first); `moneda` fuera del MVP.
+- Kiosco decide (ADR-009): stock NUNCA negativo, venta sin stock se frena con
+  mensaje amable; baja lógica de productos; dinero en `MoneyMovement`; sin API
+  propia (bot-first); precios en moneda del negocio (sin multi-moneda en MVP).
 
 ## Próximos pasos
-- [ ] Crear repo en GitHub + push (pasos al pie de este chat).
-- [ ] Token real de Telegram (`TELEGRAM_BOT_TOKEN_GASTOS`, luego kiosco) y probar
-  polling + invitación + trial (Phase 4).
+- [ ] Crear bot del kiosco en BotFather (candidatos: `elkiosquero_bot`,
+  `lacaja_bot`, `despensa_bot`, `elmostrador_bot`) y probar polling + invitación
+  + trial (Phase 4).
 - [ ] Phase 4: staging + procedimiento de alta + primer trial real.
-
-## GitHub (hacer una vez)
-1. Crear repo vacío en github.com (sin README ni .gitignore).
-2. `git remote add origin https://github.com/<USUARIO>/bot-platform.git`
-3. `git push -u origin main` (o `master`, según `git branch --show-current`).

@@ -79,10 +79,12 @@ Objetivo: paridad funcional con `bot-gastos` sobre el nuevo Core.
   stock negativo con aviso, compra con stock, fijar stock, stock bajo,
   resumen día, flujo freestyle→confirmación→auditoría).
 - [x] Gates en verde: `typecheck` ✓, `test` ✓ (67 tests), `build` ✓.
-- Decisiones tomadas: stock puede quedar negativo (avisa, no bloquea); baja de
-  producto lógica (conserva historial); compras/gastos/entradas en `MoneyMovement`
+- Decisiones tomadas: el stock NUNCA queda negativo (la venta se frena con mensaje
+  amable que dice qué falta y cómo arreglarlo — ver ADR-009); baja de producto
+  lógica (conserva historial); compras/gastos/entradas en `MoneyMovement`
   (`IN`/`OUT`); ventas/compras/gastos/entradas generan movimientos de caja
-  automáticamente; hints del prompt con catálogo real (nombre/precio/stock).
+  automáticamente; hints del prompt con catálogo real (nombre/precio/stock);
+  precios en moneda del negocio (sin multi-moneda en el MVP).
 - **Gate pendiente:** flujo extremo a extremo en staging con datos reales
   (requiere token de Telegram) → Phase 4.
 

@@ -66,12 +66,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       const lines = result.lines
         .map((l) => `• ${formatQty(l.quantity)}x ${esc(l.productName)} — *${formatCurrency(l.subtotal)}*`)
         .join('\n');
-      const warnings =
-        result.negativeStock.length > 0
-          ? `\n\n⚠️ _Stock en negativo: ${result.negativeStock.map((w) => `${esc(w.productName)} (${formatQty(w.stock)})`).join(', ')}. Revisá la carga de stock._`
-          : '';
       return {
-        reply: [`✅ Venta registrada por *${formatCurrency(Number(result.sale.total))}*`, '', lines, warnings].join('\n'),
+        reply: [`✅ Venta registrada por *${formatCurrency(Number(result.sale.total))}*`, '', lines].join('\n'),
         audit: {
           action: 'sale.created',
           entityType: 'sale',

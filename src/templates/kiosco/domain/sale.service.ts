@@ -8,8 +8,6 @@ import type { ResolvedSaleLine, SaleLineInput } from '../types.js';
 export interface CreatedSale {
   sale: SaleWithItems;
   lines: ResolvedSaleLine[];
-  /** Productos que quedaron con stock negativo (aviso, no bloqueo). */
-  negativeStock: { productName: string; stock: number }[];
 }
 
 export class SaleService {
@@ -21,9 +19,10 @@ export class SaleService {
   ) {}
 
   /**
-   * Registra una venta: resuelve productos, calcula el total, descuenta stock
-   * y genera el movimiento de caja. Todo en una transacción.
-   * El stock puede quedar en negativo (se avisa en la respuesta, no se bloquea).
+   * Registra una venta: resuelve productos, valida stock, calcula el total,
+   * descuenta stock y genera el movimiento de caja. Todo en una transacción.
+   * El stock NUNCA queda en negativo: si falta, la venta se frena con un mensaje
+   * amable que dice qué falta y cómo arreglarlo (sin error técnico).
    */
   async createSale(
     businessId: string,
@@ -35,13 +34,19 @@ export class SaleService {
   ): Promise<CreatedSale> {
     if (items.length === 0) throw new AppError('La venta necesita al menos un producto');
 
-    // Resolver todos los productos antes de tocar la DB.
+    // Resolver todos los productos y validar stock ANTES de tocar la DB.
     const lines: ResolvedSaleLine[] = [];
     const missing: string[] = [];
+    const lacking: { productName: string; available: number; requested: number }[] = [];
     for (const item of items) {
       const product = await this.products.findByName(businessId, item.productName);
       if (!product) {
         missing.push(item.productName.trim());
+        continue;
+      }
+      const available = Number(product.stock);
+      if (available < item.quantity) {
+        lacking.push({ productName: product.name, available, requested: item.quantity });
         continue;
       }
       const unitPrice = Number(product.salePrice);
@@ -58,17 +63,22 @@ export class SaleService {
         `No encontré estos productos: ${missing.map((m) => `"${m}"`).join(', ')}. Crealos primero ("crear producto ...").`
       );
     }
+    if (lacking.length > 0) {
+      const detail = lacking
+        .map((l) => `• ${l.productName}: hay ${formatQty(l.available)}, pediste ${formatQty(l.requested)}`)
+        .join('\n');
+      throw new AppError(
+        `No alcanza el stock para esta venta (no se registró nada):\n${detail}\n\nAjustá las cantidades o actualizá el stock, por ejemplo: "stock de Coca: 24".`
+      );
+    }
 
     const total = round2(lines.reduce((acc, l) => acc + l.subtotal, 0));
     const concept = lines.map((l) => `${formatQty(l.quantity)}x ${l.productName}`).join(', ');
 
-    const negativeStock: { productName: string; stock: number }[] = [];
     const sale = await this.db.$transaction(async (tx) => {
       const created = await this.sales.create(businessId, actorUserId, total, lines, note, currency, tx);
       for (const line of lines) {
-        const updated = await this.products.changeStock(line.productId, businessId, -line.quantity, tx);
-        const stockLeft = Number(updated.stock);
-        if (stockLeft < 0) negativeStock.push({ productName: line.productName, stock: stockLeft });
+        await this.products.changeStock(line.productId, businessId, -line.quantity, tx);
         await this.cash.addStockMovement(
           {
             businessId,
@@ -100,7 +110,7 @@ export class SaleService {
       return created;
     });
 
-    return { sale, lines, negativeStock };
+    return { sale, lines };
   }
 
   async listRecent(businessId: string, limit = 10): Promise<SaleWithItems[]> {

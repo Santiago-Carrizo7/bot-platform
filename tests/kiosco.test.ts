@@ -229,12 +229,15 @@ describe('template kiosco: dominio', () => {
     expect(Number((await products.findByName(BIZ, 'Coca'))!.stock)).toBe(12);
   });
 
-  it('venta que deja stock negativo avisa pero no bloquea', async () => {
-    const { products, sales } = setupServices();
+  it('venta sin stock suficiente se frena con mensaje amable (no registra nada)', async () => {
+    const { products, sales, store } = setupServices();
     await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 1 });
-    const result = await sales.createSale(BIZ, ACTOR, [{ productName: 'Coca', quantity: 3 }]);
-    expect(result.negativeStock).toHaveLength(1);
-    expect(result.negativeStock[0].stock).toBe(-2);
+    await expect(
+      sales.createSale(BIZ, ACTOR, [{ productName: 'Coca', quantity: 3 }])
+    ).rejects.toThrow(/No alcanza el stock.*hay 1.*pediste 3/s);
+    expect(store.sales).toHaveLength(0);
+    expect(store.movements).toHaveLength(0);
+    expect(Number((await products.findByName(BIZ, 'Coca'))!.stock)).toBe(1);
   });
 
   it('compra con mercadería: sale dinero y entra stock', async () => {
