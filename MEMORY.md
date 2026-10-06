@@ -23,6 +23,11 @@
 ## Gotchas
 - `migration.sql` en UTF-8 sin BOM: `Set-Content -Encoding UTF8` mete BOM (P3009) y
   el redirect `>` de PowerShell escribe UTF-16LE (Prisma P3015). Convertir siempre.
+- Deploy Render 2026-10-06: token de Telegram inválido = 404 de la API en
+  `deleteWebhook` y crash loop. Ahora los tokens son opcionales y se validan con
+  `getMe()` al arrancar (mensaje claro). Si falla el deploy, mirar ese log primero.
+- Docker Desktop no siempre está corriendo: si el test de integración da P1001,
+  levantar el daemon + `docker compose up -d` y reintentar.
 - Generar diffs incrementales con `migrate diff --from-migrations` (+ lock file y
   `--shadow-database-url`); el diff `--from-empty` sirve solo para la inicial.
 - Docker Desktop debe estar corriendo para la DB local; `TEST_DATABASE_URL` activa el

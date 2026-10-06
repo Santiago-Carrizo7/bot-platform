@@ -9,8 +9,9 @@ const configSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatorio'),
 
   // Un bot por vertical (registro estático). Agregar una línea por template nuevo.
-  TELEGRAM_BOT_TOKEN_GASTOS: z.string().min(1, 'TELEGRAM_BOT_TOKEN_GASTOS es obligatorio'),
-  TELEGRAM_BOT_TOKEN_KIOSCO: z.string().optional(),
+  // Todos opcionales: arranca solo lo configurado (un string vacío también falla).
+  TELEGRAM_BOT_TOKEN_GASTOS: z.string().min(1).optional(),
+  TELEGRAM_BOT_TOKEN_KIOSCO: z.string().min(1).optional(),
 
   // Proveedor de IA de texto
   AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),
@@ -46,9 +47,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
 /** Bots configurados (un bot por vertical). El orden define el orden de arranque. */
 export function configuredBots(config: AppConfig): BotBinding[] {
-  const bots: BotBinding[] = [{ templateId: 'gastos', token: config.TELEGRAM_BOT_TOKEN_GASTOS }];
+  const bots: BotBinding[] = [];
+  if (config.TELEGRAM_BOT_TOKEN_GASTOS) {
+    bots.push({ templateId: 'gastos', token: config.TELEGRAM_BOT_TOKEN_GASTOS });
+  }
   if (config.TELEGRAM_BOT_TOKEN_KIOSCO) {
     bots.push({ templateId: 'kiosco', token: config.TELEGRAM_BOT_TOKEN_KIOSCO });
+  }
+  if (bots.length === 0) {
+    throw new ConfigError(
+      'No hay ningún bot configurado. Definí al menos TELEGRAM_BOT_TOKEN_<VERTICAL> (ej. TELEGRAM_BOT_TOKEN_KIOSCO).'
+    );
   }
   return bots;
 }

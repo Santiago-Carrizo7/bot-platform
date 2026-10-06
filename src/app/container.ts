@@ -122,6 +122,25 @@ export function buildBots(
   return running;
 }
 
+/**
+ * Valida los tokens contra Telegram ANTES de arrancar el polling.
+ * Un token inválido se detecta acá con un mensaje claro, en vez de morir
+ * con un 404 críptico en deleteWebhook durante el arranque.
+ */
+export async function verifyBotTokens(bots: RunningBot[]): Promise<void> {
+  for (const { templateId, bot } of bots) {
+    try {
+      const me = await bot.api.getMe();
+      logger.info(`Token válido para '${templateId}': @${me.username}`);
+    } catch {
+      throw new Error(
+        `Token de Telegram inválido para el template '${templateId}'. ` +
+          `Revisá la variable TELEGRAM_BOT_TOKEN_${templateId.toUpperCase()} en el servidor.`
+      );
+    }
+  }
+}
+
 export function buildHttpApp(core: CoreServices, templateRouters: Router[] = []): Express {
   return createExpressApp({
     memberships: core.memberships,
