@@ -137,3 +137,8 @@ diseña ni se implementa antes.
   API namespaced: `/api/v1/<templateId>/*` (`/api/me` y `/health` quedan);
   smoke actualizado. Convención documentada en `server.ts` + `docs/OPERACIONES.md`.
   Gates en verde (81 tests).
+- 2026-10-06: modo webhook (a pedido). Con `TELEGRAM_WEBHOOK_URL` Telegram empuja
+  updates a `POST /telegram/<templateId>` (validado con secret); sin URL sigue el
+  long polling. `setWebhook` se registra solo al arrancar; script
+  `pnpm webhook -- --template <id> [--delete]` para ver/borrar. Refino de config:
+  URL sin secret falla con mensaje claro. Gates en verde (85 tests + smoke OK).

@@ -51,7 +51,23 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
   `pnpm invite -- --business <BUSINESS_ID> --role OWNER|EMPLOYEE`
 - El invitado abre el link → queda vinculado al tocar `/start`.
 
-## 5. Env vars de Render (dashboard → Environment)
+## 5. Webhook vs polling
+
+- **Modo webhook** (recomendado en Render): con `TELEGRAM_WEBHOOK_URL` seteada
+  (ej. `https://mi-app.onrender.com`), Telegram empuja cada mensaje al servidor
+  (`POST /telegram/<templateId>`, validado con el secret). Sin pinger, sin 409,
+  instantáneo. Requiere además `TELEGRAM_WEBHOOK_SECRET` (mínimo 16 caracteres,
+  generar con `openssl rand -base64 24`).
+- **Modo polling** (sin URL): el servidor pregunta a Telegram cada ~1 s. Sirve
+  para desarrollo local; en Render necesita el cron-job para no dormirse.
+- **Nunca mezclar**: mientras haya un webhook activo, un `pnpm dev` local con el
+  token real falla (Telegram rechaza el polling). Para volver a polling local:
+  `pnpm webhook -- --template kiosco --delete` (con el `.env` que tenga el token
+  real). Para ver el estado: `pnpm webhook -- --template kiosco`.
+- Al prender el servidor en modo webhook se registra solo (`setWebhook`); al
+  redeployar se re-registra sin perder mensajes (Telegram reintenta la entrega).
+
+## 6. Env vars de Render (dashboard → Environment)
 
 `NODE_ENV=production` · `API_SECRET` (generar con `openssl rand -base64 32`) ·
 `DATABASE_URL` (Supabase, formato Prisma) · `TELEGRAM_BOT_TOKEN_KIOSCO` ·
@@ -59,11 +75,14 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 `STT_PROVIDER=groq` + `STT_API_KEY` (+ `STT_MODEL=whisper-large-v3-turbo`) ·
 `TRIAL_DAYS=10` · `GRACE_DAYS=7`. (Render inyecta `PORT` solo; no pisarlo.)
 `TELEGRAM_BOT_TOKEN_GASTOS` solo cuando se instancie ese vertical.
+Webhook: `TELEGRAM_WEBHOOK_URL=https://<app>.onrender.com` +
+`TELEGRAM_WEBHOOK_SECRET` (generar con `openssl rand -base64 24`).
 
-## 6. El bot no responde (checklist en orden)
+## 7. El bot no responde (checklist en orden)
 
-1. **¿Render dormido?** Abrir `/health` en el navegador, esperar 15 s, reintentar.
-   Si revive → revisar cron-job (¿sigue activo cada 12 min?).
+1. **¿Render dormido?** (Solo en modo polling.) Abrir `/health` en el navegador,
+   esperar 15 s, reintentar. Si revive → revisar cron-job (¿sigue activo cada
+   12 min?). En modo webhook cada mensaje despierta solo al servidor.
 2. **¿Crash loop?** Logs de Render: si no aparece `Token válido para 'kiosco'`,
    el deploy no levantó (token inválido/mal copiado o `TELEGRAM_BOT_TOKEN_GASTOS`
    seteado con valor malo → sacarlo).
@@ -72,14 +91,14 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 4. **¿404 de Telegram?** Token que no existe (mal tipeado o bot eliminado en
    BotFather). Regenerar y actualizar la env var.
 
-## 7. BotFather (5 min, por bot)
+## 8. BotFather (5 min, por bot)
 
 `/setuserpic` (avatar) · `/setdescription` (se ve al compartir el contacto) ·
 `/setabouttext` (ficha del bot). El menú lateral de comandos lo sube el bot solo
 (`menuCommands` del template); no configurarlo a mano. Mini Apps: no (fuera de
 alcance, ver `ARCHITECTURE.md` §18).
 
-## 8. API HTTP (convención congelada)
+## 9. API HTTP (convención congelada)
 
 - `GET /health` → pública (liveness).
 - `/api/*` → `Authorization: Bearer <token HMAC>` (firmado: userId + businessId

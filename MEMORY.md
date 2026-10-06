@@ -48,7 +48,8 @@
   propia (bot-first); precios en moneda del negocio (sin multi-moneda en MVP).
 
 ## Próximos pasos
-- [ ] `git push` tanda A → verificar en staging: barra persistente, /menu completo,
-  /invitar, onboarding sin productos (Sprint 0: checks de OPERACIONES §6).
+- [ ] `git push` (tanda A + webhook) → en Render agregar `TELEGRAM_WEBHOOK_URL` +
+  `TELEGRAM_WEBHOOK_SECRET` → verificar: logs `Webhook registrado`, barra
+  persistente, /menu completo, /invitar, onboarding (checks: OPERACIONES §7).
 - [ ] Sprint C: carga masiva (foto de carta → `cargar_productos_desde_foto`, luego
   Excel). Después Item D: mini dashboard (`/admin` en Render + ADR de alcance).
