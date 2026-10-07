@@ -54,8 +54,12 @@ export class InvitationService {
     };
   }
 
-  /** Valida y consume (un solo uso). Lanza si expiró, ya se usó o fue revocada. */
-  async consume(token: string, userId: string, now: Date = new Date()): Promise<Invitation> {
+  /** Invitaciones del negocio (para la web admin y reportes). */
+  async listByBusiness(businessId: string): Promise<Invitation[]> {
+    return this.invitations.listByBusiness(businessId);
+  }
+
+  /** Valida y consume (un solo uso). Lanza si expiró, ya se usó o fue revocada. */  async consume(token: string, userId: string, now: Date = new Date()): Promise<Invitation> {
     const invitation = await this.invitations.findByHash(hashInvitationToken(token));
     if (!invitation) {
       throw new AppError('Invitación inválida.', 'INVALID_INVITATION', 404);

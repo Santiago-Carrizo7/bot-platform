@@ -2,6 +2,8 @@
  * HTML server-rendered del admin web. Template literals + CSS inline, sin build
  * step ni dependencias. Todo lo que muestra el admin se genera acá.
  */
+import type { Business, MembershipRole } from '../../core/tenant/entities.js';
+import type { AdminTemplateOption } from './router.js';
 
 const STYLES = `
 :root { color-scheme: light dark; --bg:#0f1115; --panel:#171a21; --line:#272c36; --fg:#e6e8ec; --muted:#9aa3b2; --accent:#4c8dff; --danger:#ff6b6b; --ok:#3ddc97; }
@@ -90,4 +92,196 @@ export function loginPage(opts: { error?: string } = {}): string {
   <p class="muted">Herramienta interna de operaciones. Los intentos quedan registrados.</p>
 </div>`;
   return layout('Entrar', body);
+}
+
+export function isTimezone(timezone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function fmtDate(date: Date | null, timezone = 'UTC'): string {
+  if (!date) return '—';
+  try {
+    return date.toLocaleString('es-AR', { timeZone: isTimezone(timezone) ? timezone : 'UTC' });
+  } catch {
+    return date.toISOString();
+  }
+}
+
+/** Trial restante / estado legible para la lista de negocios. */
+export function trialLabel(business: Business): string {
+  if (business.status === 'TRIAL') {
+    if (!business.trialStartedAt) return 'trial sin usar';
+    const end = business.trialStartedAt.getTime() + business.trialDays * 86_400_000;
+    const days = Math.ceil((end - Date.now()) / 86_400_000);
+    return days > 0 ? `trial ${days} d` : 'trial vencido';
+  }
+  if (business.status === 'ACTIVE') return 'activo';
+  return business.status === 'READ_ONLY' ? 'solo lectura' : 'suspendido';
+}
+
+export interface InvitationView {
+  id: string;
+  role: MembershipRole;
+  status: 'pendiente' | 'usada' | 'revocada' | 'expirada';
+  createdAt: Date;
+  expiresAt: Date;
+  usedAt: Date | null;
+  revokedAt: Date | null;
+}
+
+export function invitationStatus(invitation: {
+  usedAt: Date | null;
+  revokedAt: Date | null;
+  expiresAt: Date;
+}): InvitationView['status'] {
+  if (invitation.revokedAt) return 'revocada';
+  if (invitation.usedAt) return 'usada';
+  if (invitation.expiresAt.getTime() <= Date.now()) return 'expirada';
+  return 'pendiente';
+}
+
+export interface MemberView {
+  telegramId: string;
+  role: MembershipRole;
+  createdAt: Date;
+}
+
+export interface BusinessListPageOptions {
+  templates: AdminTemplateOption[];
+  error?: string;
+  flash?: string;
+}
+
+export function businessListPage(businesses: Business[], opts: BusinessListPageOptions): string {
+  const error = opts.error ? `<p class="error">${esc(opts.error)}</p>` : '';
+  const flash = opts.flash ? `<p class="flash">${esc(opts.flash)}</p>` : '';
+  const rows = businesses
+    .map(
+      (b) => `
+    <tr>
+      <td><a class="row" href="/admin/businesses/${esc(b.id)}">${esc(b.name)}</a></td>
+      <td>${esc(b.templateId)}</td>
+      <td><span class="badge ${esc(b.status)}">${esc(trialLabel(b))}</span></td>
+      <td class="muted">${esc(fmtDate(b.createdAt, b.timezone))}</td>
+    </tr>`
+    )
+    .join('');
+  const table = businesses.length
+    ? `<table>
+  <thead><tr><th>Negocio</th><th>Template</th><th>Estado</th><th>Alta</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>`
+    : '<p class="empty">Todavía no hay negocios.</p>';
+
+  const options = opts.templates
+    .map((t) => `<option value="${esc(t.id)}">${esc(t.label)} (${esc(t.id)})</option>`)
+    .join('');
+
+  const body = `
+<h1>Negocios <span class="muted">(${businesses.length})</span></h1>
+${error}${flash}
+<div class="panel">${table}</div>
+<div class="panel">
+  <h2>Crear negocio</h2>
+  <form method="post" action="/admin/businesses">
+    <div class="grid">
+      <div>
+        <label for="name">Nombre</label>
+        <input id="name" name="name" required maxlength="80" placeholder="Kiosco Don Pepe">
+      </div>
+      <div>
+        <label for="templateId">Template</label>
+        <select id="templateId" name="templateId">${options}</select>
+      </div>
+      <div>
+        <label for="timezone">Timezone</label>
+        <input id="timezone" name="timezone" value="America/Argentina/Buenos_Aires">
+      </div>
+      <div>
+        <label for="currency">Moneda (ISO 4217)</label>
+        <input id="currency" name="currency" value="ARS" maxlength="3">
+      </div>
+    </div>
+    <p><button type="submit">Crear</button></p>
+  </form>
+</div>`;
+  return layout('Negocios', body, { showNav: true });
+}
+
+export interface BusinessDetailData {
+  business: Business;
+  members: MemberView[];
+  invitations: InvitationView[];
+  /** Deep link recién creado: se muestra UNA sola vez (la DB solo guarda el hash). */
+  deepLink?: string;
+  error?: string;
+}
+
+export function businessDetailPage(data: BusinessDetailData): string {
+  const { business } = data;
+  const deepLink = data.deepLink
+    ? `<p class="flash">Link de invitación (se muestra una sola vez, guardalo ahora):<br><span class="mono">${esc(data.deepLink)}</span></p>`
+    : '';
+  const error = data.error ? `<p class="error">${esc(data.error)}</p>` : '';
+
+  const memberRows = data.members
+    .map(
+      (m) => `
+    <tr><td class="mono">${esc(m.telegramId)}</td><td>${esc(m.role)}</td><td class="muted">${esc(fmtDate(m.createdAt, business.timezone))}</td></tr>`
+    )
+    .join('');
+  const members = data.members.length
+    ? `<table><thead><tr><th>Telegram ID</th><th>Rol</th><th>Vinculado</th></tr></thead><tbody>${memberRows}</tbody></table>`
+    : '<p class="empty">Nadie vinculado todavía.</p>';
+
+  const invitationRows = data.invitations
+    .map(
+      (i) => `
+    <tr>
+      <td>${esc(i.role)}</td>
+      <td><span class="badge">${esc(i.status)}</span></td>
+      <td class="muted">${esc(fmtDate(i.createdAt, business.timezone))}</td>
+      <td class="muted">${esc(fmtDate(i.expiresAt, business.timezone))}</td>
+      <td></td>
+    </tr>`
+    )
+    .join('');
+  const invitations = data.invitations.length
+    ? `<table><thead><tr><th>Rol</th><th>Estado</th><th>Creada</th><th>Expira</th><th></th></tr></thead><tbody>${invitationRows}</tbody></table>`
+    : '<p class="empty">Sin invitaciones.</p>';
+
+  const body = `
+<h1>${esc(business.name)}</h1>
+${error}${deepLink}
+<p><a href="/admin/">← Volver a la lista</a></p>
+
+<div class="panel">
+  <h2>Datos</h2>
+  <table>
+    <tr><th>ID</th><td class="mono">${esc(business.id)}</td></tr>
+    <tr><th>Template</th><td>${esc(business.templateId)}</td></tr>
+    <tr><th>Estado</th><td><span class="badge ${esc(business.status)}">${esc(business.status)}</span> · ${esc(trialLabel(business))}</td></tr>
+    <tr><th>Timezone / moneda</th><td>${esc(business.timezone)} · ${esc(business.currency)}</td></tr>
+    <tr><th>Alta</th><td>${esc(fmtDate(business.createdAt, business.timezone))}</td></tr>
+    <tr><th>Trial</th><td>${business.trialDays} días · gracia ${business.graceDays}${
+      business.trialStartedAt ? ` · empezó ${esc(fmtDate(business.trialStartedAt, business.timezone))}` : ' · sin usar'
+    }</td></tr>
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Miembros (${data.members.length})</h2>
+  ${members}
+</div>
+
+<div class="panel">
+  <h2>Invitaciones (${data.invitations.length})</h2>
+  ${invitations}
+</div>`;
+  return layout(business.name, body, { showNav: true });
 }

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import express, { Router, type NextFunction, type Request, type Response } from 'express';
+import { z } from 'zod';
 import { AppError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
 import type { AuditService } from '../../core/audit/audit.service.js';
@@ -7,7 +8,15 @@ import type { InvitationService } from '../../core/identity/invitation.service.j
 import type { MembershipService } from '../../core/identity/membership.service.js';
 import type { UserService } from '../../core/identity/user.service.js';
 import type { BusinessService } from '../../core/tenant/business.service.js';
-import { loginPage } from './pages.js';
+import {
+  businessDetailPage,
+  businessListPage,
+  invitationStatus,
+  isTimezone,
+  loginPage,
+  type InvitationView,
+  type MemberView,
+} from './pages.js';
 import {
   ADMIN_SESSION_COOKIE,
   buildClearCookie,
@@ -158,10 +167,102 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
     res.redirect('/admin/login');
   });
 
+  const createBusinessSchema = z.object({
+    name: z.string().trim().min(1, 'Ingresá un nombre.').max(80, 'El nombre puede tener hasta 80 caracteres.'),
+    templateId: z
+      .string()
+      .trim()
+      .refine((id) => deps.templates.some((t) => t.id === id), 'Template desconocido.'),
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(isTimezone, 'Timezone inválida (ej. America/Argentina/Buenos_Aires).')
+      .default('America/Argentina/Buenos_Aires'),
+    currency: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z]{3}$/, 'Moneda: 3 letras ISO 4217 (ej. ARS).')
+      .transform((value) => value.toUpperCase())
+      .default('ARS'),
+  });
+
+  const notFound = (res: Response, message: string) => res.status(404).json({ error: 'NOT_FOUND', message });
+
   router.get(
     '/',
-    route((_req, res) => {
-      res.status(200).send('admin: sesión válida');
+    route(async (_req, res) => {
+      const businesses = await deps.businesses.listAll();
+      res.status(200).send(businessListPage(businesses, { templates: deps.templates }));
+    })
+  );
+
+  router.post(
+    '/businesses',
+    route(async (req, res) => {
+      const parsed = createBusinessSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const message = parsed.error.issues[0]?.message ?? 'Datos inválidos.';
+        res.status(400).send(businessListPage(await deps.businesses.listAll(), { templates: deps.templates, error: message }));
+        return;
+      }
+      const { name, templateId, timezone, currency } = parsed.data;
+      const business = await deps.businesses.create({ name, templateId, timezone, currency });
+      try {
+        await deps.seedBusiness(templateId, business.id);
+      } catch (error) {
+        logger.error('[admin] Falló el seed del template', { templateId, businessId: business.id, error });
+        res.status(500).send(
+          businessListPage(await deps.businesses.listAll(), {
+            templates: deps.templates,
+            error: `El negocio se creó pero falló el seed del template '${templateId}': ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          })
+        );
+        return;
+      }
+      await deps.audit.log({
+        businessId: business.id,
+        actorUserId: null,
+        action: 'admin.business_created',
+        entityType: 'business',
+        entityId: business.id,
+        metadata: { templateId, name },
+      });
+      res.redirect(`/admin/businesses/${business.id}`);
+    })
+  );
+
+  router.get(
+    '/businesses/:id',
+    route(async (req, res) => {
+      const business = await deps.businesses.getById(String(req.params.id));
+      if (!business) {
+        notFound(res, 'Negocio no encontrado.');
+        return;
+      }
+      const [memberships, invitations] = await Promise.all([
+        deps.memberships.listByBusiness(business.id),
+        deps.invitations.listByBusiness(business.id),
+      ]);
+      const members: MemberView[] = await Promise.all(
+        memberships.map(async (m) => ({
+          telegramId: (await deps.users.getById(m.userId))?.telegramId ?? m.userId,
+          role: m.role,
+          createdAt: m.createdAt,
+        }))
+      );
+      const views: InvitationView[] = invitations.map((i) => ({
+        id: i.id,
+        role: i.role,
+        status: invitationStatus(i),
+        createdAt: i.createdAt,
+        expiresAt: i.expiresAt,
+        usedAt: i.usedAt,
+        revokedAt: i.revokedAt,
+      }));
+      res.status(200).send(businessDetailPage({ business, members, invitations: views }));
     })
   );
 
