@@ -42,6 +42,15 @@ const configSchema = z.object({
   // Negocio: trial y período de gracia (días)
   TRIAL_DAYS: z.coerce.number().int().positive().default(10),
   GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+
+  // Admin web interno (`/admin`). Ausente o vacía → la ruta responde 404.
+  ADMIN_PASSWORD: z
+    .string()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : undefined))
+    .refine((value) => value === undefined || value.length >= 16, {
+      message: 'ADMIN_PASSWORD debe tener al menos 16 caracteres',
+    }),
 }).superRefine((val, ctx) => {
   if (val.TELEGRAM_WEBHOOK_URL && !val.TELEGRAM_WEBHOOK_SECRET) {
     ctx.addIssue({
