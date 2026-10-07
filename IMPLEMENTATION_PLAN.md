@@ -100,7 +100,9 @@ Objetivo: paridad funcional con `bot-gastos` sobre el nuevo Core.
 
 Recién con uso real evaluar: panel administrativo, configuración self-service,
 mejoras de roles, nuevas abstracciones Core, segundo vertical. Nada de esto se
-diseña ni se implementa antes.
+diseña ni se implementa antes. **Excepción ya ejecutada:** el admin interno
+mínimo `/admin` (ops del día a día, `docs/PLAN-ADMIN-WEB-V1.md` + ADR-010); el
+resto sigue fuera de alcance.
 
 ---
 
@@ -142,3 +144,9 @@ diseña ni se implementa antes.
   long polling. `setWebhook` se registra solo al arrancar; script
   `pnpm webhook -- --template <id> [--delete]` para ver/borrar. Refino de config:
   URL sin secret falla con mensaje claro. Gates en verde (85 tests + smoke OK).
+- 2026-10-07: **Item D / admin web v1** (`/admin`, plan `docs/PLAN-ADMIN-WEB-V1.md`
+  en 5 slices, ADR-010). Cookie HMAC de 12 h con `ADMIN_PASSWORD` (sin ella → 404),
+  rate limit de login, guard de origen, lista/alta de negocios con seeds, detalle
+  con miembros, invitaciones (deep link único, revocación) y cambio de estado, todo
+  auditado con `admin.*`. Docs (`OPERACIONES` §10, `README`, `ARCHITECTURE` §18) y
+  smoke actualizado. Gates en verde (116 tests + smoke OK).
