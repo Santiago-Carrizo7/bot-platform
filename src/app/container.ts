@@ -1,6 +1,7 @@
-import type { Express } from 'express';
-import type { Bot } from 'grammy';
+import type { Express, Router } from 'express';
+import { Bot } from 'grammy';
 import { configuredBots, type AppConfig } from '../core/config/config.js';
+import { AppError } from '../core/errors/errors.js';
 import { logger } from '../core/logging/logger.js';
 import type { TemplateDefinition } from '../core/actions/registry.js';
 import { ActionInterpreter } from '../core/ai/interpreter.js';
@@ -27,6 +28,7 @@ import { OpenAICompatibleSTTProvider } from '../infrastructure/stt/openai-compat
 import { createBot, type CreateBotDeps } from '../infrastructure/telegram/bot.js';
 import type { BotContext } from '../infrastructure/telegram/bot-context.js';
 import { createExpressApp, type ExtraRoute, type TemplateRouter } from '../infrastructure/http/server.js';
+import { botNotConfigured, createAdminRouter, type AdminTemplateOption } from './admin/router.js';
 
 export interface CoreServices {
   users: UserService;
@@ -141,10 +143,61 @@ export async function buildBots(
   return running;
 }
 
+/**
+ * Username del bot de una vertical, resuelto una vez y cacheado. Copia del
+ * patrón de `scripts/invite.ts`; funciona aunque `TELEGRAM_POLLING=off`.
+ */
+export function createBotUsernameResolver(config: AppConfig): (templateId: string) => Promise<string> {
+  const cache = new Map<string, string>();
+  return async (templateId: string): Promise<string> => {
+    const cached = cache.get(templateId);
+    if (cached) return cached;
+    let token: string | undefined;
+    try {
+      token = configuredBots(config).find((b) => b.templateId === templateId)?.token;
+    } catch {
+      token = undefined;
+    }
+    if (!token) throw botNotConfigured(templateId);
+    const me = await new Bot(token).api.getMe();
+    cache.set(templateId, me.username);
+    return me.username;
+  };
+}
+
+/** Callbacks que el composition root aporta al admin (los únicos que toca). */
+export interface AdminComposition {
+  templates: AdminTemplateOption[];
+  seedBusiness: (templateId: string, businessId: string) => Promise<void>;
+  resolveBotUsername: (templateId: string) => Promise<string>;
+}
+
+/** Router del admin web. `undefined` si no hay `ADMIN_PASSWORD` (→ /admin 404). */
+export function buildAdminRouter(core: CoreServices, config: AppConfig, composition: AdminComposition): Router | undefined {
+  if (!config.ADMIN_PASSWORD) {
+    logger.info('Admin web desactivado (sin ADMIN_PASSWORD).');
+    return undefined;
+  }
+  logger.info('Admin web activo en /admin');
+  return createAdminRouter({
+    password: config.ADMIN_PASSWORD,
+    apiSecret: config.API_SECRET,
+    businesses: core.businesses,
+    memberships: core.memberships,
+    users: core.users,
+    invitations: core.invitations,
+    audit: core.audit,
+    templates: composition.templates,
+    seedBusiness: composition.seedBusiness,
+    resolveBotUsername: composition.resolveBotUsername,
+  });
+}
+
 export function buildHttpApp(
   core: CoreServices,
   templateRouters: TemplateRouter[] = [],
-  extraRoutes: ExtraRoute[] = []
+  extraRoutes: ExtraRoute[] = [],
+  adminRouter?: Router
 ): Express {
   return createExpressApp({
     memberships: core.memberships,
@@ -152,5 +205,6 @@ export function buildHttpApp(
     apiSecret: core.apiSecret,
     templateRouters,
     extraRoutes,
+    adminRouter,
   });
 }

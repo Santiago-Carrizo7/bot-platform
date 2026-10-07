@@ -55,6 +55,9 @@ export class FakeBusinessRepo implements IBusinessRepository {
   async findById(id: string) {
     return this.store.get(id) ?? null;
   }
+  async listAll() {
+    return [...this.store.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
   async create(data: CreateBusinessData) {
     const b = makeBusiness({ ...data, id: nid('biz') });
     this.store.set(b.id, b);

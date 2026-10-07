@@ -8,6 +8,11 @@ export class BusinessService {
     return this.businesses.findById(id);
   }
 
+  /** Todos los negocios (uso interno del admin web, nunca por tenant). */
+  async listAll(): Promise<Business[]> {
+    return this.businesses.listAll();
+  }
+
   async create(data: CreateBusinessData): Promise<Business> {
     return this.businesses.create(data);
   }

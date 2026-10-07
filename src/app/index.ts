@@ -1,9 +1,16 @@
 import type { Server } from 'node:http';
 import { loadConfig } from '../core/config/config.js';
-import { ConfigError } from '../core/errors/errors.js';
+import { AppError, ConfigError } from '../core/errors/errors.js';
 import { logger } from '../core/logging/logger.js';
 import { prisma } from '../infrastructure/persistence/prisma.js';
-import { buildBots, buildCoreServices, buildHttpApp, type RunningBot } from './container.js';
+import {
+  buildAdminRouter,
+  buildBots,
+  buildCoreServices,
+  buildHttpApp,
+  createBotUsernameResolver,
+  type RunningBot,
+} from './container.js';
 import { buildTelegramWebhookRoutes } from '../infrastructure/telegram/bot.js';
 import type { ExtraRoute } from '../infrastructure/http/server.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
@@ -48,7 +55,24 @@ async function bootstrap() {
     }
     extraRoutes = buildTelegramWebhookRoutes(bots, secret);
   }
-  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }], extraRoutes);
+  // Admin web interno (`/admin`): solo si hay ADMIN_PASSWORD en el env.
+  const seedByTemplate: Record<string, (businessId: string) => Promise<void>> = {
+    [gastos.template.id]: gastos.seedBusiness,
+    [kiosco.template.id]: kiosco.seedBusiness,
+  };
+  const adminRouter = buildAdminRouter(core, config, {
+    templates: templates.map((t) => ({ id: t.id, label: t.label })),
+    seedBusiness: async (templateId, businessId) => {
+      const seed = seedByTemplate[templateId];
+      if (!seed) {
+        throw new AppError(`No hay seed registrado para '${templateId}'.`, 'UNKNOWN_TEMPLATE', 404);
+      }
+      await seed(businessId);
+    },
+    resolveBotUsername: createBotUsernameResolver(config),
+  });
+
+  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }], extraRoutes, adminRouter);
 
   let httpServer: Server | undefined;
   await new Promise<void>((resolve) => {

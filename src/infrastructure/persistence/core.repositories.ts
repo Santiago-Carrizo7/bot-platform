@@ -59,6 +59,10 @@ export class PrismaBusinessRepository implements IBusinessRepository {
     const row = await this.db.business.findUnique({ where: { id } });
     return row ? toBusiness(row) : null;
   }
+  async listAll(): Promise<Business[]> {
+    const rows = await this.db.business.findMany({ orderBy: { createdAt: 'desc' } });
+    return rows.map(toBusiness);
+  }
   async create(data: CreateBusinessData): Promise<Business> {
     return toBusiness(
       await this.db.business.create({

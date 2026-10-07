@@ -25,6 +25,8 @@ export interface CreateBusinessData {
 
 export interface IBusinessRepository {
   findById(id: string): Promise<Business | null>;
+  /** Todos los negocios (orden: más recientes primero). Solo la web admin interna. */
+  listAll(): Promise<Business[]>;
   create(data: CreateBusinessData): Promise<Business>;
   markTrialStarted(id: string, at: Date): Promise<void>;
   setStatus(id: string, status: BusinessStatus): Promise<void>;

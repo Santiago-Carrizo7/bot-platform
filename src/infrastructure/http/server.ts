@@ -46,6 +46,8 @@ export interface CreateAppDeps {
   templateRouters?: TemplateRouter[];
   /** Rutas públicas extra (ej. webhooks de Telegram). Van sin auth HMAC. */
   extraRoutes?: ExtraRoute[];
+  /** Router del admin web interno (montado en /admin). Sin él, la ruta es 404. */
+  adminRouter?: Router;
   corsOrigins?: string[];
 }
 
@@ -114,6 +116,11 @@ export function createExpressApp(deps: CreateAppDeps): Express {
   for (const route of deps.extraRoutes ?? []) {
     if (route.method === 'post') app.post(route.path, route.handler);
     else app.get(route.path, route.handler);
+  }
+
+  // Admin web interno (HTML server-rendered, auth propia). Antes del error handler.
+  if (deps.adminRouter) {
+    app.use('/admin', deps.adminRouter);
   }
 
   // Manejador centralizado de errores (debe ir último).
