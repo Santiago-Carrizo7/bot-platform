@@ -54,6 +54,12 @@ pnpm invite -- --business <ID> --role OWNER               # invitación (deep li
 pnpm exec tsx scripts/smoke.ts                            # smoke test HTTP+DB
 ```
 
+**Admin web (`/admin`)**: dashboard interno de operaciones (crear negocios,
+invitaciones, estado) con `ADMIN_PASSWORD` en `.env` (mínimo 16 caracteres; sin
+ella la ruta responde 404). En local: `http://localhost:3000/admin/`. Reemplaza al
+CLI de `seed`/`invite` para ops manual; ver `docs/adr/ADR-010-admin-web-interna.md`
+y `docs/OPERACIONES.md` §10.
+
 ## Estructura
 
 ```

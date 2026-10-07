@@ -4,15 +4,17 @@
 > moverlo a `AGENTS.md` (o a `CONSTITUTION.md` si es normativa). **NUNCA** secretos.
 
 ## Estado actual
-- Phase 0–3 + Sprint A en verde (81 tests + smoke 13/13 OK). Tanda A commiteada,
-  falta `git push` para que Render la tome.
+- Phase 0–3 + Sprint A + webhook en verde (116 tests + smoke OK). Webhook en modo
+  activo en Render (`TELEGRAM_WEBHOOK_URL` + `SECRET` seteados; el secret debe ser
+  `base64url`/`hex`, NO base64 con `+/=` → 400 illegal characters). Falta verificar
+  en logs `Webhook registrado para 'kiosco'` y probar el bot.
 - Staging: Render free + Supabase + cron-job cada 12 min a /health (no duerme).
-  Bot kiosco creado en BotFather. Incidente "bot muerto": sleep descartado por el
-  pinger; verificar env/logs/409 según `docs/OPERACIONES.md` §6.
+  Bot kiosco: `@MiKiosquito_bot` (token válido, verificado).
 - Templates: `gastos` (API en `/api/v1/gastos/*`) y `kiosco` (12 actions, barra
   persistente, `/invitar`, onboarding sin productos).
 - Testing = día a día en staging (continuo, no es fase). Siguiente: Sprint C
-  (foto/Excel) y después Item D (mini dashboard en el Express de Render + ADR).
+  (foto/Excel). **Item D (admin web) implementado**: `/admin` en el mismo Express
+  (plan `docs/PLAN-ADMIN-WEB-V1.md` ejecutado en 5 slices, ADR-010). Falta deploy.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express /
   OpenRouter / Groq Whisper / vitest.
 - Docs pilar: `AGENTS.md` → `MEMORY.md` (esto) → `CONSTITUTION.md` →
@@ -31,12 +33,13 @@
 - Deploy Render 2026-10-06: token de Telegram inválido = 404 de la API en
   `deleteWebhook` y crash loop. Ahora los tokens son opcionales y se validan con
   `getMe()` al arrancar (mensaje claro). Si falla el deploy, mirar ese log primero.
-- Docker Desktop no siempre está corriendo: si el test de integración da P1001,
-  levantar el daemon + `docker compose up -d` y reintentar.
+- DB local: Docker Desktop debe estar corriendo (`docker compose up -d`);
+  `TEST_DATABASE_URL` activa el test de integración (sin ella se saltea; P1001 =
+  daemon caído). **2026-10-07: el servicio Windows `postgresql-x64-18` se lleva
+  5432 → P1000 en `localhost:5432`; workaround: contenedor descartable
+  `bot-platform-pg-test` en 5433 o parar ese servicio con admin.**
 - Generar diffs incrementales con `migrate diff --from-migrations` (+ lock file y
   `--shadow-database-url`); el diff `--from-empty` sirve solo para la inicial.
-- Docker Desktop debe estar corriendo para la DB local; `TEST_DATABASE_URL` activa el
-  test de integración (sin ella se saltea).
 - `.env` local tiene tokens fake (sirve para smoke/API; para Telegram real hay que
   poner tokens de BotFather). No commitear `.env`.
 - En Windows usar `pnpm.cmd`. Repo en GitHub con push al día.
@@ -48,8 +51,10 @@
   propia (bot-first); precios en moneda del negocio (sin multi-moneda en MVP).
 
 ## Próximos pasos
-- [ ] `git push` (tanda A + webhook) → en Render agregar `TELEGRAM_WEBHOOK_URL` +
-  `TELEGRAM_WEBHOOK_SECRET` → verificar: logs `Webhook registrado`, barra
-  persistente, /menu completo, /invitar, onboarding (checks: OPERACIONES §7).
+- [ ] Push de fix `df982b8` (validación de charset del secret) → verificar webhook
+  en logs y probar bot (checks: OPERACIONES §7).
+- [ ] **Deploy del admin**: Render → Environment → `ADMIN_PASSWORD` (≥16 chars) →
+  push → entrar a `https://<app>/admin/` → crear un negocio, generar link OWNER,
+  abrirlo con el bot. Operación: `OPERACIONES.md` §10.
 - [ ] Sprint C: carga masiva (foto de carta → `cargar_productos_desde_foto`, luego
-  Excel). Después Item D: mini dashboard (`/admin` en Render + ADR de alcance).
+  Excel).

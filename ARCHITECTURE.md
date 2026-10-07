@@ -238,6 +238,11 @@ integración bancaria, Mercado Pago, AFIP, analytics avanzado, notificaciones
 complejas, billing automático, configuración avanzada para clientes, personalización
 de código por cliente. Si aparece la necesidad: documentarla y seguir con el alcance.
 
+**Excepción vigente:** dashboard web solo como **admin interno de operaciones**
+(`/admin` en el mismo Express, contraseña única, sin usuarios en DB), ver
+`docs/adr/ADR-010-admin-web-interna.md`. No es producto para clientes ni abre el
+resto de la lista.
+
 ## 19. Decisiones abiertas (resumen; detalle en `docs/adr/` y §10 del plan)
 
 Bot central vs por cliente (hoy: un bot por vertical), hosting productivo,

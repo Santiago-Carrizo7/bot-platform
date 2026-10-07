@@ -32,6 +32,9 @@ pnpm typecheck; $env:TEST_DATABASE_URL="postgresql://postgres:postgrespassword@l
 
 ## 3. Alta de un negocio (primera vez, por terminal)
 
+Camino rápido: **admin web** (`/admin`, ver §10). El CLI de abajo sigue sirviendo
+para automatizar o cuando no hay web.
+
 Apuntar temporalmente a Supabase y volver a local después:
 
 ```powershell
@@ -47,6 +50,8 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 
 - **Desde el bot** (dueño): `/invitar` → link de empleado (7 días, 1 uso).
   `/invitar dueno` → link de dueño (para socios).
+- **Admin web** (§10): detalle del negocio → rol + días → "Crear link"; también
+  muestra el estado de cada invitación y permite revocar.
 - **Por terminal** (cualquier rol, contra la DB que apunte tu `.env`):
   `pnpm invite -- --business <BUSINESS_ID> --role OWNER|EMPLOYEE`
 - El invitado abre el link → queda vinculado al tocar `/start`.
@@ -76,6 +81,8 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 `OPENROUTER_API_KEY` + `OPENROUTER_MODEL=google/gemini-2.0-flash-001` ·
 `STT_PROVIDER=groq` + `STT_API_KEY` (+ `STT_MODEL=whisper-large-v3-turbo`) ·
 `TRIAL_DAYS=10` · `GRACE_DAYS=7`. (Render inyecta `PORT` solo; no pisarlo.)
+`ADMIN_PASSWORD` (mínimo 16 caracteres) solo si se quiere el admin web `/admin`
+(sin ella la ruta responde 404; ver §10).
 `TELEGRAM_BOT_TOKEN_GASTOS` solo cuando se instancie ese vertical.
 Webhook: `TELEGRAM_WEBHOOK_URL=https://<app>.onrender.com` +
 `TELEGRAM_WEBHOOK_SECRET` (generar con `openssl rand -hex 24`; Telegram solo
@@ -109,5 +116,41 @@ alcance, ver `ARCHITECTURE.md` §18).
 - `/api/me` → identidad general (core).
 - `/api/v1/<templateId>/*` → router de cada template (ej. `/api/v1/gastos/expenses`).
 - Respuestas: `{ data }` ok · `{ error, message }` error.
-- El bot NO usa esta API (habla directo a la DB en el mismo proceso); es para el
-  futuro dashboard, integraciones y debug.
+- El bot NO usa esta API (habla directo a la DB en el mismo proceso); es para
+  integraciones y debug (el admin web tampoco: va por sesiones, ver §10).
+
+## 10. Admin web (`/admin`) — operaciones del día a día
+
+Herramienta interna de ops (misma app, cero infra nueva; ver
+`docs/adr/ADR-010-admin-web-interna.md`). Requiere `ADMIN_PASSWORD` (mínimo 16
+caracteres): **sin esa variable `/admin` responde 404**.
+
+- **Entrar:** `https://<app>/admin/` → password → sesión de 12 h (cookie
+  `HttpOnly; SameSite=Strict; Path=/admin`). Sin "usuarios": hay una sola password
+  compartida, guardada solo en el env.
+- **Crear negocio:** lista → "Crear negocio" (nombre, template, timezone/moneda con
+  defaults) → corre los seeds del template y te lleva al detalle.
+- **Generar link:** detalle → rol `OWNER|EMPLOYEE` + días (1-90) → "Crear link".
+  El deep link se muestra **una sola vez** (la DB guarda solo el hash): copiarlo ahí
+  mismo. Si se pierde: **revocar y crear otro** (no se puede regenerar).
+- **Revocar:** botón en la tabla de invitaciones (aparece en pendientes/expiradas;
+  las usadas/revocadas quedan para el historial).
+- **Cambiar estado** (`TRIAL|ACTIVE|READ_ONLY|SUSPENDED`): en el detalle, para
+  suspender a un vivo o desbloquear un trial vencido. No lo cambia nadie más.
+- **Miembros:** telegramId + rol de los vinculados (sin datos sensibles).
+- **Auditoría:** toda mutación queda en `AuditLog` con acción `admin.*` y
+  `actorUserId: null` (no hay usuario; viaja la password).
+- **Rotar la password:** cambiar `ADMIN_PASSWORD` en Render → Environment →
+  redeploy. Mata **todas** las sesiones abiertas (la cookie lleva un fingerprint de
+  la password vigente). No hay "logout global" por servidor: rotar es el cierre.
+- **Si perdés la password:** no hay recuperación (no hay usuarios en DB ni email).
+  Setear un valor nuevo en Render → redeploy. Igual conviene rotarla si alguien
+  más pudo verla.
+- **Rate limit:** 5 fallos de login cada 10 min por IP → 429 (en memoria, un solo
+  proceso). Si te bloqueás: esperar 10 min o redeployar.
+- **Local:** `.env` con `ADMIN_PASSWORD` → `pnpm dev` →
+  `http://localhost:3000/admin/`. Funciona con `TELEGRAM_POLLING=off`; para crear
+  links hace falta un bot real configurado para ese template (si no, error
+  amigable indicando cuál `TELEGRAM_BOT_TOKEN_<VERTICAL>` falta).
+- **No es el producto:** no hay métricas, edición de datos, multi-admin ni
+  reset de trial (v2+, ver ADR-010).

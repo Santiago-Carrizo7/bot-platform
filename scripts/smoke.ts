@@ -7,7 +7,7 @@ import { loadConfig } from '../src/core/config/config.js';
 import { logger } from '../src/core/logging/logger.js';
 import { prisma } from '../src/infrastructure/persistence/prisma.js';
 import { signApiToken } from '../src/infrastructure/http/api-tokens.js';
-import { buildCoreServices, buildHttpApp } from '../src/app/container.js';
+import { buildCoreServices, buildHttpApp, buildAdminRouter, createBotUsernameResolver } from '../src/app/container.js';
 import { createGastosTemplate } from '../src/templates/gastos/index.js';
 import type { AddressInfo } from 'node:net';
 
@@ -28,7 +28,16 @@ async function main() {
   await core.memberships.ensureMembership(business.id, user.id, 'OWNER');
   const token = signApiToken(config.API_SECRET, { userId: user.id, businessId: business.id }, 600);
 
-  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }]);
+  // El admin se monta igual que en el bootstrap real (404 sin ADMIN_PASSWORD).
+  const adminRouter = buildAdminRouter(core, config, {
+    templates: [{ id: gastos.template.id, label: gastos.template.label }],
+    seedBusiness: async (templateId, businessId) => {
+      if (templateId !== gastos.template.id) throw new Error(`Template sin seed en el smoke: ${templateId}`);
+      await gastos.seedBusiness(businessId);
+    },
+    resolveBotUsername: createBotUsernameResolver(config),
+  });
+  const app = buildHttpApp(core, [{ id: gastos.template.id, router: gastos.router }], [], adminRouter);
   const server = await new Promise<ReturnType<typeof app.listen>>((res) => {
     const s = app.listen(0, () => res(s));
   });
@@ -40,6 +49,14 @@ async function main() {
   try {
     let r = await fetch(`${base}/health`);
     assert(r.ok, 'GET /health');
+
+    // Admin web: sin ADMIN_PASSWORD la ruta ni existe (404); con ella, sin sesión
+    // manda al login (302).
+    r = await fetch(`${base}/admin/`, { redirect: 'manual' });
+    assert(
+      r.status === (config.ADMIN_PASSWORD ? 302 : 404),
+      `GET /admin/ → ${config.ADMIN_PASSWORD ? '302 a login (ADMIN_PASSWORD seteada)' : '404 (sin ADMIN_PASSWORD)'}`
+    );
 
     r = await fetch(`${base}/api/me`, { headers });
     assert(r.ok, 'GET /api/me con token HMAC');
