@@ -69,7 +69,8 @@ export class FakeBusinessRepo implements IBusinessRepository {
   }
   async setStatus(id: string, status: BusinessStatus) {
     const b = this.store.get(id);
-    if (b) b.status = status;
+    // Copia, como Prisma: una referencia vieja no se entera del cambio.
+    if (b) this.store.set(id, { ...b, status });
   }
   seed(b: Business) {
     this.store.set(b.id, b);

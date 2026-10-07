@@ -59,6 +59,10 @@ export class InvitationService {
     return this.invitations.listByBusiness(businessId);
   }
 
+  async getById(id: string): Promise<Invitation | null> {
+    return this.invitations.findById(id);
+  }
+
   /** Valida y consume (un solo uso). Lanza si expiró, ya se usó o fue revocada. */  async consume(token: string, userId: string, now: Date = new Date()): Promise<Invitation> {
     const invitation = await this.invitations.findByHash(hashInvitationToken(token));
     if (!invitation) {
@@ -85,7 +89,8 @@ export class InvitationService {
     return { ...invitation, usedAt: now, usedByUserId: userId };
   }
 
-  async revoke(businessId: string, invitationId: string, actorUserId: string): Promise<void> {
+  /** `actorUserId: null` cuando la revoca el admin web (no hay usuario). */
+  async revoke(businessId: string, invitationId: string, actorUserId: string | null): Promise<void> {
     const invitation = await this.invitations.findById(invitationId);
     if (!invitation || invitation.businessId !== businessId) {
       throw new AppError('Invitación no encontrada.', 'INVALID_INVITATION', 404);

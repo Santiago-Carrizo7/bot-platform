@@ -8,6 +8,7 @@ import type { InvitationService } from '../../core/identity/invitation.service.j
 import type { MembershipService } from '../../core/identity/membership.service.js';
 import type { UserService } from '../../core/identity/user.service.js';
 import type { BusinessService } from '../../core/tenant/business.service.js';
+import type { Business } from '../../core/tenant/entities.js';
 import {
   businessDetailPage,
   businessListPage,
@@ -189,6 +190,52 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
 
   const notFound = (res: Response, message: string) => res.status(404).json({ error: 'NOT_FOUND', message });
 
+  const invitationSchema = z.object({
+    role: z.enum(['OWNER', 'EMPLOYEE']),
+    days: z.coerce
+      .number({ invalid_type_error: 'Vigencia inválida.' })
+      .int('La vigencia debe ser un número de días.')
+      .min(1, 'La vigencia es al menos 1 día.')
+      .max(90, 'La vigencia puede ser hasta 90 días.')
+      .default(7),
+  });
+
+  const statusSchema = z.object({
+    status: z.enum(['TRIAL', 'ACTIVE', 'READ_ONLY', 'SUSPENDED'], {
+      errorMap: () => ({ message: 'Estado inválido.' }),
+    }),
+  });
+
+  /** HTML del detalle: datos + miembros (telegramId + rol) + invitaciones. */
+  async function detailHtml(business: Business, opts: { deepLink?: string; error?: string } = {}): Promise<string> {
+    const [memberships, invitations] = await Promise.all([
+      deps.memberships.listByBusiness(business.id),
+      deps.invitations.listByBusiness(business.id),
+    ]);
+    const members: MemberView[] = await Promise.all(
+      memberships.map(async (m) => ({
+        telegramId: (await deps.users.getById(m.userId))?.telegramId ?? m.userId,
+        role: m.role,
+        createdAt: m.createdAt,
+      }))
+    );
+    const views: InvitationView[] = invitations.map((i) => ({
+      id: i.id,
+      role: i.role,
+      status: invitationStatus(i),
+      createdAt: i.createdAt,
+      expiresAt: i.expiresAt,
+      usedAt: i.usedAt,
+      revokedAt: i.revokedAt,
+    }));
+    return businessDetailPage({ business, members, invitations: views, ...opts });
+  }
+
+  async function loadDetail(businessId: string, opts: { deepLink?: string; error?: string } = {}): Promise<string | null> {
+    const business = await deps.businesses.getById(businessId);
+    return business ? detailHtml(business, opts) : null;
+  }
+
   router.get(
     '/',
     route(async (_req, res) => {
@@ -237,32 +284,102 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
   router.get(
     '/businesses/:id',
     route(async (req, res) => {
-      const business = await deps.businesses.getById(String(req.params.id));
+      const html = await loadDetail(String(req.params.id));
+      if (!html) {
+        notFound(res, 'Negocio no encontrado.');
+        return;
+      }
+      res.status(200).send(html);
+    })
+  );
+
+  router.post(
+    '/businesses/:id/invitations',
+    route(async (req, res) => {
+      const businessId = String(req.params.id);
+      const business = await deps.businesses.getById(businessId);
       if (!business) {
         notFound(res, 'Negocio no encontrado.');
         return;
       }
-      const [memberships, invitations] = await Promise.all([
-        deps.memberships.listByBusiness(business.id),
-        deps.invitations.listByBusiness(business.id),
-      ]);
-      const members: MemberView[] = await Promise.all(
-        memberships.map(async (m) => ({
-          telegramId: (await deps.users.getById(m.userId))?.telegramId ?? m.userId,
-          role: m.role,
-          createdAt: m.createdAt,
-        }))
-      );
-      const views: InvitationView[] = invitations.map((i) => ({
-        id: i.id,
-        role: i.role,
-        status: invitationStatus(i),
-        createdAt: i.createdAt,
-        expiresAt: i.expiresAt,
-        usedAt: i.usedAt,
-        revokedAt: i.revokedAt,
-      }));
-      res.status(200).send(businessDetailPage({ business, members, invitations: views }));
+      const parsed = invitationSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const message = parsed.error.issues[0]?.message ?? 'Datos inválidos.';
+        res.status(400).send(await detailHtml(business, { error: message }));
+        return;
+      }
+      let botUsername: string;
+      try {
+        botUsername = await deps.resolveBotUsername(business.templateId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn('[admin] No se pudo resolver el bot para la invitación', { templateId: business.templateId, error: message });
+        res.status(400).send(await detailHtml(business, { error: message }));
+        return;
+      }
+      const created = await deps.invitations.create(business.id, parsed.data.role, {
+        ttlHours: parsed.data.days * 24,
+        botUsername,
+      });
+      await deps.audit.log({
+        businessId: business.id,
+        actorUserId: null,
+        action: 'admin.invitation_created',
+        entityType: 'invitation',
+        entityId: created.invitation.id,
+        metadata: { role: parsed.data.role, days: parsed.data.days },
+      });
+      // El deep link viaja SOLO en este HTML: la DB guarda el hash.
+      res.status(200).send(await detailHtml(business, { deepLink: created.deepLink }));
+    })
+  );
+
+  router.post(
+    '/invitations/:id/revoke',
+    route(async (req, res) => {
+      const invitation = await deps.invitations.getById(String(req.params.id));
+      if (!invitation) {
+        notFound(res, 'Invitación no encontrada.');
+        return;
+      }
+      await deps.invitations.revoke(invitation.businessId, invitation.id, null);
+      await deps.audit.log({
+        businessId: invitation.businessId,
+        actorUserId: null,
+        action: 'admin.invitation_revoked',
+        entityType: 'invitation',
+        entityId: invitation.id,
+        metadata: { role: invitation.role },
+      });
+      res.redirect(`/admin/businesses/${invitation.businessId}`);
+    })
+  );
+
+  router.post(
+    '/businesses/:id/status',
+    route(async (req, res) => {
+      const businessId = String(req.params.id);
+      const business = await deps.businesses.getById(businessId);
+      if (!business) {
+        notFound(res, 'Negocio no encontrado.');
+        return;
+      }
+      const parsed = statusSchema.safeParse(req.body);
+      if (!parsed.success) {
+        const message = parsed.error.issues[0]?.message ?? 'Datos inválidos.';
+        res.status(400).send(await detailHtml(business, { error: message }));
+        return;
+      }
+      await deps.businesses.setStatus(businessId, parsed.data.status);
+      await deps.audit.log({
+        businessId,
+        actorUserId: null,
+        action: 'admin.status_changed',
+        entityType: 'business',
+        entityId: businessId,
+        metadata: { from: business.status, to: parsed.data.status },
+      });
+      res.redirect(`/admin/businesses/${businessId}`);
     })
   );
 

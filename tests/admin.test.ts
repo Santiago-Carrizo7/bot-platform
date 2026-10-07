@@ -374,3 +374,181 @@ describe('admin: detalle de negocio', () => {
     expect((await res.json()).error).toBe('NOT_FOUND');
   });
 });
+
+describe('admin: invitaciones, miembros y estado', () => {
+  async function businessFixture(app: TestApp) {
+    const business = app.repos.businesses.seed(makeBusiness({ name: 'Negocio Ops' }));
+    const user = await app.repos.users.create('777888999');
+    await app.repos.memberships.create({ businessId: business.id, userId: user.id, role: 'OWNER' });
+    return { business, user };
+  }
+
+  it('crear invitación: devuelve el deep link UNA sola vez y queda registrada', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    const { cookie } = await login(app.base, PASSWORD);
+
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/invitations`,
+      { role: 'EMPLOYEE', days: '5' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('https://t.me/mi_bot_test?start=');
+    expect(html).toContain('se muestra una sola vez');
+    const shownToken = html.split('https://t.me/mi_bot_test?start=')[1]?.split(/["<]/)[0];
+    expect(shownToken).toBeTruthy();
+
+    const invitation = [...app.repos.invitations.store.values()][0];
+    expect(invitation.role).toBe('EMPLOYEE');
+    expect(invitation.expiresAt.getTime()).toBeGreaterThan(Date.now() + 4 * 86_400_000);
+    // En la DB vive solo el hash, nunca el token.
+    expect(invitation.tokenHash).not.toBe(shownToken);
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.invitation_created');
+
+    // Volver al detalle: el deep link ya no aparece.
+    const detail = await (
+      await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(detail).not.toContain(shownToken!);
+  });
+
+  it('sin bot configurado para el template → error amigable, sin crear invitación', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    app.deps.resolveBotUsername = async () => {
+      throw new Error("No hay bot configurado para 'gastos'. Configurá TELEGRAM_BOT_TOKEN_GASTOS.");
+    };
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/invitations`,
+      { role: 'OWNER', days: '7' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('TELEGRAM_BOT_TOKEN_GASTOS');
+    expect(app.repos.invitations.store.size).toBe(0);
+  });
+
+  it('días fuera de rango → 400 con el mensaje en el detalle', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/invitations`,
+      { role: 'OWNER', days: '400' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('hasta 90 días');
+    expect(app.repos.invitations.store.size).toBe(0);
+  });
+
+  it('revocar invitación: cambia el estado, audita y redirige al detalle', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    const created = await app.deps.invitations.create(business.id, 'EMPLOYEE', { botUsername: 'mi_bot_test' });
+    const { cookie } = await login(app.base, PASSWORD);
+
+    const res = await post(
+      `${app.base}/admin/invitations/${created.invitation.id}/revoke`,
+      {},
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`/admin/businesses/${business.id}`);
+    expect((await app.repos.invitations.findById(created.invitation.id))?.revokedAt).not.toBeNull();
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.invitation_revoked');
+    expect(app.repos.audit.entries.at(-1)?.actorUserId).toBeNull();
+  });
+
+  it('invitación inexistente → 404', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await post(`${app.base}/admin/invitations/no-existe/revoke`, {}, formHeaders(app.base, { Cookie: cookie }));
+    expect(res.status).toBe(404);
+  });
+
+  it('cambiar estado manual: audita de → a y refleja el cambio', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    const { cookie } = await login(app.base, PASSWORD);
+    const from = business.status;
+
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/status`,
+      { status: 'SUSPENDED' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(302);
+    expect((await app.repos.businesses.findById(business.id))?.status).toBe('SUSPENDED');
+
+    const change = app.repos.audit.entries.find((e) => e.action === 'admin.status_changed');
+    expect(change?.metadata).toMatchObject({ from, to: 'SUSPENDED' });
+    expect(change?.actorUserId).toBeNull();
+
+    const html = await (await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('SUSPENDED');
+    expect(html).toContain('suspendido');
+  });
+
+  it('estado fuera del enum → 400 y el negocio queda igual', async () => {
+    const app = await startApp();
+    const { business } = await businessFixture(app);
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/status`,
+      { status: 'REBOOT' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(400);
+    expect((await app.repos.businesses.findById(business.id))?.status).toBe('TRIAL');
+  });
+
+  it('flujo completo: crear negocio → invitar owner → revocar → suspender', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+
+    const created = await post(
+      `${app.base}/admin/businesses`,
+      { name: 'Barbería Norte', templateId: 'gastos' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    const detailUrl = created.headers.get('location')!;
+
+    const invite = await post(
+      `${app.base}${detailUrl}/invitations`,
+      { role: 'OWNER', days: '7' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    const html = await invite.text();
+    expect(html).toContain('https://t.me/mi_bot_test?start=');
+    const invitationId = [...app.repos.invitations.store.values()][0].id;
+
+    const revoke = await post(
+      `${app.base}/admin/invitations/${invitationId}/revoke`,
+      {},
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(revoke.status).toBe(302);
+
+    const status = await post(
+      `${app.base}${detailUrl}/status`,
+      { status: 'READ_ONLY' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(status.status).toBe(302);
+
+    const actions = app.repos.audit.entries.map((e) => e.action);
+    expect(actions).toEqual(
+      expect.arrayContaining([
+        'admin.business_created',
+        'admin.invitation_created',
+        'admin.invitation_revoked',
+        'admin.status_changed',
+      ])
+    );
+    expect(app.repos.audit.entries.every((e) => e.actorUserId === null)).toBe(true);
+  });
+});

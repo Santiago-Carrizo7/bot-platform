@@ -247,13 +247,21 @@ export function businessDetailPage(data: BusinessDetailData): string {
       <td><span class="badge">${esc(i.status)}</span></td>
       <td class="muted">${esc(fmtDate(i.createdAt, business.timezone))}</td>
       <td class="muted">${esc(fmtDate(i.expiresAt, business.timezone))}</td>
-      <td></td>
+      <td>${
+        i.status === 'pendiente' || i.status === 'expirada'
+          ? `<form class="inline" method="post" action="/admin/invitations/${esc(i.id)}/revoke"><button class="danger" type="submit">Revocar</button></form>`
+          : ''
+      }</td>
     </tr>`
     )
     .join('');
   const invitations = data.invitations.length
     ? `<table><thead><tr><th>Rol</th><th>Estado</th><th>Creada</th><th>Expira</th><th></th></tr></thead><tbody>${invitationRows}</tbody></table>`
     : '<p class="empty">Sin invitaciones.</p>';
+
+  const statusOptions = (['TRIAL', 'ACTIVE', 'READ_ONLY', 'SUSPENDED'] as const)
+    .map((s) => `<option value="${s}"${s === business.status ? ' selected' : ''}>${s}</option>`)
+    .join('');
 
   const body = `
 <h1>${esc(business.name)}</h1>
@@ -272,6 +280,16 @@ ${error}${deepLink}
       business.trialStartedAt ? ` · empezó ${esc(fmtDate(business.trialStartedAt, business.timezone))}` : ' · sin usar'
     }</td></tr>
   </table>
+  <h2>Cambiar estado</h2>
+  <form method="post" action="/admin/businesses/${esc(business.id)}/status">
+    <div class="grid">
+      <div>
+        <label for="status">Estado</label>
+        <select id="status" name="status">${statusOptions}</select>
+      </div>
+      <div style="align-self:end"><button type="submit">Guardar estado</button></div>
+    </div>
+  </form>
 </div>
 
 <div class="panel">
@@ -282,6 +300,20 @@ ${error}${deepLink}
 <div class="panel">
   <h2>Invitaciones (${data.invitations.length})</h2>
   ${invitations}
+  <h2>Nueva invitación</h2>
+  <form method="post" action="/admin/businesses/${esc(business.id)}/invitations">
+    <div class="grid">
+      <div>
+        <label for="role">Rol</label>
+        <select id="role" name="role"><option value="OWNER">OWNER</option><option value="EMPLOYEE" selected>EMPLOYEE</option></select>
+      </div>
+      <div>
+        <label for="days">Vigencia (días)</label>
+        <input id="days" name="days" type="number" min="1" max="90" value="7">
+      </div>
+      <div style="align-self:end"><button type="submit">Crear link</button></div>
+    </div>
+  </form>
 </div>`;
   return layout(business.name, body, { showNav: true });
 }
