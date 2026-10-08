@@ -7,12 +7,14 @@ import {
   EmptyInput,
   RegistrarGastoInput,
   RegistrarVentaInput,
+  RegistrarLoteInput,
   type CalcularPrecioInput as CalcularPrecio,
   type ConsultarMovimientosInput as ConsultarMovimientos,
   type ConsultarResumenInput as ConsultarResumen,
   type EmptyInput as Empty,
   type RegistrarGastoInput as RegistrarGasto,
   type RegistrarVentaInput as RegistrarVenta,
+  type RegistrarLoteInput as RegistrarLote,
 } from './schemas.js';
 import { esc, formatCurrency, formatDateTime } from './format.js';
 import type { PeriodSummary } from './types.js';
@@ -492,9 +494,89 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     },
   };
 
+  const registrarLote: ActionDef<RegistrarLote> = {
+    name: 'registrar_lote',
+    description: 'Registra un lote de ventas y/o gastos (proveniente de fotos de libretas o carga masiva).',
+    kind: 'write',
+    input: RegistrarLoteInput,
+    summarize: (data) => {
+      const items = (data as RegistrarLote).items || [];
+      const ventas = items.filter((i) => i.tipo === 'VENTA');
+      const gastos = items.filter((i) => i.tipo === 'GASTO');
+      const totalVentas = ventas.reduce((acc, i) => acc + i.monto, 0);
+      const totalGastos = gastos.reduce((acc, i) => acc + i.monto, 0);
+      const lines: string[] = ['📋 *Movimientos detectados en la libreta:*', ''];
+
+      const preview = items.slice(0, 15);
+      for (const item of preview) {
+        const icon = item.tipo === 'VENTA' ? '🟢' : '🔴';
+        const label = item.tipo === 'VENTA'
+          ? (item.nota ? `${item.nota}: ` : 'Venta: ')
+          : (item.concepto ? `${item.concepto}: ` : 'Gasto: ');
+        lines.push(`${icon} ${esc(label)}*${formatCurrency(item.monto)}*`);
+      }
+      if (items.length > 15) {
+        lines.push(`_... y ${items.length - 15} movimientos más_`);
+      }
+      lines.push('');
+      if (ventas.length > 0) {
+        lines.push(`• *Total ventas (${ventas.length}):* ${formatCurrency(totalVentas)}`);
+      }
+      if (gastos.length > 0) {
+        lines.push(`• *Total gastos (${gastos.length}):* ${formatCurrency(totalGastos)}`);
+      }
+      return lines.join('\n');
+    },
+    handler: async (ctx, input) => {
+      let totalVentas = 0;
+      let totalGastos = 0;
+      let countVentas = 0;
+      let countGastos = 0;
+
+      for (const item of input.items) {
+        if (item.tipo === 'VENTA') {
+          await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
+            monto: item.monto,
+            nota: item.nota,
+            fecha: ctx.now,
+          });
+          totalVentas += item.monto;
+          countVentas += 1;
+        } else {
+          await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
+            monto: item.monto,
+            concepto: item.concepto ?? 'Gasto',
+            categoria: item.categoria,
+            fecha: ctx.now,
+          });
+          totalGastos += item.monto;
+          countGastos += 1;
+        }
+      }
+
+      const resLines = ['✅ *Lote registrado con éxito:*', ''];
+      if (countVentas > 0) {
+        resLines.push(`🟢 *${countVentas} ventas:* ${formatCurrency(totalVentas)}`);
+      }
+      if (countGastos > 0) {
+        resLines.push(`🔴 *${countGastos} gastos:* ${formatCurrency(totalGastos)}`);
+      }
+
+      return {
+        reply: resLines.join('\n'),
+        inlineKeyboard: [[{ text: '↩️ Deshacer último', callbackData: 'undo:last' }]],
+        audit: {
+          action: 'kiosco.lote_registrado',
+          metadata: { countVentas, totalVentas, countGastos, totalGastos, totalItems: input.items.length },
+        },
+      };
+    },
+  };
+
   return [
     registrarVenta,
     registrarGasto,
+    registrarLote,
     deshacerUltimo,
     modoVentas,
     modoGastos,

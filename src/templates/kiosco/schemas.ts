@@ -52,5 +52,21 @@ export const ConsultarMovimientosInput = z.object({
 
 export type ConsultarMovimientosInput = z.infer<typeof ConsultarMovimientosInput>;
 
+export const RegistrarLoteInput = z.object({
+  items: z
+    .array(
+      z.object({
+        tipo: z.enum(['VENTA', 'GASTO']),
+        monto: z.number().positive('El monto debe ser mayor a 0'),
+        concepto: z.string().trim().optional(),
+        categoria: z.string().trim().optional(),
+        nota: z.string().trim().optional(),
+      })
+    )
+    .min(1, 'Debe haber al menos un movimiento en el lote'),
+});
+
+export type RegistrarLoteInput = z.infer<typeof RegistrarLoteInput>;
+
 export const EmptyInput = z.object({}).strict();
 export type EmptyInput = z.infer<typeof EmptyInput>;

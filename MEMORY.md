@@ -26,6 +26,8 @@
 - Lecturas de gastos a nivel negocio; update/delete solo autor o OWNER.
 - IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini;
   failover automático por 429, 5xx, timeout o respuesta no-JSON.
+- Visión (`VisionService`): Gemini 2.0 Flash -> Groq Vision; límite 5 fotos/día por
+  negocio (`countVisionByBusinessSince`), extracción libreta a `registrar_lote`.
 
 ## Gotchas
 - `migration.sql` en UTF-8 sin BOM: `Set-Content -Encoding UTF8` mete BOM (P3009) y

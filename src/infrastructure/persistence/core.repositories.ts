@@ -201,4 +201,13 @@ export class PrismaAiUsageRepository implements IAiUsageRepository {
   async countByBusinessSince(businessId: string, since: Date): Promise<number> {
     return this.db.aiUsageLog.count({ where: { businessId, createdAt: { gte: since } } });
   }
+  async countVisionByBusinessSince(businessId: string, since: Date): Promise<number> {
+    return this.db.aiUsageLog.count({
+      where: {
+        businessId,
+        createdAt: { gte: since },
+        OR: [{ provider: { startsWith: 'vision' } }, { model: { startsWith: 'vision' } }],
+      },
+    });
+  }
 }

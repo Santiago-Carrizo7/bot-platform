@@ -4,8 +4,10 @@ import { AppError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
 import type { FlowDeps, BotReply } from '../../core/messaging/flow.js';
 import { handleCallback, handleText } from '../../core/messaging/flow.js';
+import { evaluateAccess } from '../../core/tenant/business-status.js';
 import type { TenantResolver } from '../../core/tenant/resolver.js';
 import { SpeechToTextService } from '../../core/stt/stt.service.js';
+import type { VisionService } from '../ai/vision.service.js';
 import type { BotContext } from './bot-context.js';
 import { InMemoryRateLimiter } from './rate-limit.js';
 
@@ -15,6 +17,7 @@ export interface CreateBotDeps {
   flowDeps: FlowDeps;
   resolver: TenantResolver;
   sttService: SpeechToTextService;
+  visionService?: VisionService;
 }
 
 const BASE_COMMANDS = [
@@ -26,7 +29,7 @@ const BASE_COMMANDS = [
 ];
 
 export function createBot(deps: CreateBotDeps): Bot<BotContext> {
-  const { token, templateId, flowDeps, resolver, sttService } = deps;
+  const { token, templateId, flowDeps, resolver, sttService, visionService } = deps;
   const bot = new Bot<BotContext>(token);
   const limiter = new InMemoryRateLimiter();
   // Barra persistente de atajos del template (2 botones por fila).
@@ -173,6 +176,152 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
     }
   });
 
+  // Fotos de libretas/cuadernos de ventas y gastos.
+  bot.on('message:photo', async (ctx) => {
+    let statusMsgId: number | undefined;
+    try {
+      const resolution = requireResolution(ctx);
+      if (!resolution.tenant) {
+        await ctx.reply('Necesitás una invitación para usar este bot.');
+        return;
+      }
+
+      if (!visionService || !visionService.isConfigured()) {
+        await ctx.reply('El análisis de fotos no está configurado en el servidor.');
+        return;
+      }
+
+      const tenant = resolution.tenant;
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const count = await flowDeps.aiUsage.countVisionByBusinessSince(tenant.business.id, startOfDay);
+      if (count >= 5) {
+        await ctx.reply(
+          '⚠️ *Límite diario de fotos alcanzado*\n\n' +
+            'Por hoy ya alcanzaste el límite de *5 fotos* procesadas para tu negocio.\n' +
+            'Podés seguir registrando ventas y gastos por *texto* o *mensaje de voz*.',
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      // Feedback inicial inmediato
+      const statusMsg = await ctx.reply('📸 Analizando foto de la libreta...');
+      statusMsgId = statusMsg.message_id;
+
+      // Descargar foto con mejor resolución
+      const { buffer, mimeType } = await downloadPhoto(ctx, token);
+
+      // Extraer datos con VisionService
+      const result = await visionService.extractLedgerItems(buffer.toString('base64'), mimeType);
+
+      // Registrar uso en aiUsage para conteo y auditoría
+      await flowDeps.aiUsage.log({
+        businessId: tenant.business.id,
+        userId: resolution.user.id,
+        provider: 'vision',
+        model: `vision:${result.model}`,
+      });
+
+      if (result.items.length === 0) {
+        const noItemsMsg =
+          '🔍 No pude identificar montos de ventas ni gastos en la foto.\n\n' +
+          'Asegurate de que los números sean legibles, con buena luz y sacá la foto bien de cerca.';
+        await ctx.api
+          .editMessageText(ctx.chat.id, statusMsgId, noItemsMsg)
+          .catch(async () => {
+            await ctx.reply(noItemsMsg).catch(() => undefined);
+          });
+        return;
+      }
+
+      const action = flowDeps.template.actions.find((a) => a.name === 'registrar_lote');
+      if (!action) {
+        const notSupportedMsg = 'Este bot no tiene soporte para registro de movimientos por fotos.';
+        await ctx.api
+          .editMessageText(ctx.chat.id, statusMsgId, notSupportedMsg)
+          .catch(async () => {
+            await ctx.reply(notSupportedMsg).catch(() => undefined);
+          });
+        return;
+      }
+
+      const now = new Date();
+      const access = evaluateAccess(tenant.business, now);
+      if (!access.canWrite) {
+        const readOnlyMsg =
+          'Este negocio está en modo solo lectura (el período de prueba terminó). Podés consultar, pero no registrar cambios.';
+        await ctx.api
+          .editMessageText(ctx.chat.id, statusMsgId, readOnlyMsg)
+          .catch(async () => {
+            await ctx.reply(readOnlyMsg).catch(() => undefined);
+          });
+        return;
+      }
+
+      await flowDeps.conversations.upsert({
+        businessId: tenant.business.id,
+        userId: resolution.user.id,
+        phase: 'CONFIRMING',
+        actionName: 'registrar_lote',
+        data: { items: result.items },
+        expiresAt: new Date(now.getTime() + (flowDeps.conversationTtlMs ?? 10 * 60_000)),
+        updatedAt: now,
+      });
+
+      const summary = action.summarize ? action.summarize({ items: result.items }) : 'Revisá los datos.';
+      const confirmText = `${summary}\n\n¿Confirmás el registro de estos movimientos en la caja?`;
+
+      await ctx.api
+        .editMessageText(ctx.chat.id, statusMsgId, confirmText, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Confirmar todos', callback_data: 'confirm:yes' },
+                { text: '❌ Cancelar', callback_data: 'confirm:no' },
+              ],
+            ],
+          },
+        })
+        .catch(async () => {
+          await ctx.reply(confirmText, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Confirmar todos', callback_data: 'confirm:yes' },
+                  { text: '❌ Cancelar', callback_data: 'confirm:no' },
+                ],
+              ],
+            },
+          });
+        });
+    } catch (error) {
+      const message =
+        error instanceof AppError
+          ? error.message
+          : 'Ocurrió un error inesperado al analizar la imagen. Probá de nuevo en un momento.';
+
+      if (error instanceof AppError) {
+        logger.warn('Error de aplicación en foto', { code: error.code, message: error.message });
+      } else {
+        logger.error('Error no controlado al procesar foto', error);
+      }
+
+      if (statusMsgId) {
+        await ctx.api
+          .editMessageText(ctx.chat.id, statusMsgId, `❌ ${message}`)
+          .catch(async () => {
+            await ctx.reply(message).catch(() => undefined);
+          });
+      } else {
+        await ctx.reply(message).catch(() => undefined);
+      }
+    }
+  });
+
   // Botones inline (confirmar/cancelar/menú/negocios).
   bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => undefined);
@@ -232,6 +381,22 @@ async function transcribeUpdate(
   if (!response.ok) throw new AppError('No se pudo descargar el audio desde Telegram.');
   const audioBuffer = Buffer.from(await response.arrayBuffer());
   return sttService.transcribe(audioBuffer, voiceOrAudio.mime_type ?? 'audio/ogg');
+}
+
+async function downloadPhoto(
+  ctx: BotContext,
+  token: string
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const photos = ctx.message?.photo;
+  if (!photos || photos.length === 0) throw new AppError('No se encontró la foto.');
+  const largestPhoto = photos[photos.length - 1];
+  const file = await ctx.api.getFile(largestPhoto.file_id);
+  if (!file.file_path) throw new AppError('No se pudo descargar la imagen desde Telegram.');
+  const downloadUrl = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+  const response = await fetch(downloadUrl);
+  if (!response.ok) throw new AppError('No se pudo descargar la imagen desde Telegram.');
+  const buffer = Buffer.from(await response.arrayBuffer());
+  return { buffer, mimeType: 'image/jpeg' };
 }
 
 /**

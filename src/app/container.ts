@@ -26,6 +26,7 @@ import {
 import { OpenRouterProvider } from '../infrastructure/ai/openrouter.provider.js';
 import { OpenAICompatibleChatProvider } from '../infrastructure/ai/openai-compatible-chat.provider.js';
 import { FallbackAIProvider } from '../infrastructure/ai/fallback.provider.js';
+import { VisionService } from '../infrastructure/ai/vision.service.js';
 import { OpenAICompatibleSTTProvider } from '../infrastructure/stt/openai-compatible-stt.provider.js';
 import { createBot, type CreateBotDeps } from '../infrastructure/telegram/bot.js';
 import type { BotContext } from '../infrastructure/telegram/bot-context.js';
@@ -116,6 +117,7 @@ export interface CoreServices {
   resolver: TenantResolver;
   interpreter: ActionInterpreter;
   stt: SpeechToTextService;
+  vision: VisionService;
   audit: AuditService;
   flowBase: Omit<FlowDeps, 'template'>;
   apiSecret: string;
@@ -141,6 +143,13 @@ export function buildCoreServices(config: AppConfig): CoreServices {
   const { provider: aiProvider, modelDescription } = buildAIProvider(config);
   const interpreter = new ActionInterpreter(aiProvider);
 
+  const groqKey = config.GROQ_API_KEY || (config.STT_PROVIDER === 'groq' ? config.STT_API_KEY : undefined);
+  const vision = new VisionService({
+    geminiKey: config.GEMINI_API_KEY,
+    openRouterKey: config.OPENROUTER_API_KEY,
+    groqKey,
+  });
+
   const stt =
     config.STT_PROVIDER !== 'disabled' && config.STT_API_KEY
       ? new SpeechToTextService(
@@ -165,7 +174,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
     aiModel: modelDescription,
   };
 
-  return { users, businesses, memberships, invitations, resolver, interpreter, stt, audit, flowBase, apiSecret: config.API_SECRET };
+  return { users, businesses, memberships, invitations, resolver, interpreter, stt, vision, audit, flowBase, apiSecret: config.API_SECRET };
 }
 
 export interface RunningBot {
@@ -199,6 +208,7 @@ export async function buildBots(
       flowDeps,
       resolver: core.resolver,
       sttService: core.stt,
+      visionService: core.vision,
     };
     const bot = createBot(botDeps);
     try {

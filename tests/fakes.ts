@@ -212,10 +212,17 @@ export class FakeAuditRepo implements IAuditRepository {
 
 export class FakeAiUsageRepo implements IAiUsageRepository {
   count = 0;
-  async log(_entry: ILogAiUsageData) {
+  visionCount = 0;
+  async log(entry: ILogAiUsageData) {
     this.count += 1;
+    if (entry.provider.startsWith('vision') || entry.model.startsWith('vision')) {
+      this.visionCount += 1;
+    }
   }
   async countByBusinessSince(_businessId: string, _since: Date) {
     return this.count;
+  }
+  async countVisionByBusinessSince(_businessId: string, _since: Date) {
+    return this.visionCount;
   }
 }

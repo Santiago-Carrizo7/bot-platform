@@ -100,4 +100,5 @@ export interface ILogAiUsageData {
 export interface IAiUsageRepository {
   log(entry: ILogAiUsageData): Promise<void>;
   countByBusinessSince(businessId: string, since: Date): Promise<number>;
+  countVisionByBusinessSince(businessId: string, since: Date): Promise<number>;
 }
