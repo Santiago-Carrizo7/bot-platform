@@ -438,12 +438,16 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
   const consultarResumen: ActionDef<ConsultarResumen> = {
     name: 'consultar_resumen',
     description:
-      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "semana", "mes"). Por defecto "hoy".',
+      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes"). Por defecto "hoy".',
     kind: 'read',
     input: ConsultarResumenInput,
     handler: async (ctx, input) => {
       let summary: PeriodSummary;
-      if (input.periodo === 'semana') {
+      if (input.periodo === 'ayer') {
+        const ayer = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
+        summary = await cash.getDaySummary(ctx.tenant.business.id, ayer);
+        summary.periodLabel = 'ayer';
+      } else if (input.periodo === 'semana') {
         summary = await cash.getWeekSummary(ctx.tenant.business.id, ctx.now);
       } else if (input.periodo === 'mes') {
         summary = await cash.getMonthSummary(ctx.tenant.business.id, ctx.now);
@@ -528,6 +532,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       return lines.join('\n');
     },
     handler: async (ctx, input) => {
+      const date = input.fecha ? new Date(input.fecha) : ctx.now;
       let totalVentas = 0;
       let totalGastos = 0;
       let countVentas = 0;
@@ -538,7 +543,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
             monto: item.monto,
             nota: item.nota,
-            fecha: ctx.now,
+            fecha: date,
           });
           totalVentas += item.monto;
           countVentas += 1;
@@ -547,14 +552,16 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
             monto: item.monto,
             concepto: item.concepto ?? 'Gasto',
             categoria: item.categoria,
-            fecha: ctx.now,
+            fecha: date,
           });
           totalGastos += item.monto;
           countGastos += 1;
         }
       }
 
-      const resLines = ['✅ *Lote registrado con éxito:*', ''];
+      const isYesterday = Math.abs(ctx.now.getTime() - date.getTime()) > 12 * 60 * 60 * 1000;
+      const targetLabel = isYesterday ? ' (caja de ayer)' : '';
+      const resLines = [`✅ *Lote registrado con éxito${targetLabel}:*`, ''];
       if (countVentas > 0) {
         resLines.push(`🟢 *${countVentas} ventas:* ${formatCurrency(totalVentas)}`);
       }
@@ -567,7 +574,14 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         inlineKeyboard: [[{ text: '↩️ Deshacer último', callbackData: 'undo:last' }]],
         audit: {
           action: 'kiosco.lote_registrado',
-          metadata: { countVentas, totalVentas, countGastos, totalGastos, totalItems: input.items.length },
+          metadata: {
+            countVentas,
+            totalVentas,
+            countGastos,
+            totalGastos,
+            totalItems: input.items.length,
+            fecha: date.toISOString(),
+          },
         },
       };
     },

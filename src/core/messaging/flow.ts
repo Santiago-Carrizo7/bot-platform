@@ -13,6 +13,7 @@ import { ActionInterpreter } from '../ai/interpreter.js';
 import { roleSatisfies } from '../identity/roles.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { InvitationService } from '../identity/invitation.service.js';
+import { getEarlyMorningContext } from '../tenant/early-morning.js';
 
 export interface InlineButton {
   text: string;
@@ -129,14 +130,18 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
   if (active && active.phase === 'CONFIRMING' && active.actionName) {
     const lower = trimmed.toLowerCase();
-    if (CONFIRM_YES.has(lower)) {
+    if (CONFIRM_YES.has(lower) || lower === 'hoy' || lower === 'caja de hoy') {
       return confirmPending(deps, tenant, resolution.user.id, now, access);
+    }
+    if (lower === 'ayer' || lower === 'caja de ayer') {
+      const early = getEarlyMorningContext(now, tenant.business.timezone);
+      return confirmPending(deps, tenant, resolution.user.id, now, access, early.yesterdayDate);
     }
     if (CONFIRM_NO.has(lower)) {
       await deps.conversations.clear(tenant.business.id, resolution.user.id);
       return md('Cancelado, no se guardó nada.');
     }
-    return md('¿Confirmás la operación? Respondé *Sí* para confirmar o *No* para cancelar (o tocá los botones).');
+    return md('¿Confirmás la operación? Respondé *Sí* o *No* (o tocá los botones para elegir el día de la caja).');
   }
 
   // Interceptación de paso en modo continuo (registro rápido sin IA)
@@ -206,8 +211,12 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
   await maybePersistStatus(deps, tenant, access.effectiveStatus);
   if (!access.canRead) return md(MSG_SUSPENDED);
 
-  if (data === 'confirm:yes') {
+  if (data === 'confirm:yes' || data === 'confirm:today') {
     return confirmPending(deps, tenant, resolution.user.id, now, access);
+  }
+  if (data === 'confirm:yesterday') {
+    const early = getEarlyMorningContext(now, tenant.business.timezone);
+    return confirmPending(deps, tenant, resolution.user.id, now, access, early.yesterdayDate);
   }
   if (data === 'confirm:no') {
     await deps.conversations.clear(tenant.business.id, resolution.user.id);
@@ -503,6 +512,21 @@ async function enterConfirming(
     updatedAt: now,
   });
   const summary = action.summarize ? action.summarize(data) : 'Revisá los datos.';
+
+  const early = getEarlyMorningContext(now, tenant.business.timezone);
+  if (early.isEarlyMorning) {
+    return {
+      ...md(`${summary}\n\n🕐 *Veo que son las ${early.timeStr}.* ¿A qué caja corresponde este movimiento?`),
+      inlineKeyboard: [
+        [
+          { text: `📅 Ayer (${early.yesterdayLabel})`, callbackData: 'confirm:yesterday' },
+          { text: `📅 Hoy (${early.todayLabel})`, callbackData: 'confirm:today' },
+        ],
+        [{ text: '❌ Cancelar', callbackData: 'confirm:no' }],
+      ],
+    };
+  }
+
   return { ...md(`${summary}\n\n¿Confirmar?`), inlineKeyboard: confirmKeyboard() };
 }
 
@@ -511,7 +535,8 @@ async function confirmPending(
   tenant: TenantContext,
   userId: string,
   now: Date,
-  access: ReturnType<typeof evaluateAccess>
+  access: ReturnType<typeof evaluateAccess>,
+  overrideDate?: Date
 ): Promise<BotReply> {
   const pending = await getActiveConversation(deps, tenant, userId, now);
   if (!pending || pending.phase !== 'CONFIRMING' || !pending.actionName) {
@@ -531,7 +556,11 @@ async function confirmPending(
     await deps.conversations.clear(tenant.business.id, userId);
     return md(MSG_READONLY_WRITE);
   }
-  const validation = action.input.safeParse(pending.data);
+  const data = { ...pending.data };
+  if (overrideDate) {
+    data.fecha = overrideDate.toISOString();
+  }
+  const validation = action.input.safeParse(data);
   if (!validation.success) {
     await deps.conversations.clear(tenant.business.id, userId);
     return md('Los datos pendientes ya no son válidos. Empecemos de nuevo.');

@@ -5,6 +5,7 @@ import { logger } from '../../core/logging/logger.js';
 import type { FlowDeps, BotReply } from '../../core/messaging/flow.js';
 import { handleCallback, handleText } from '../../core/messaging/flow.js';
 import { evaluateAccess } from '../../core/tenant/business-status.js';
+import { getEarlyMorningContext } from '../../core/tenant/early-morning.js';
 import type { TenantResolver } from '../../core/tenant/resolver.js';
 import { SpeechToTextService } from '../../core/stt/stt.service.js';
 import type { VisionService } from '../ai/vision.service.js';
@@ -271,30 +272,42 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
       });
 
       const summary = action.summarize ? action.summarize({ items: result.items }) : 'Revisá los datos.';
-      const confirmText = `${summary}\n\n¿Confirmás el registro de estos movimientos en la caja?`;
+
+      const early = getEarlyMorningContext(now, tenant.business.timezone);
+      let confirmText: string;
+      let keyboardRows: Array<Array<{ text: string; callback_data: string }>>;
+
+      if (early.isEarlyMorning) {
+        confirmText = `${summary}\n\n🕐 *Veo que son las ${early.timeStr}.* ¿A qué caja corresponden estos movimientos?`;
+        keyboardRows = [
+          [
+            { text: `📅 Ayer (${early.yesterdayLabel})`, callback_data: 'confirm:yesterday' },
+            { text: `📅 Hoy (${early.todayLabel})`, callback_data: 'confirm:today' },
+          ],
+          [{ text: '❌ Cancelar', callback_data: 'confirm:no' }],
+        ];
+      } else {
+        confirmText = `${summary}\n\n¿Confirmás el registro de estos movimientos en la caja?`;
+        keyboardRows = [
+          [
+            { text: '✅ Confirmar todos', callback_data: 'confirm:yes' },
+            { text: '❌ Cancelar', callback_data: 'confirm:no' },
+          ],
+        ];
+      }
 
       await ctx.api
         .editMessageText(ctx.chat.id, statusMsgId, confirmText, {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Confirmar todos', callback_data: 'confirm:yes' },
-                { text: '❌ Cancelar', callback_data: 'confirm:no' },
-              ],
-            ],
+            inline_keyboard: keyboardRows,
           },
         })
         .catch(async () => {
           await ctx.reply(confirmText, {
             parse_mode: 'Markdown',
             reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '✅ Confirmar todos', callback_data: 'confirm:yes' },
-                  { text: '❌ Cancelar', callback_data: 'confirm:no' },
-                ],
-              ],
+              inline_keyboard: keyboardRows,
             },
           });
         });

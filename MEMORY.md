@@ -4,7 +4,7 @@
 > moverlo a `AGENTS.md` (o a `CONSTITUTION.md` si es normativa). **NUNCA** secretos.
 
 ## Estado actual
-- Phase 0–3 + Sprint A + admin v1 + rediseño Kiosco en verde (116 tests + build OK).
+- Phase 0–3 + Sprint A + admin v1 + rediseño Kiosco en verde (131 tests + build OK).
 - Webhook Render: `TELEGRAM_WEBHOOK_URL` + `SECRET` (`base64url`/`hex`, no base64 con `+/=`).
 - Staging: Render free + Supabase + cron-job cada 12 min a /health. Bot: `@MiKiosquito_bot`.
 - Templates: `gastos` (API en `/api/v1/gastos/*`) y `kiosco` (MVP financiero ágil:
@@ -28,6 +28,7 @@
   failover automático por 429, 5xx, timeout o respuesta no-JSON.
 - Visión (`VisionService`): Gemini 2.0 Flash -> Groq Vision; límite 5 fotos/día por
   negocio (`countVisionByBusinessSince`), extracción libreta a `registrar_lote`.
+- Madrugada comercial (00:00 a 05:00): pregunta contextual ayer vs hoy (`getEarlyMorningContext`).
 
 ## Gotchas
 - `migration.sql` en UTF-8 sin BOM: `Set-Content -Encoding UTF8` mete BOM (P3009) y
