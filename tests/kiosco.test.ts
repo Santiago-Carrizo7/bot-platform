@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MoneyMovement, PrismaClient, Product, Purchase, Sale, SaleItem, StockMovement } from '@prisma/client';
+import type { MoneyMovement, PrismaClient } from '@prisma/client';
 import { handleCallback, handleText, type FlowDeps, type ResolutionInfo } from '../src/core/messaging/flow.js';
 import type { ActionDef, TemplateDefinition } from '../src/core/actions/registry.js';
 import type { ActionInterpreter } from '../src/core/ai/interpreter.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
-import { ProductService } from '../src/templates/kiosco/domain/product.service.js';
-import { SaleService } from '../src/templates/kiosco/domain/sale.service.js';
-import { CashService } from '../src/templates/kiosco/domain/cash.service.js';
+import { CashService, inferCategory } from '../src/templates/kiosco/domain/cash.service.js';
 import { buildKioscoActions } from '../src/templates/kiosco/actions.js';
-import type { ProductRepository } from '../src/templates/kiosco/persistence/product.repo.js';
-import type { SaleRepository } from '../src/templates/kiosco/persistence/sale.repo.js';
 import type { CashRepository } from '../src/templates/kiosco/persistence/cash.repo.js';
 import {
   FakeAiUsageRepo,
@@ -28,287 +24,199 @@ const ACTOR = 'user-1';
 let seq = 0;
 const nid = (p: string) => `${p}-${++seq}`;
 
-interface Store {
-  products: Product[];
-  movements: MoneyMovement[];
-  purchases: Purchase[];
-  stockMovements: StockMovement[];
-  sales: Array<Sale & { items: SaleItem[] }>;
-}
-
-function newStore(): Store {
-  return { products: [], movements: [], purchases: [], stockMovements: [], sales: [] };
-}
-
-function asProduct(p: Partial<Product>): Product {
-  return {
-    id: nid('prod'), businessId: BIZ, name: 'X', salePrice: 100 as unknown as Product['salePrice'],
-    costPrice: null, stock: 0 as unknown as Product['stock'], minStock: null,
-    unit: 'unidad', isActive: true, createdAt: NOW, updatedAt: NOW, ...p,
-  } as Product;
-}
-
-class FakeProductRepo {
-  constructor(private readonly s: Store) {}
-  async create(data: { businessId: string; name: string; salePrice: number; costPrice?: number; stock?: number; minStock?: number; unit?: string }) {
-    const p = asProduct({
-      id: nid('prod'), businessId: data.businessId, name: data.name.trim(),
-      salePrice: data.salePrice as unknown as Product['salePrice'],
-      costPrice: (data.costPrice ?? null) as unknown as Product['costPrice'],
-      stock: (data.stock ?? 0) as unknown as Product['stock'],
-      minStock: (data.minStock ?? null) as unknown as Product['minStock'],
-      unit: data.unit ?? 'unidad',
-    });
-    this.s.products.push(p);
-    return p;
-  }
-  async findByName(businessId: string, name: string) {
-    return this.s.products.find((p) => p.businessId === businessId && p.name.toLowerCase() === name.trim().toLowerCase() && p.isActive) ?? null;
-  }
-  async findById(id: string, businessId: string) {
-    return this.s.products.find((p) => p.id === id && p.businessId === businessId) ?? null;
-  }
-  async list(businessId: string, opts: { search?: string; onlyLowStock?: boolean; limit?: number } = {}) {
-    let all = this.s.products.filter((p) => p.businessId === businessId && p.isActive);
-    if (opts.search) all = all.filter((p) => p.name.toLowerCase().includes(opts.search!.toLowerCase()));
-    if (opts.onlyLowStock) all = all.filter((p) => p.minStock !== null && Number(p.stock) <= Number(p.minStock));
-    return all.slice(0, opts.limit ?? 50);
-  }
-  async update(id: string, _b: string, data: { name?: string; salePrice?: number; costPrice?: number; minStock?: number | null; unit?: string }) {
-    const p = this.s.products.find((x) => x.id === id);
-    if (!p) throw new Error('no encontrado');
-    if (data.name !== undefined) p.name = data.name;
-    if (data.salePrice !== undefined) p.salePrice = data.salePrice as unknown as Product['salePrice'];
-    if (data.costPrice !== undefined) p.costPrice = data.costPrice as unknown as Product['costPrice'];
-    if (data.minStock !== undefined) p.minStock = data.minStock as unknown as Product['minStock'];
-    if (data.unit !== undefined) p.unit = data.unit;
-    return p;
-  }
-  async deactivate(id: string) {
-    const p = this.s.products.find((x) => x.id === id);
-    if (!p) throw new Error('no encontrado');
-    p.isActive = false;
-    return p;
-  }
-  async changeStock(id: string, _b: string, delta: number) {
-    const p = this.s.products.find((x) => x.id === id);
-    if (!p) throw new Error('no encontrado');
-    p.stock = (Number(p.stock) + delta) as unknown as Product['stock'];
-    return p;
-  }
-  async setStock(id: string, _b: string, quantity: number) {
-    const p = this.s.products.find((x) => x.id === id);
-    if (!p) throw new Error('no encontrado');
-    const previous = Number(p.stock);
-    p.stock = quantity as unknown as Product['stock'];
-    return { product: p, previous };
-  }
-}
-
-class FakeSaleRepo {
-  constructor(private readonly s: Store) {}
-  async create(businessId: string, userId: string, total: number, lines: Array<{ productId: string; productName: string; quantity: number; unitPrice: number; subtotal: number }>, note?: string) {
-    const sale = {
-      id: nid('sale'), businessId, userId, total: total as unknown as Sale['total'],
-      currency: 'ARS', note: note ?? null, createdAt: NOW, updatedAt: NOW,
-      items: lines.map((l) => ({
-        id: nid('item'), saleId: '', productId: l.productId, productName: l.productName,
-        quantity: l.quantity as unknown as SaleItem['quantity'],
-        unitPrice: l.unitPrice as unknown as SaleItem['unitPrice'],
-        subtotal: l.subtotal as unknown as SaleItem['subtotal'],
-      })),
-    } as Sale & { items: SaleItem[] };
-    for (const it of sale.items) it.saleId = sale.id;
-    this.s.sales.push(sale);
-    return sale;
-  }
-  async listRecent() {
-    return this.s.sales;
-  }
-}
-
 class FakeCashRepo {
-  constructor(private readonly s: Store) {}
-  async addMovement(data: { businessId: string; userId: string; kind: string; amount: number; concept: string; category?: string; date?: Date; relatedType?: string; relatedId?: string }) {
+  public movements: MoneyMovement[] = [];
+
+  async addMovement(data: {
+    businessId: string;
+    userId: string;
+    kind: 'IN' | 'OUT';
+    amount: number;
+    concept: string;
+    category?: string;
+    date?: Date;
+    relatedType?: string;
+    relatedId?: string;
+  }) {
     const m = {
-      id: nid('mov'), businessId: data.businessId, userId: data.userId, kind: data.kind,
-      amount: data.amount as unknown as MoneyMovement['amount'], concept: data.concept,
-      category: data.category ?? null, date: data.date ?? NOW,
-      relatedType: data.relatedType ?? null, relatedId: data.relatedId ?? null, createdAt: NOW,
+      id: nid('mov'),
+      businessId: data.businessId,
+      userId: data.userId,
+      kind: data.kind,
+      amount: data.amount as unknown as MoneyMovement['amount'],
+      concept: data.concept,
+      category: data.category ?? null,
+      date: data.date ?? NOW,
+      relatedType: data.relatedType ?? null,
+      relatedId: data.relatedId ?? null,
+      createdAt: new Date(),
     } as MoneyMovement;
-    this.s.movements.push(m);
+    this.movements.push(m);
     return m;
   }
-  async createPurchase(data: { businessId: string; userId: string; description: string; amount: number; productId?: string; quantity?: number; date?: Date }) {
-    const p = {
-      id: nid('pur'), businessId: data.businessId, userId: data.userId, description: data.description,
-      amount: data.amount as unknown as Purchase['amount'], currency: 'ARS',
-      productId: data.productId ?? null, quantity: (data.quantity ?? null) as unknown as Purchase['quantity'],
-      date: data.date ?? NOW, createdAt: NOW,
-    } as Purchase;
-    this.s.purchases.push(p);
-    return p;
+
+  async undoLastMovement(businessId: string, userId: string) {
+    const idx = [...this.movements]
+      .reverse()
+      .findIndex((m) => m.businessId === businessId && m.userId === userId);
+    if (idx === -1) return null;
+    const realIdx = this.movements.length - 1 - idx;
+    const [removed] = this.movements.splice(realIdx, 1);
+    return removed;
   }
-  async addStockMovement(data: { businessId: string; productId?: string; productName: string; quantity: number; reason: string; relatedType?: string; relatedId?: string; userId: string }) {
-    const m = {
-      id: nid('sm'), businessId: data.businessId, productId: data.productId ?? null,
-      productName: data.productName, quantity: data.quantity as unknown as StockMovement['quantity'],
-      reason: data.reason, relatedType: data.relatedType ?? null, relatedId: data.relatedId ?? null,
-      userId: data.userId, createdAt: NOW,
-    } as StockMovement;
-    this.s.stockMovements.push(m);
-    return m;
+
+  async listRecent(businessId: string, limit = 10) {
+    return this.movements
+      .filter((m) => m.businessId === businessId)
+      .slice(-limit)
+      .reverse();
   }
-  async getTotalsByDateRange() {
-    const totalIn = this.s.movements.filter((m) => m.kind === 'IN').reduce((a, m) => a + Number(m.amount), 0);
-    const totalOut = this.s.movements.filter((m) => m.kind === 'OUT').reduce((a, m) => a + Number(m.amount), 0);
+
+  async getTotalsByDateRange(businessId: string, start: Date, end: Date) {
+    const filtered = this.movements.filter(
+      (m) => m.businessId === businessId && m.date >= start && m.date <= end
+    );
+    const inMovs = filtered.filter((m) => m.kind === 'IN');
+    const outMovs = filtered.filter((m) => m.kind === 'OUT');
     return {
-      totalIn, totalOut,
-      countIn: this.s.movements.filter((m) => m.kind === 'IN').length,
-      countOut: this.s.movements.filter((m) => m.kind === 'OUT').length,
+      totalIn: inMovs.reduce((acc, m) => acc + Number(m.amount), 0),
+      totalOut: outMovs.reduce((acc, m) => acc + Number(m.amount), 0),
+      countIn: inMovs.length,
+      countOut: outMovs.length,
     };
   }
+
+  async getExpensesByCategory(businessId: string, start: Date, end: Date) {
+    const filtered = this.movements.filter(
+      (m) => m.businessId === businessId && m.kind === 'OUT' && m.date >= start && m.date <= end
+    );
+    const byCat = new Map<string, { total: number; count: number }>();
+    for (const m of filtered) {
+      const cat = m.category || 'Otros';
+      const cur = byCat.get(cat) || { total: 0, count: 0 };
+      cur.total += Number(m.amount);
+      cur.count += 1;
+      byCat.set(cat, cur);
+    }
+    return [...byCat.entries()].map(([category, data]) => ({ category, ...data }));
+  }
 }
 
-function setupServices(store: Store = newStore()) {
-  const productRepo = new FakeProductRepo(store);
-  const saleRepo = new FakeSaleRepo(store);
-  const cashRepo = new FakeCashRepo(store);
-  const fakeDb = {
-    $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn({}),
-    sale: {
-      aggregate: async (args: { where?: { createdAt?: { gte?: Date; lte?: Date } } }) => {
-        const gte = args.where?.createdAt?.gte;
-        const lte = args.where?.createdAt?.lte;
-        const inRange = store.sales.filter(
-          (s) => (!gte || s.createdAt >= gte) && (!lte || s.createdAt <= lte)
-        );
-        return {
-          _sum: { total: inRange.reduce((a, s) => a + Number(s.total), 0) },
-          _count: { id: inRange.length },
-        };
-      },
-    },
-  } as unknown as PrismaClient;
-  const products = new ProductService(productRepo as unknown as ProductRepository, cashRepo as unknown as CashRepository);
-  const sales = new SaleService(fakeDb, saleRepo as unknown as SaleRepository, productRepo as unknown as ProductRepository, cashRepo as unknown as CashRepository);
-  const cash = new CashService(fakeDb, cashRepo as unknown as CashRepository, productRepo as unknown as ProductRepository);
-  return { products, sales, cash, store };
+function setupServices() {
+  const repo = new FakeCashRepo();
+  const cash = new CashService(repo as unknown as CashRepository);
+  return { repo, cash };
 }
 
-describe('template kiosco: dominio', () => {
-  it('crea producto y rechaza duplicados', async () => {
-    const { products } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca Cola 2.5L', salePrice: 3500, stock: 12 });
-    await expect(products.create(BIZ, ACTOR, { name: 'coca cola 2.5l', salePrice: 3500 })).rejects.toThrow(/Ya existe/);
+describe('template kiosco: dominio financiero', () => {
+  it('registra venta rápida y gasto con categorías', async () => {
+    const { cash, repo } = setupServices();
+
+    const sale = await cash.recordSale(BIZ, ACTOR, { monto: 5000, nota: 'dos alfajores' });
+    expect(Number(sale.amount)).toBe(5000);
+    expect(sale.kind).toBe('IN');
+    expect(sale.concept).toBe('Venta: dos alfajores');
+    expect(sale.category).toBe('Ventas');
+
+    const exp = await cash.recordExpense(BIZ, ACTOR, { monto: 3500, concepto: 'Coca Cola', categoria: 'Mercadería' });
+    expect(Number(exp.amount)).toBe(3500);
+    expect(exp.kind).toBe('OUT');
+    expect(exp.category).toBe('Mercadería');
+    expect(repo.movements).toHaveLength(2);
   });
 
-  it('venta multi-producto: total, descuento de stock y movimiento de caja', async () => {
-    const { products, sales, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca Cola 2.5L', salePrice: 3500, stock: 12 });
-    await products.create(BIZ, ACTOR, { name: 'Alfajor', salePrice: 800, stock: 30 });
-    const result = await sales.createSale(BIZ, ACTOR, [
-      { productName: 'Coca Cola 2.5L', quantity: 3 },
-      { productName: 'Alfajor', quantity: 2 },
-    ]);
-    expect(Number(result.sale.total)).toBe(3 * 3500 + 2 * 800);
-    expect(result.lines).toHaveLength(2);
-    expect(Number((await products.findByName(BIZ, 'Coca Cola 2.5L'))!.stock)).toBe(9);
-    expect(store.movements).toHaveLength(1);
-    expect(store.movements[0]).toMatchObject({ kind: 'IN', amount: 12100 });
-    expect(store.stockMovements.filter((m) => m.reason === 'VENTA')).toHaveLength(2);
+  it('infiere categorías típicas de gastos si no fueron pasadas', () => {
+    expect(inferCategory('pago al mayorista')).toBe('Proveedores');
+    expect(inferCategory('factura de luz')).toBe('Servicios');
+    expect(inferCategory('supermercado chino')).toBe('Supermercado');
+    expect(inferCategory('alquiler del local')).toBe('Alquiler');
+    expect(inferCategory('coca y alfajores')).toBe('Mercadería');
+    expect(inferCategory('flete de mercaderia')).toBe('Transporte');
   });
 
-  it('venta con producto inexistente falla con mensaje útil (sin tocar stock)', async () => {
-    const { products, sales, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 12 });
-    await expect(
-      sales.createSale(BIZ, ACTOR, [{ productName: 'Pepsi', quantity: 1 }])
-    ).rejects.toThrow(/No encontré.*Pepsi/);
-    expect(store.sales).toHaveLength(0);
-    expect(Number((await products.findByName(BIZ, 'Coca'))!.stock)).toBe(12);
+  it('permite registrar fechas retroactivas', async () => {
+    const { cash, repo } = setupServices();
+    const past = new Date('2026-10-01T10:00:00Z');
+    await cash.recordSale(BIZ, ACTOR, { monto: 8000, fecha: past });
+    expect(repo.movements[0].date).toEqual(past);
   });
 
-  it('venta sin stock suficiente se frena con mensaje amable (no registra nada)', async () => {
-    const { products, sales, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 1 });
-    await expect(
-      sales.createSale(BIZ, ACTOR, [{ productName: 'Coca', quantity: 3 }])
-    ).rejects.toThrow(/No alcanza el stock.*hay 1.*pediste 3/s);
-    expect(store.sales).toHaveLength(0);
-    expect(store.movements).toHaveLength(0);
-    expect(Number((await products.findByName(BIZ, 'Coca'))!.stock)).toBe(1);
+  it('deshacer anula el último movimiento del usuario en el negocio', async () => {
+    const { cash, repo } = setupServices();
+    await cash.recordSale(BIZ, ACTOR, { monto: 5000 });
+    await cash.recordSale(BIZ, ACTOR, { monto: 8200 });
+    expect(repo.movements).toHaveLength(2);
+
+    const undone = await cash.undoLast(BIZ, ACTOR);
+    expect(undone).not.toBeNull();
+    expect(Number(undone!.amount)).toBe(8200);
+    expect(repo.movements).toHaveLength(1);
+    expect(Number(repo.movements[0].amount)).toBe(5000);
   });
 
-  it('compra con mercadería: sale dinero y entra stock', async () => {
-    const { products, cash, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 2 });
-    const result = await cash.registerPurchase(BIZ, ACTOR, {
-      description: '2 cajones de Coca', amount: 20000, productName: 'Coca', quantity: 12,
-    });
-    expect(result.stockAdded).toMatchObject({ productName: 'Coca', stock: 14 });
-    expect(store.movements).toMatchObject([{ kind: 'OUT', amount: 20000 }]);
-    expect(store.stockMovements.filter((m) => m.reason === 'COMPRA')).toHaveLength(1);
-  });
+  it('calcula resúmenes periódicos y balance de caja (ventas - gastos)', async () => {
+    const { cash } = setupServices();
+    await cash.recordSale(BIZ, ACTOR, { monto: 10000 });
+    await cash.recordSale(BIZ, ACTOR, { monto: 5000 });
+    await cash.recordExpense(BIZ, ACTOR, { monto: 4000, concepto: 'Luz' });
 
-  it('gasto y entrada generan movimientos OUT/IN', async () => {
-    const { cash, store } = setupServices();
-    await cash.moneyOut(BIZ, ACTOR, { concept: 'Luz', amount: 15000, category: 'gastos' });
-    await cash.moneyIn(BIZ, ACTOR, { concept: 'Deuda cobrada', amount: 5000, category: 'entradas' });
-    expect(store.movements.map((m) => m.kind)).toEqual(['OUT', 'IN']);
-  });
-
-  it('fijar stock: valor absoluto + movimiento de ajuste con diferencia', async () => {
-    const { products, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 10 });
-    const { previous } = await products.setStock(BIZ, ACTOR, 'Coca', 24);
-    expect(previous).toBe(10);
-    expect(store.stockMovements.filter((m) => m.reason === 'AJUSTE').map((m) => Number(m.quantity))).toEqual([14]);
-  });
-
-  it('stock bajo: solo productos con mínimo superado', async () => {
-    const { products } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 3, minStock: 5 });
-    await products.create(BIZ, ACTOR, { name: 'Alfajor', salePrice: 800, stock: 30, minStock: 5 });
-    await products.create(BIZ, ACTOR, { name: 'Yerba', salePrice: 4000, stock: 2 });
-    const bajos = await products.list(BIZ, { onlyLowStock: true });
-    expect(bajos.map((p) => p.name)).toEqual(['Coca']);
-  });
-
-  it('modificar precio y dar de baja (conserva historial)', async () => {
-    const { products, sales, store } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 10 });
-    await sales.createSale(BIZ, ACTOR, [{ productName: 'Coca', quantity: 1 }]);
-    await products.update(BIZ, 'Coca', { salePrice: 3800 });
-    expect(Number((await products.findByName(BIZ, 'Coca'))!.salePrice)).toBe(3800);
-    await products.deactivate(BIZ, 'Coca');
-    expect(await products.list(BIZ)).toHaveLength(0);
-    expect(store.sales).toHaveLength(1); // el historial se conserva
-  });
-
-  it('resumen del día agrega ventas y movimientos', async () => {
-    const { products, sales, cash } = setupServices();
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 3500, stock: 10 });
-    await sales.createSale(BIZ, ACTOR, [{ productName: 'Coca', quantity: 2 }]);
-    await cash.moneyOut(BIZ, ACTOR, { concept: 'Luz', amount: 1000 });
     const summary = await cash.getDaySummary(BIZ, NOW);
-    expect(summary.salesTotal).toBe(7000);
-    expect(summary.totalIn).toBe(7000);
-    expect(summary.totalOut).toBe(1000);
-    expect(summary.net).toBe(6000);
+    expect(summary.ventasTotal).toBe(15000);
+    expect(summary.ventasCount).toBe(2);
+    expect(summary.gastosTotal).toBe(4000);
+    expect(summary.gastosCount).toBe(1);
+    expect(summary.balanceCaja).toBe(11000);
+  });
+
+  it('calculador de precio: margen vs recargo/markup con lote y unitario', () => {
+    const { cash } = setupServices();
+
+    // Lote: 30 alfajores por 18000 (costo unitario = 600)
+    // Recargo del 40%: precio = 600 * 1.4 = 840. Ganancia unit = 240, lote = 7200.
+    const markup = cash.calculatePrice({
+      costoTotal: 18000,
+      cantidad: 30,
+      porcentaje: 40,
+      tipo: 'recargo',
+    });
+    expect(markup.costoUnitario).toBe(600);
+    expect(markup.precioSugerido).toBe(840);
+    expect(markup.gananciaUnitaria).toBe(240);
+    expect(markup.gananciaLote).toBe(7200);
+
+    // Margen del 40%: precio = 600 / (1 - 0.4) = 1000. Ganancia unit = 400, lote = 12000.
+    const margin = cash.calculatePrice({
+      costoUnitario: 600,
+      cantidad: 30,
+      porcentaje: 40,
+      tipo: 'margen',
+    });
+    expect(margin.precioSugerido).toBe(1000);
+    expect(margin.gananciaUnitaria).toBe(400);
+    expect(margin.gananciaLote).toBe(12000);
   });
 });
 
-describe('template kiosco: flujo por bot', () => {
+describe('template kiosco: flujo por bot (Telegram)', () => {
   function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
-    const store = newStore();
-    const { products, sales, cash } = setupServices(store);
-    const actions = buildKioscoActions({ products, sales, cash });
+    const { cash, repo } = setupServices();
+    const actions = buildKioscoActions({ cash });
     const template: TemplateDefinition = {
-      id: 'kiosco', label: 'Kiosco',
-      welcome: () => 'Bienvenido', systemPrompt: () => 'sys',
+      id: 'kiosco',
+      label: 'Kiosco',
+      welcome: () => 'Bienvenido',
+      systemPrompt: () => 'sys',
       actions,
-      commands: [{ command: 'venta', action: 'registrar_venta' }, { command: 'stock', action: 'consultar_stock' }],
+      commands: [
+        { command: 'venta', action: 'registrar_venta' },
+        { command: 'ventas', action: 'modo_ventas' },
+        { command: 'gasto', action: 'registrar_gasto' },
+        { command: 'gastos', action: 'modo_gastos' },
+        { command: 'resumen', action: 'consultar_resumen' },
+        { command: 'movimientos', action: 'consultar_movimientos' },
+        { command: 'calcular', action: 'calcular_precio' },
+        { command: 'deshacer', action: 'deshacer_ultimo' },
+      ],
       menu: [],
     };
     const businesses = new FakeBusinessRepo();
@@ -318,8 +226,13 @@ describe('template kiosco: flujo por bot', () => {
     const business = businesses.seed(makeBusiness({ id: BIZ, templateId: 'kiosco' }));
     const user = { id: ACTOR, telegramId: 'tg-1', createdAt: NOW, updatedAt: NOW };
     const membership = {
-      id: 'mem-1', businessId: BIZ, userId: ACTOR, role: 'EMPLOYEE' as const,
-      lastUsedAt: null, createdAt: NOW, updatedAt: NOW,
+      id: 'mem-1',
+      businessId: BIZ,
+      userId: ACTOR,
+      role: 'EMPLOYEE' as const,
+      lastUsedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
     };
     membershipRepo.store.set(membership.id, membership);
     const interpreter = {
@@ -327,39 +240,142 @@ describe('template kiosco: flujo por bot', () => {
         const next = queue.shift();
         if (!next) throw new Error('sin respuestas de IA');
         const action = all.find((a) => a.name === next.action);
-        if (!action) throw new Error('acción desconocida');
+        if (!action) throw new Error(`acción desconocida: ${next.action}`);
         return { action, params: next.params };
       }),
     } as unknown as ActionInterpreter;
     const deps: FlowDeps = {
-      template, interpreter, conversations, businesses, membershipRepo,
-      audit: new AuditService(auditRepo), aiUsage: new FakeAiUsageRepo(),
-      aiProviderName: 'Mock', aiModel: 'mock-1',
+      template,
+      interpreter,
+      conversations,
+      businesses,
+      membershipRepo,
+      audit: new AuditService(auditRepo),
+      aiUsage: new FakeAiUsageRepo(),
+      aiProviderName: 'Mock',
+      aiModel: 'mock-1',
     };
     const tenant: TenantContext = { business, membership, user, botTemplateId: 'kiosco' };
     const resolution: ResolutionInfo = { user, tenant, justJoined: false, memberships: [], needsInvitation: false };
-    return { deps, resolution, auditRepo, store };
+    return { deps, resolution, auditRepo, repo, businesses, conversations };
   }
 
-  it('freestyle "vendí 3 Coca" → confirmación con total calculado → registra y audita', async () => {
-    const f = setupFlow([{ action: 'registrar_venta', params: { items: [{ producto: 'Coca', cantidad: 3 }] } }]);
-    // Producto cargado previamente por el dueño.
-    const { products } = setupServices(f.store);
-    await products.create(BIZ, ACTOR, { name: 'Coca', salePrice: 2000, stock: 10 });
-
-    const ask = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 3 Coca', now: NOW });
+  it('modo normal: "Vendí 5000" pide confirmación Sí/No, registra, audita y ofrece Deshacer', async () => {
+    const f = setupFlow([{ action: 'registrar_venta', params: { monto: 5000 } }]);
+    const ask = await handleText(f.deps, { resolution: f.resolution, text: 'Vendí 5000', now: NOW });
     expect(ask.text).toContain('¿Confirmar?');
-    expect(ask.text).toContain('Coca');
+    expect(ask.text).toContain('$ 5.000');
+
     const done = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
-    expect(done.text).toContain('$ 6.000');
+    expect(done.text).toContain('🟢 Venta registrada: *$ 5.000*');
+    expect(done.inlineKeyboard).toEqual([[{ text: '↩️ Deshacer', callbackData: 'undo:last' }]]);
     expect(f.auditRepo.entries).toHaveLength(1);
-    expect(f.auditRepo.entries[0]).toMatchObject({ action: 'sale.created', actorUserId: ACTOR });
-    expect(f.store.movements[0]).toMatchObject({ kind: 'IN', amount: 6000 });
+    expect(f.auditRepo.entries[0]).toMatchObject({ action: 'sale.recorded', actorUserId: ACTOR });
+    expect(f.repo.movements).toHaveLength(1);
   });
 
-  it('/stock ejecuta la consulta sin confirmación', async () => {
+  it('modo normal: registrar gasto pide confirmación y categoriza', async () => {
+    const f = setupFlow([{ action: 'registrar_gasto', params: { monto: 3500, concepto: 'Coca Cola', categoria: 'Mercadería' } }]);
+    const ask = await handleText(f.deps, { resolution: f.resolution, text: 'Gasté 3500 en Coca Cola', now: NOW });
+    expect(ask.text).toContain('¿Confirmar?');
+    expect(ask.text).toContain('Coca Cola');
+
+    const done = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
+    expect(done.text).toContain('🔴 Gasto registrado: *$ 3.500*');
+    expect(done.text).toContain('Mercadería');
+    expect(f.repo.movements[0]).toMatchObject({ kind: 'OUT', amount: 3500, category: 'Mercadería' });
+  });
+
+  it('deshacer_ultimo anula el último registro desde comando o callback', async () => {
     const f = setupFlow([]);
-    const reply = await handleText(f.deps, { resolution: f.resolution, text: '/stock', now: NOW });
-    expect(reply.text).toContain('No hay productos');
+    await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'IN', amount: 5000, concept: 'Venta' });
+    expect(f.repo.movements).toHaveLength(1);
+
+    const undone = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
+    expect(undone.text).toContain('Se anuló el último movimiento');
+    expect(undone.text).toContain('$ 5.000');
+    expect(f.repo.movements).toHaveLength(0);
+  });
+
+  it('modo continuo de ventas: /ventas activa modo rápido, números registran directo, deshacer funciona y /fin finaliza', async () => {
+    const f = setupFlow([]);
+
+    // 1. Activar modo ventas
+    const start = await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
+    expect(start.text).toContain('🟢 *Modo ventas activo*');
+
+    // 2. Enviar importes consecutivos (sin IA, registro inmediato)
+    const v1 = await handleText(f.deps, { resolution: f.resolution, text: '2500', now: NOW });
+    expect(v1.text).toContain('🟢 Venta registrada: *$ 2.500*');
+    expect(v1.text).toContain('Total acumulado: $ 2.500 (1)');
+
+    const v2 = await handleText(f.deps, { resolution: f.resolution, text: '4300', now: NOW });
+    expect(v2.text).toContain('🟢 Venta registrada: *$ 4.300*');
+    expect(v2.text).toContain('Total acumulado: $ 6.800 (2)');
+
+    // 3. Deshacer última venta desde callback
+    const undo = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
+    expect(undo.text).toContain('Se anuló la última venta de *$ 4.300*');
+    expect(undo.text).toContain('Total acumulado: $ 2.500 (1)');
+
+    // 4. Cargar otra venta con texto
+    const v3 = await handleText(f.deps, { resolution: f.resolution, text: '1800', now: NOW });
+    expect(v3.text).toContain('🟢 Venta registrada: *$ 1.800*');
+    expect(v3.text).toContain('Total acumulado: $ 4.300 (2)');
+
+    // 5. Finalizar con /fin
+    const end = await handleText(f.deps, { resolution: f.resolution, text: '/fin', now: NOW });
+    expect(end.text).toContain('🏁 *Registro de ventas finalizado*');
+    expect(end.text).toContain('Ventas registradas: *2*');
+    expect(end.text).toContain('Total acumulado: *$ 4.300*');
+
+    // Estado de conversación queda limpio
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('calculador de precio: si falta tipo explica margen vs recargo; si está completo calcula ganancia', async () => {
+    // Caso 1: sin tipo especificado -> pide aclaración pedagógica
+    const f1 = setupFlow([{ action: 'calcular_precio', params: { costo_total: 18000, cantidad: 30, porcentaje: 40 } }]);
+    const askType = await handleText(f1.deps, { resolution: f1.resolution, text: 'compré 30 alfajores por 18000 y quiero ganar 40%', now: NOW });
+    expect(askType.text).toContain('¿Querés calcular usando *margen* o *recargo*');
+    expect(askType.text).toContain('Recargo / Markup');
+    expect(askType.text).toContain('Margen');
+
+    // Caso 2: con margen especificado -> cálculo matemático
+    const f2 = setupFlow([{ action: 'calcular_precio', params: { costo_unitario: 600, porcentaje: 40, tipo: 'margen', cantidad: 30 } }]);
+    const res = await handleText(f2.deps, { resolution: f2.resolution, text: 'costo 600, 40% de margen', now: NOW });
+    expect(res.text).toContain('Precio de venta: $ 1.000');
+    expect(res.text).toContain('Ganancia por unidad: *$ 400*');
+    expect(res.text).toContain('Ganancia total del lote: *$ 12.000*');
+  });
+
+  it('consultas de resumen y balance de caja aclaran que no es ganancia contable real', async () => {
+    const f = setupFlow([{ action: 'consultar_resumen', params: { periodo: 'hoy' } }]);
+    await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'IN', amount: 20000, concept: 'Venta' });
+    await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'OUT', amount: 5000, concept: 'Luz' });
+
+    const reply = await handleText(f.deps, { resolution: f.resolution, text: '¿Cuánto vendí hoy?', now: NOW });
+    expect(reply.text).toContain('Ventas: *$ 20.000*');
+    expect(reply.text).toContain('Gastos: *$ 5.000*');
+    expect(reply.text).toContain('Resultado registrado: +$ 15.000');
+    expect(reply.text).toContain('no la ganancia contable real');
+  });
+
+  it('tenant isolation: un negocio no ve ni anula movimientos de otro', async () => {
+    const f = setupFlow([]);
+    const OTHER_BIZ = 'biz-otro';
+    await f.repo.addMovement({ businessId: OTHER_BIZ, userId: 'user-2', kind: 'IN', amount: 99999, concept: 'Venta otro' });
+    await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'IN', amount: 5000, concept: 'Mi venta' });
+
+    const recent = await f.repo.listRecent(BIZ, 10);
+    expect(recent).toHaveLength(1);
+    expect(Number(recent[0].amount)).toBe(5000);
+
+    // Deshacer no toca el otro negocio
+    const undone = await f.repo.undoLastMovement(BIZ, ACTOR);
+    expect(Number(undone!.amount)).toBe(5000);
+    expect(f.repo.movements).toHaveLength(1);
+    expect(f.repo.movements[0].businessId).toBe(OTHER_BIZ);
   });
 });

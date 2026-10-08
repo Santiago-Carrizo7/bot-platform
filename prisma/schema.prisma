@@ -51,12 +51,8 @@ model Business {
   categories            Category[]
   expenses              Expense[]
   budgets               Budget[]
-  // Tablas del template kiosco.
-  products              Product[]
-  sales                 Sale[]
-  purchases             Purchase[]
+  // Tablas del template kiosco (MVP financiero).
   moneyMovements        MoneyMovement[]
-  stockMovements        StockMovement[]
 
   @@map("businesses")
 }
@@ -203,112 +199,24 @@ model Budget {
   @@map("budgets")
 }
 
-// ==================== TEMPLATE: kiosco ====================
+// ==================== TEMPLATE: kiosco (MVP financiero) ====================
 
-model Product {
-  id         String   @id @default(uuid())
-  businessId String
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  name       String
-  salePrice  Decimal  @db.Decimal(12, 2)
-  costPrice  Decimal? @db.Decimal(12, 2)
-  stock      Decimal  @db.Decimal(12, 2) @default(0)
-  minStock   Decimal? @db.Decimal(12, 2)
-  unit       String   @default("unidad")
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  saleItems  SaleItem[]
-  purchases  Purchase[]
-  movements  StockMovement[]
-
-  @@unique([businessId, name])
-  @@index([businessId, isActive])
-  @@map("products")
-}
-
-model Sale {
-  id         String     @id @default(uuid())
-  businessId String
-  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  userId     String
-  total      Decimal    @db.Decimal(12, 2)
-  currency   String     @default("ARS")
-  note       String?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  items      SaleItem[]
-
-  @@index([businessId, createdAt])
-  @@map("sales")
-}
-
-model SaleItem {
-  id          String   @id @default(uuid())
-  saleId      String
-  sale        Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  productId   String?
-  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  productName String
-  quantity    Decimal  @db.Decimal(12, 2)
-  unitPrice   Decimal  @db.Decimal(12, 2)
-  subtotal    Decimal  @db.Decimal(12, 2)
-
-  @@index([saleId])
-  @@map("sale_items")
-}
-
-model Purchase {
+model MoneyMovement {
   id          String   @id @default(uuid())
   businessId  String
   business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   userId      String
-  description String
+  kind        String   // 'IN' (ventas/entradas) | 'OUT' (gastos/proveedores)
   amount      Decimal  @db.Decimal(12, 2)
-  currency    String   @default("ARS")
-  productId   String?
-  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  quantity    Decimal? @db.Decimal(12, 2)
+  concept     String
+  category    String?
   date        DateTime
+  relatedType String?
+  relatedId   String?
   createdAt   DateTime @default(now())
-
-  @@index([businessId, date])
-  @@map("purchases")
-}
-
-model MoneyMovement {
-  id           String   @id @default(uuid())
-  businessId   String
-  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  userId       String
-  kind         String
-  amount       Decimal  @db.Decimal(12, 2)
-  concept      String
-  category     String?
-  date         DateTime
-  relatedType  String?
-  relatedId    String?
-  createdAt    DateTime @default(now())
 
   @@index([businessId, date])
   @@index([businessId, kind])
   @@map("money_movements")
 }
 
-model StockMovement {
-  id          String   @id @default(uuid())
-  businessId  String
-  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  productId   String?
-  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  productName String
-  quantity    Decimal  @db.Decimal(12, 2)
-  reason      String
-  relatedType String?
-  relatedId   String?
-  userId      String
-  createdAt   DateTime @default(now())
-
-  @@index([businessId, productId])
-  @@map("stock_movements")
-}

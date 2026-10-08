@@ -1,5 +1,5 @@
-import type { MoneyMovement, Prisma, PrismaClient, Purchase, StockMovement } from '@prisma/client';
-import type { MoneyKind, StockReason } from '../types.js';
+import type { MoneyMovement, Prisma, PrismaClient } from '@prisma/client';
+import type { MoneyKind } from '../types.js';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -39,77 +39,32 @@ export class CashRepository {
     });
   }
 
-  async createPurchase(
-    data: {
-      businessId: string;
-      userId: string;
-      description: string;
-      amount: number;
-      currency?: string;
-      productId?: string;
-      quantity?: number;
-      date?: Date;
-    },
-    tx?: Prisma.TransactionClient
-  ): Promise<Purchase> {
-    return this.client(tx).purchase.create({
-      data: {
-        businessId: data.businessId,
-        userId: data.userId,
-        description: data.description.trim(),
-        amount: data.amount,
-        currency: data.currency ?? 'ARS',
-        productId: data.productId,
-        quantity: data.quantity,
-        date: data.date ?? new Date(),
-      },
-    });
-  }
-
-  async listPurchases(businessId: string, limit = 10): Promise<Purchase[]> {
-    return this.db.purchase.findMany({
-      where: { businessId },
-      orderBy: { date: 'desc' },
-      take: limit,
-    });
-  }
-
-  async addStockMovement(
-    data: {
-      businessId: string;
-      productId?: string;
-      productName: string;
-      quantity: number;
-      reason: StockReason;
-      relatedType?: string;
-      relatedId?: string;
-      userId: string;
-    },
-    tx?: Prisma.TransactionClient
-  ): Promise<StockMovement> {
-    return this.client(tx).stockMovement.create({
-      data: {
-        businessId: data.businessId,
-        productId: data.productId,
-        productName: data.productName,
-        quantity: data.quantity,
-        reason: data.reason,
-        relatedType: data.relatedType,
-        relatedId: data.relatedId,
-        userId: data.userId,
-      },
-    });
-  }
-
-  async listStockMovements(businessId: string, productId: string, limit = 10): Promise<StockMovement[]> {
-    return this.db.stockMovement.findMany({
-      where: { businessId, productId },
+  /**
+   * Busca y elimina el último movimiento registrado por este usuario en este negocio.
+   * Usado para la acción "Deshacer" en modo continuo o tras un registro erróneo.
+   */
+  async undoLastMovement(businessId: string, userId: string): Promise<MoneyMovement | null> {
+    const last = await this.db.moneyMovement.findFirst({
+      where: { businessId, userId },
       orderBy: { createdAt: 'desc' },
+    });
+    if (!last) return null;
+
+    await this.db.moneyMovement.delete({
+      where: { id: last.id },
+    });
+    return last;
+  }
+
+  async listRecent(businessId: string, limit = 10): Promise<MoneyMovement[]> {
+    return this.db.moneyMovement.findMany({
+      where: { businessId },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
       take: limit,
     });
   }
 
-  /** Suma de movimientos por tipo en un rango (caja del día/mes). */
+  /** Suma y conteo de movimientos por tipo (IN/OUT) en un rango de fechas. */
   async getTotalsByDateRange(
     businessId: string,
     start: Date,
@@ -133,5 +88,25 @@ export class CashRepository {
       countIn: inAgg._count.id,
       countOut: outAgg._count.id,
     };
+  }
+
+  /** Desglose de gastos por categoría en un rango de fechas. */
+  async getExpensesByCategory(
+    businessId: string,
+    start: Date,
+    end: Date
+  ): Promise<Array<{ category: string; total: number; count: number }>> {
+    const groups = await this.db.moneyMovement.groupBy({
+      by: ['category'],
+      where: { businessId, kind: 'OUT', date: { gte: start, lte: end } },
+      _sum: { amount: true },
+      _count: { id: true },
+    });
+
+    return groups.map((g) => ({
+      category: g.category ?? 'Otros',
+      total: g._sum.amount ? Number(g._sum.amount) : 0,
+      count: g._count.id,
+    }));
   }
 }

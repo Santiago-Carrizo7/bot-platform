@@ -1,26 +1,47 @@
 export type MoneyKind = 'IN' | 'OUT';
 
-export type StockReason = 'VENTA' | 'COMPRA' | 'AJUSTE' | 'CARGA_INICIAL';
+export const EXPENSE_CATEGORIES = [
+  'Proveedores',
+  'Mercadería',
+  'Servicios',
+  'Alquiler',
+  'Impuestos',
+  'Transporte',
+  'Supermercado',
+  'Otros',
+] as const;
 
-export interface CreateProductData {
-  businessId: string;
-  name: string;
-  salePrice: number;
-  costPrice?: number;
-  stock?: number;
-  minStock?: number;
-  unit?: string;
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
+export interface SaleInput {
+  monto: number;
+  nota?: string;
+  fecha?: Date;
 }
 
-export interface SaleLineInput {
-  productName: string;
-  quantity: number;
+export interface ExpenseInput {
+  monto: number;
+  concepto: string;
+  categoria?: string;
+  fecha?: Date;
 }
 
-export interface ResolvedSaleLine {
-  productId: string;
-  productName: string;
-  quantity: number;
-  unitPrice: number;
-  subtotal: number;
+export interface PricingCalculation {
+  costoUnitario: number;
+  precioSugerido: number;
+  tipo: 'margen' | 'recargo';
+  porcentaje: number;
+  gananciaUnitaria: number;
+  gananciaLote?: number;
+  cantidad?: number;
+  costoTotal?: number;
+}
+
+export interface PeriodSummary {
+  periodLabel: string;
+  ventasTotal: number;
+  ventasCount: number;
+  gastosTotal: number;
+  gastosCount: number;
+  balanceCaja: number;
 }

@@ -139,6 +139,34 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     return md('¿Confirmás la operación? Respondé *Sí* para confirmar o *No* para cancelar (o tocá los botones).');
   }
 
+  // Interceptación de paso en modo continuo (registro rápido sin IA)
+  if (active && active.phase === 'COLLECTING' && active.actionName) {
+    const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+    if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+      const lower = trimmed.toLowerCase();
+      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+      if (lower === '/fin' || lower === 'fin' || lower === 'finalizar') {
+        const res = await currentAction.handleContinuousStep(ctx, '/fin', active.data);
+        await deps.conversations.clear(tenant.business.id, resolution.user.id);
+        return res.reply;
+      }
+      if (lower === '/deshacer' || lower === 'deshacer') {
+        const res = await currentAction.handleContinuousStep(ctx, '/deshacer', active.data);
+        if (res.updatedData) {
+          await deps.conversations.upsert({ ...active, data: res.updatedData, updatedAt: now });
+        }
+        return res.reply;
+      }
+      const res = await currentAction.handleContinuousStep(ctx, trimmed, active.data);
+      if (res.finished) {
+        await deps.conversations.clear(tenant.business.id, resolution.user.id);
+      } else if (res.updatedData) {
+        await deps.conversations.upsert({ ...active, data: res.updatedData, updatedAt: now });
+      }
+      return res.reply;
+    }
+  }
+
   // Límite diario de IA por negocio (evita factura abierta en trials).
   await enforceAiBudget(deps, tenant.business.id, now);
 
@@ -185,6 +213,44 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
     await deps.conversations.clear(tenant.business.id, resolution.user.id);
     return md('Cancelado, no se guardó nada.');
   }
+  if (data === 'continuous:fin') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    if (active && active.actionName) {
+      const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+      if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+        const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+        const res = await currentAction.handleContinuousStep(ctx, '/fin', active.data);
+        await deps.conversations.clear(tenant.business.id, resolution.user.id);
+        return res.reply;
+      }
+    }
+    return md('No hay ningún modo de registro activo.');
+  }
+  if (data === 'continuous:cancel') {
+    await deps.conversations.clear(tenant.business.id, resolution.user.id);
+    return md('Modo cancelado.');
+  }
+  if (data === 'undo:last') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    if (active && active.actionName) {
+      const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+      if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+        const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+        const res = await currentAction.handleContinuousStep(ctx, '/deshacer', active.data);
+        if (res.updatedData) {
+          await deps.conversations.upsert({ ...active, data: res.updatedData, updatedAt: now });
+        }
+        return res.reply;
+      }
+    }
+    const undoAction = deps.template.actions.find((a) => a.name === 'deshacer_ultimo');
+    if (undoAction) {
+      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+      const res = await undoAction.handler(ctx, {});
+      return md(res.reply);
+    }
+    return md('No hay movimientos recientes para deshacer.');
+  }
   if (data.startsWith('menu:')) {
     const actionName = data.slice('menu:'.length);
     const action = deps.template.actions.find((a) => a.name === actionName);
@@ -221,6 +287,40 @@ async function handleCommand(
   if (name === 'cancelar') {
     await deps.conversations.clear(tenant.business.id, resolution.user.id);
     return md('Conversación cancelada. No se guardó nada.');
+  }
+  if (name === 'fin') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    if (active && active.actionName) {
+      const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+      if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+        const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+        const res = await currentAction.handleContinuousStep(ctx, '/fin', active.data);
+        await deps.conversations.clear(tenant.business.id, resolution.user.id);
+        return res.reply;
+      }
+    }
+    return md('No hay ningún modo de registro activo.');
+  }
+  if (name === 'deshacer') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    if (active && active.actionName) {
+      const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+      if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+        const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+        const res = await currentAction.handleContinuousStep(ctx, '/deshacer', active.data);
+        if (res.updatedData) {
+          await deps.conversations.upsert({ ...active, data: res.updatedData, updatedAt: now });
+        }
+        return res.reply;
+      }
+    }
+    const undoAction = deps.template.actions.find((a) => a.name === 'deshacer_ultimo');
+    if (undoAction) {
+      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+      const res = await undoAction.handler(ctx, {});
+      return md(res.reply);
+    }
+    return md('No hay movimientos recientes para deshacer.');
   }
   if (name === 'start' || name === 'menu' || name === 'ayuda') {
     const hint = await deps.template.welcomeHint?.(tenant).catch(() => null);
@@ -291,6 +391,24 @@ async function startAction(
   if (roleError) return md(roleError);
   if (action.kind === 'write' && !access.canWrite) {
     return md(MSG_READONLY_WRITE);
+  }
+  if (action.isContinuous) {
+    if (!access.canWrite) return md(MSG_READONLY_WRITE);
+    const ctx: ActionContext = { tenant, actorUserId: userId, now };
+    const result = await action.handler(ctx, initialData);
+    await deps.conversations.upsert({
+      businessId: tenant.business.id,
+      userId,
+      phase: 'COLLECTING',
+      actionName: action.name,
+      data: initialData,
+      expiresAt: new Date(now.getTime() + (deps.conversationTtlMs ?? 60 * 60_000)),
+      updatedAt: now,
+    });
+    return {
+      ...md(result.reply),
+      inlineKeyboard: result.inlineKeyboard,
+    };
   }
   const missing = missingFields(action.input, initialData);
   if (missing.length === 0) {
@@ -449,7 +567,10 @@ async function executeAction(
   }
   await deps.conversations.clear(tenant.business.id, userId);
   const suffix = access.subscriptionReminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : '';
-  return md(`${result.reply}${suffix}`);
+  return {
+    ...md(`${result.reply}${suffix}`),
+    inlineKeyboard: result.inlineKeyboard,
+  };
 }
 
 async function getActiveConversation(

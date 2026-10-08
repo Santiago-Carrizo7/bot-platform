@@ -65,26 +65,25 @@ Objetivo: paridad funcional con `bot-gastos` sobre el nuevo Core.
 - **Gate obligatorio:** `Functional parity with bot-gastos` (texto, audio, IA,
   registro, consultas, API si se incluyó, tests en verde).
 
-## Phase 3 — Kiosco (primer vertical comercial) ✅ (primera pasada completa)
+## Phase 3 — Kiosco (primer vertical comercial — MVP financiero) ✅
 
-- [x] Tablas: `Product`, `Sale` (+`SaleItem`), `Purchase`, `MoneyMovement`,
-  `StockMovement`. `businessId` en todas (migración aplicada en dev y test).
-- [x] Actions (12): productos (crear/modificar/eliminar + stock inicial),
-  stock (consultar, stock bajo, fijar), ventas (multi-producto, cantidades,
-  total calculado, descuento de stock), compras (con entrada opcional a stock),
-  gastos, entradas, caja del día, resumen del mes, historial de ventas.
-- [x] Menú + freestyle + audio + confirmación, convergiendo en las mismas actions.
-  Sin seeds globales (cada kiosco carga sus productos); sin API propia (bot-first).
-- [x] Tests del template (12: total/descuento/movimientos, producto faltante,
-  stock negativo con aviso, compra con stock, fijar stock, stock bajo,
-  resumen día, flujo freestyle→confirmación→auditoría).
-- [x] Gates en verde: `typecheck` ✓, `test` ✓ (67 tests), `build` ✓.
-- Decisiones tomadas: el stock NUNCA queda negativo (la venta se frena con mensaje
-  amable que dice qué falta y cómo arreglarlo — ver ADR-009); baja de producto
-  lógica (conserva historial); compras/gastos/entradas en `MoneyMovement`
-  (`IN`/`OUT`); ventas/compras/gastos/entradas generan movimientos de caja
-  automáticamente; hints del prompt con catálogo real (nombre/precio/stock);
-  precios en moneda del negocio (sin multi-moneda en el MVP).
+- [x] Modelo unificado: `MoneyMovement` (`IN`/`OUT`) con `businessId`, categoría, nota
+  y fecha opcional. Eliminados modelos obsoletos de stock (`Product`, `Sale`, `Purchase`,
+  `StockMovement`) según ADR-011.
+- [x] Actions financieras: `registrar_venta` (rápida, multi-venta preparada, botón deshacer),
+  `registrar_gasto` (con categorías simples e inferencia), `deshacer_ultimo` (`undo:last`),
+  `modo_ventas` y `modo_gastos` (modo continuo rápido), `calcular_precio` (margen sobre venta
+  vs recargo sobre costo), `consultar_resumen` (hoy/semana/mes), `consultar_movimientos` (últimos).
+- [x] Pipeline Core extendido: soporte de modo continuo (`isContinuous`, `handleContinuousStep`)
+  y reversión inmediata (`undo:last`) en `ConversationState` sin bypass de tenant ni auditoría.
+- [x] Menú, comandos rápidos (`/venta`, `/ventas`, `/gasto`, `/gastos`, `/resumen`, `/movimientos`,
+  `/calcular`, `/deshacer`), freestyle y audio convergiendo en las mismas actions.
+- [x] Tests del template kiosco adaptados (15 casos: ventas, gastos, categorías, resúmenes,
+  calculadora margen/markup, modo continuo con /fin y reversión, tenant isolation).
+- [x] Gates en verde: `typecheck` ✓, `test` ✓ (116 tests), `build` ✓.
+- Decisiones tomadas (ADR-011, deroga ADR-009): cero inventario/stock/catálogo en MVP;
+  entradas y salidas unificadas en `MoneyMovement`; balance de caja = `Ventas - Gastos`
+  (no llamarlo "ganancia"); modo continuo con autorización explícita y botón `[↩️ Deshacer]`.
 - **Gate pendiente:** flujo extremo a extremo en staging con datos reales
   (requiere token de Telegram) → Phase 4.
 
@@ -150,3 +149,10 @@ resto sigue fuera de alcance.
   con miembros, invitaciones (deep link único, revocación) y cambio de estado, todo
   auditado con `admin.*`. Docs (`OPERACIONES` §10, `README`, `ARCHITECTURE` §18) y
   smoke actualizado. Gates en verde (116 tests + smoke OK).
+- 2026-10-08: **Kiosco MVP financiero (ADR-011)**. Rediseño funcional del template:
+  eliminado stock/inventario/catálogo ERP. Unificación sobre `MoneyMovement` (`IN`/`OUT`).
+  Ventas rápidas, gastos por categoría, calculadora de precios (margen sobre venta vs recargo),
+  resúmenes de caja (`Ventas - Gastos`), modo continuo (`/ventas`, `/gastos`) con botones
+  `[🛑 Finalizar]` y `[↩️ Deshacer]` (`undo:last`) sin confirmación intermedia. Migración
+  `20261008000000_kiosco_financial_mvp` aplicada. Gates en verde (116 tests).
+

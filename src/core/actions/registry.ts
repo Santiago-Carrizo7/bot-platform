@@ -11,9 +11,25 @@ export interface ActionContext {
   now: Date;
 }
 
+export interface InlineButton {
+  text: string;
+  callbackData: string;
+}
+
+export interface ContinuousStepResult {
+  reply: {
+    text: string;
+    parseMode?: 'Markdown';
+    inlineKeyboard?: InlineButton[][];
+  };
+  updatedData?: Record<string, unknown>;
+  finished?: boolean;
+}
+
 export interface ActionResult {
   /** Texto de respuesta al usuario (Markdown permitido). */
   reply: string;
+  inlineKeyboard?: InlineButton[][];
   audit?: {
     action: string;
     entityType?: string;
@@ -42,6 +58,13 @@ export interface ActionDef<TInput = unknown> {
   /** Resumen de lo entendido, para la confirmación (obligatorio si write). */
   summarize?: (input: TInput) => string;
   handler: (ctx: ActionContext, input: TInput) => Promise<ActionResult>;
+  /** Modo continuo: registro rápido secuencial sin confirmación individual. */
+  isContinuous?: boolean;
+  handleContinuousStep?: (
+    ctx: ActionContext,
+    text: string,
+    data: Record<string, unknown>
+  ) => Promise<ContinuousStepResult>;
 }
 
 export interface CommandDef {
