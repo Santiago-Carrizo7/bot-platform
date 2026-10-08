@@ -41,6 +41,7 @@ Apuntar temporalmente a Supabase y volver a local después:
 # 1. Conseguir el ID numérico de Telegram con @userinfobot
 # 2. En .env, reemplazar DATABASE_URL por la URI de Supabase (formato Prisma)
 pnpm seed -- --name "Kiosco Don Pepe" --template kiosco --owner-telegram-id <ID>
+# O para rotisería: pnpm seed -- --name "Rotisería Los Amigos" --template rotiseria --owner-telegram-id <ID>
 # 3. Devolver DATABASE_URL a local
 ```
 
@@ -83,7 +84,7 @@ El dueño busca `@<bot>` en Telegram → `/start` → listo, sin invitación.
 `TRIAL_DAYS=10` · `GRACE_DAYS=7`. (Render inyecta `PORT` solo; no pisarlo.)
 `ADMIN_PASSWORD` (mínimo 16 caracteres) solo si se quiere el admin web `/admin`
 (sin ella la ruta responde 404; ver §10).
-`TELEGRAM_BOT_TOKEN_GASTOS` solo cuando se instancie ese vertical.
+`TELEGRAM_BOT_TOKEN_GASTOS` y `TELEGRAM_BOT_TOKEN_ROTISERIA` cuando se instancien esos verticales.
 Webhook: `TELEGRAM_WEBHOOK_URL=https://<app>.onrender.com` +
 `TELEGRAM_WEBHOOK_SECRET` (generar con `openssl rand -hex 24`; Telegram solo
 acepta letras, números, `_` y `-`, así que NO usar base64 común).

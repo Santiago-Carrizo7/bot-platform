@@ -53,6 +53,11 @@ model Business {
   budgets               Budget[]
   // Tablas del template kiosco (MVP financiero).
   moneyMovements        MoneyMovement[]
+  stockMovements        StockMovement[]
+  // Tablas del template rotiseria.
+  rotiseriaProducts     RotiseriaProduct[]
+  rotiseriaPromos       RotiseriaPromo[]
+  rotiseriaSales        RotiseriaSale[]
 
   @@map("businesses")
 }
@@ -218,5 +223,102 @@ model MoneyMovement {
   @@index([businessId, date])
   @@index([businessId, kind])
   @@map("money_movements")
+}
+
+model StockMovement {
+  id          String   @id @default(uuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String
+  quantity    Decimal  @db.Decimal(12, 2)
+  reason      String
+  relatedType String?
+  relatedId   String?
+  userId      String
+  createdAt   DateTime @default(now())
+
+  @@index([businessId, productId])
+  @@map("stock_movements")
+}
+
+// ==================== TEMPLATE: rotiseria ====================
+
+model RotiseriaProduct {
+  id          String              @id @default(uuid())
+  businessId  String
+  business    Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  priceUnit   Decimal             @db.Decimal(12, 2)
+  priceDozen  Decimal?            @db.Decimal(12, 2)
+  category    String              @default("empanadas")
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  saleItems   RotiseriaSaleItem[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@index([businessId, category])
+  @@map("rotiseria_products")
+}
+
+model RotiseriaPromo {
+  id          String              @id @default(uuid())
+  businessId  String
+  business    Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       Decimal             @db.Decimal(12, 2)
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  saleItems   RotiseriaSaleItem[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("rotiseria_promos")
+}
+
+model RotiseriaSale {
+  id                String              @id @default(uuid())
+  businessId        String
+  business          Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId            String
+  total             Decimal             @db.Decimal(12, 2)
+  shiftDate         DateTime            @db.Date
+  isCancelled       Boolean             @default(false)
+  cancelledAt       DateTime?
+  cancelledByUserId String?
+  cancelReason      String?
+  note              String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  items             RotiseriaSaleItem[]
+
+  @@index([businessId, shiftDate])
+  @@index([businessId, createdAt])
+  @@index([businessId, isCancelled])
+  @@map("rotiseria_sales")
+}
+
+model RotiseriaSaleItem {
+  id        String            @id @default(uuid())
+  saleId    String
+  sale      RotiseriaSale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String?
+  product   RotiseriaProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  promoId   String?
+  promo     RotiseriaPromo?   @relation(fields: [promoId], references: [id], onDelete: SetNull)
+  name      String
+  quantity  Decimal           @db.Decimal(12, 2)
+  unitPrice Decimal           @db.Decimal(12, 2)
+  subtotal  Decimal           @db.Decimal(12, 2)
+
+  @@index([saleId])
+  @@index([productId])
+  @@index([promoId])
+  @@map("rotiseria_sale_items")
 }
 

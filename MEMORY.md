@@ -4,12 +4,15 @@
 > moverlo a `AGENTS.md` (o a `CONSTITUTION.md` si es normativa). **NUNCA** secretos.
 
 ## Estado actual
-- Phase 0–3 + Sprint A + admin v1 + rediseño Kiosco en verde (140 tests + build OK).
-- Webhook Render: `TELEGRAM_WEBHOOK_URL` + `SECRET` (`base64url`/`hex`, no base64 con `+/=`).
-- Staging: Render free + Supabase + cron-job cada 12 min a /health. Bot: `@MiKiosquito_bot`.
-- Templates: `gastos` (API en `/api/v1/gastos/*`) y `kiosco` (MVP financiero ágil:
-  ventas simples/batch, ráfagas de audio, estadísticas interactivas, deshacer seguro).
-- Admin web v1 implementado en `/admin` (ADR-010). Falta deploy y migración kiosco.
+- Phase 0–3 + Sprint A + webhook en verde (116 tests + smoke OK). Webhook en modo
+  activo en Render (`TELEGRAM_WEBHOOK_URL` + `SECRET` seteados; el secret debe ser
+  `base64url`/`hex`, NO base64 con `+/=` → 400 illegal characters). Falta verificar
+  en logs `Webhook registrado para 'kiosco'` y probar el bot.
+- Staging: Render free + Supabase + cron-job cada 12 min a /health (no duerme).
+  Bot kiosco: `@MiKiosquito_bot` (token válido, verificado).
+- Templates: `gastos`, `kiosco` y `rotiseria` (ADR-011: docenas automáticas,
+  jornada gastronómica 00-05 AM, anulación lógica, replyMenu 5 botones, seed base).
+- 132 tests unitarios pasando (133 total con integración opcional). Admin web (/admin) listo.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express /
   OpenRouter / Groq Whisper / vitest.
 - Docs pilar: `AGENTS.md` → `MEMORY.md` → `CONSTITUTION.md` → `ARCHITECTURE.md` →
