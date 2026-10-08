@@ -90,23 +90,87 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
     );
   });
 
-  // Audio → STT → mismo pipeline que el texto.
+  // Audio → STT con feedback progresivo en un único mensaje editable.
   bot.on(['message:voice', 'message:audio'], async (ctx) => {
-    await replySafely(ctx, async () => {
+    let statusMsgId: number | undefined;
+    try {
       const resolution = requireResolution(ctx);
       if (!sttService.isConfigured()) {
-        return { text: 'El procesamiento de audio no está configurado en el servidor.' };
+        await ctx.reply('El procesamiento de audio no está configurado en el servidor.');
+        return;
       }
-      await ctx.replyWithChatAction('typing');
+
+      // 1. Feedback visual inmediato
+      const statusMsg = await ctx.reply('🎙️ Escuchando audio...');
+      statusMsgId = statusMsg.message_id;
+
+      // 2. Transcripción con STT (Groq Whisper)
       const transcript = await transcribeUpdate(ctx, token, sttService);
       logger.info('Audio transcripto', { businessId: resolution.tenant?.business.id, transcript });
-      return handleText(flowDeps, {
+
+      // 3. Feedback intermedio: muestra lo que entendió el STT + calculando
+      await ctx.api
+        .editMessageText(
+          ctx.chat.id,
+          statusMsgId,
+          formatAudioStatus(transcript),
+          { parse_mode: 'Markdown' }
+        )
+        .catch(() => undefined);
+
+      // 4. Procesamiento en el pipeline
+      const reply = await handleText(flowDeps, {
         resolution,
         text: transcript,
         firstName: ctx.from?.first_name,
         now: new Date(),
       });
-    }, quickRows);
+
+      // 5. Respuesta final editando el mismo mensaje
+      const finalInline = reply.inlineKeyboard
+        ? {
+            inline_keyboard: reply.inlineKeyboard.map((row) =>
+              row.map((b) => ({ text: b.text, callback_data: b.callbackData }))
+            ),
+          }
+        : undefined;
+
+      const finalText = formatAudioFinal(transcript, reply.text, reply.parseMode);
+
+      await ctx.api
+        .editMessageText(ctx.chat.id, statusMsgId, finalText, {
+          parse_mode: reply.parseMode ?? 'Markdown',
+          reply_markup: finalInline,
+        })
+        .catch(async (editErr) => {
+          logger.warn('No se pudo editar mensaje de audio, enviando uno nuevo', editErr);
+          await ctx.reply(finalText, {
+            parse_mode: reply.parseMode ?? 'Markdown',
+            reply_markup: finalInline,
+          });
+        });
+    } catch (error) {
+      const message =
+        error instanceof AppError
+          ? error.message
+          : 'Ocurrió un error inesperado al procesar el audio. Probá de nuevo en un momento.';
+
+      if (error instanceof AppError) {
+        logger.warn('Error de aplicación en audio', { code: error.code, message: error.message });
+      } else {
+        logger.error('Error no controlado al procesar audio', error);
+      }
+
+      if (statusMsgId) {
+        await ctx.api
+          .editMessageText(ctx.chat.id, statusMsgId, `❌ ${message}`)
+          .catch(async () => {
+            await ctx.reply(message).catch(() => undefined);
+          });
+      } else {
+        await ctx.reply(message).catch(() => undefined);
+      }
+    }
   });
 
   // Botones inline (confirmar/cancelar/menú/negocios).
@@ -187,8 +251,31 @@ export function buildTelegramWebhookRoutes(
   return bots.map(({ templateId, bot }) => ({
     method: 'post' as const,
     path: `/telegram/${templateId}`,
-    handler: webhookCallback(bot, 'express', { secretToken }) as unknown as RequestHandler,
+    handler: webhookCallback(bot, 'express', {
+      secretToken,
+      timeoutMilliseconds: 30_000,
+      onTimeout: 'return',
+    }) as unknown as RequestHandler,
   }));
+}
+
+function escapeMarkdownV1(text: string): string {
+  return text.replace(/([_*`\[])/g, '\\$1');
+}
+
+function formatAudioStatus(transcript: string): string {
+  return `🎙️ _«${escapeMarkdownV1(transcript)}»_\n⏳ Calculando...`;
+}
+
+function formatAudioFinal(transcript: string, body: string, parseMode?: 'Markdown' | 'HTML'): string {
+  if (parseMode === 'HTML') {
+    const escaped = transcript.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `🎙️ <i>«${escaped}»</i>\n\n${body}`;
+  }
+  if (parseMode === 'Markdown') {
+    return `🎙️ _«${escapeMarkdownV1(transcript)}»_\n\n${body}`;
+  }
+  return `🎙️ «${transcript}»\n\n${body}`;
 }
 
 /** Parte las etiquetas en filas de N botones para el reply keyboard. */

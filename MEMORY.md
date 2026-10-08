@@ -37,6 +37,9 @@
 - En Windows usar `pnpm.cmd`. Repo en GitHub con push al día.
 - `Set-Content -Value $array -NoNewline` colapsa archivo en 1 línea: usar
   `[System.IO.File]::WriteAllLines()`. Verificar con `git diff`.
+- Webhook grammY: timeout por defecto (10s) con throw mataba el server en audios
+  o reintentos IA; fijado a 30s con `onTimeout: 'return'`. Audio con feedback progresivo.
+
 
 ## Próximos pasos
 - [ ] Push y deploy a Render (migración kiosco `20261008000000_kiosco_financial_mvp` + admin).
