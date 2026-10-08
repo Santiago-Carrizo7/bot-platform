@@ -2,47 +2,54 @@ import { AIProviderError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
 import type { CompletePromptParams, IAIProvider } from '../../core/ai/types.js';
 
-export interface OpenRouterConfig {
+export interface OpenAICompatibleChatConfig {
+  name: string;
+  baseUrl: string;
   apiKey: string;
   model: string;
-  siteUrl?: string;
-  siteName?: string;
+  extraHeaders?: Record<string, string>;
+  responseFormatJson?: boolean;
 }
 
-export class OpenRouterProvider implements IAIProvider {
-  readonly name = 'OpenRouter';
+/**
+ * Proveedor genérico para endpoints compatibles con OpenAI Chat Completions.
+ * Usado por Groq, Google Gemini (endpoint OpenAI de AI Studio), etc.
+ */
+export class OpenAICompatibleChatProvider implements IAIProvider {
+  readonly name: string;
+  readonly model: string;
 
-  constructor(private readonly config: OpenRouterConfig) {}
+  constructor(private readonly config: OpenAICompatibleChatConfig) {
+    this.name = config.name;
+    this.model = config.model;
+  }
 
   async completePrompt(params: CompletePromptParams): Promise<string> {
-    const url = 'https://openrouter.ai/api/v1/chat/completions';
+    const url = this.config.baseUrl.endsWith('/chat/completions')
+      ? this.config.baseUrl
+      : `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${this.config.apiKey}`,
+      ...this.config.extraHeaders,
     };
-    if (this.config.siteUrl) headers['HTTP-Referer'] = this.config.siteUrl;
-    if (this.config.siteName) headers['X-Title'] = this.config.siteName;
 
-    const models = this.config.model
-      .split(',')
-      .map((m) => m.trim())
-      .filter(Boolean);
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      temperature: params.temperature ?? 0.1,
+      messages: [
+        { role: 'system', content: params.systemPrompt },
+        { role: 'user', content: params.userPrompt },
+      ],
+    };
+
+    if (this.config.responseFormatJson) {
+      body.response_format = { type: 'json_object' };
+    }
 
     try {
-      logger.debug(`[${this.name}] Enviando prompt al modelo(s): ${this.config.model}`);
-      const body: Record<string, unknown> = {
-        temperature: params.temperature ?? 0.1,
-        messages: [
-          { role: 'system', content: params.systemPrompt },
-          { role: 'user', content: params.userPrompt },
-        ],
-      };
-      if (models.length > 1) {
-        body.models = models;
-      } else {
-        body.model = models[0] ?? this.config.model;
-      }
-
+      logger.debug(`[${this.name}] Enviando prompt al modelo ${this.config.model}`);
       const response = await fetch(url, {
         method: 'POST',
         headers,
@@ -53,7 +60,7 @@ export class OpenRouterProvider implements IAIProvider {
         const errorBody = await response.text().catch(() => '');
         logger.error(`[${this.name}] Error HTTP ${response.status}: ${errorBody}`);
         throw new AIProviderError(
-          `OpenRouter respondió con estado ${response.status}`,
+          `${this.name} respondió con estado ${response.status}: ${errorBody.slice(0, 200)}`,
           this.name,
           response.status
         );
@@ -64,7 +71,7 @@ export class OpenRouterProvider implements IAIProvider {
       };
       const content = data.choices?.[0]?.message?.content;
       if (!content) {
-        throw new AIProviderError('OpenRouter no devolvió contenido en la respuesta', this.name);
+        throw new AIProviderError(`${this.name} no devolvió contenido en la respuesta`, this.name);
       }
       return content;
     } catch (error) {

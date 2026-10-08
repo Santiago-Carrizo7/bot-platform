@@ -71,7 +71,15 @@ export class ActionInterpreter {
 
   private async callProvider(systemPrompt: string, userPrompt: string): Promise<string> {
     try {
-      return await this.provider.completePrompt({ systemPrompt, userPrompt, temperature: 0.1 });
+      return await this.provider.completePrompt({
+        systemPrompt,
+        userPrompt,
+        temperature: 0.1,
+        validateOutput: (raw) => {
+          const trimmed = raw.trim();
+          return trimmed.includes('{') && trimmed.includes('}');
+        },
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new AIProviderError(`No se pudo procesar el mensaje con el modelo de IA: ${message}`, this.provider.name);

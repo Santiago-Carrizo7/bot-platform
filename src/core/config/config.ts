@@ -28,10 +28,21 @@ const configSchema = z.object({
     )
     .optional(),
 
-  // Proveedor de IA de texto
-  AI_PROVIDER: z.enum(['openrouter']).default('openrouter'),
-  OPENROUTER_API_KEY: z.string().min(1, 'OPENROUTER_API_KEY es obligatorio'),
-  OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
+  // Proveedores de IA de texto (soporta cascada automática 'fallback' o proveedor específico)
+  AI_PROVIDER: z.enum(['fallback', 'openrouter', 'groq', 'gemini']).default('fallback'),
+  // OpenRouter
+  OPENROUTER_API_KEY: z.string().optional(),
+  OPENROUTER_MODEL: z
+    .string()
+    .default(
+      'google/gemini-2.0-flash-exp:free,meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-24b-instruct-2501:free'
+    ),
+  // Groq Chat (ultra rápido, tier gratuito generoso: 30 RPM, 14.400 RPD)
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_MODEL: z.string().default('llama-3.3-70b-versatile'),
+  // Google AI Studio directo (gratuito: 15 RPM, 1.500 RPD)
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().default('gemini-2.0-flash'),
 
   // Proveedor de Speech-to-Text
   STT_PROVIDER: z.enum(['groq', 'openai', 'disabled']).default('groq'),
@@ -57,6 +68,21 @@ const configSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['TELEGRAM_WEBHOOK_SECRET'],
       message: 'TELEGRAM_WEBHOOK_SECRET es obligatorio cuando se define TELEGRAM_WEBHOOK_URL (mínimo 16 caracteres)',
+    });
+  }
+
+  const hasAnyAiKey =
+    Boolean(val.OPENROUTER_API_KEY) ||
+    Boolean(val.GROQ_API_KEY) ||
+    Boolean(val.GEMINI_API_KEY) ||
+    Boolean(val.STT_PROVIDER === 'groq' && val.STT_API_KEY);
+
+  if (!hasAnyAiKey) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['OPENROUTER_API_KEY'],
+      message:
+        'Se requiere al menos una API key de IA (OPENROUTER_API_KEY, GROQ_API_KEY, GEMINI_API_KEY o STT_API_KEY con STT_PROVIDER=groq)',
     });
   }
 });

@@ -24,11 +24,89 @@ import {
   PrismaUserRepository,
 } from '../infrastructure/persistence/core.repositories.js';
 import { OpenRouterProvider } from '../infrastructure/ai/openrouter.provider.js';
+import { OpenAICompatibleChatProvider } from '../infrastructure/ai/openai-compatible-chat.provider.js';
+import { FallbackAIProvider } from '../infrastructure/ai/fallback.provider.js';
 import { OpenAICompatibleSTTProvider } from '../infrastructure/stt/openai-compatible-stt.provider.js';
 import { createBot, type CreateBotDeps } from '../infrastructure/telegram/bot.js';
 import type { BotContext } from '../infrastructure/telegram/bot-context.js';
+import type { IAIProvider } from '../core/ai/types.js';
 import { createExpressApp, type ExtraRoute, type TemplateRouter } from '../infrastructure/http/server.js';
 import { botNotConfigured, createAdminRouter, type AdminTemplateOption } from './admin/router.js';
+
+export interface BuiltAIProvider {
+  provider: IAIProvider;
+  modelDescription: string;
+}
+
+/**
+ * Resuelve y compone los proveedores de IA según las credenciales disponibles.
+ * Orden de la cascada gratuita (failover transparente):
+ * 1. Groq (Llama 3.3 70B: ultra rápido <300ms, tier libre: 30 RPM, 14.400 RPD).
+ * 2. OpenRouter (con modelos gratuitos seleccionados que soportan JSON).
+ * 3. Google Gemini directo (AI Studio: 15 RPM, 1.500 RPD).
+ */
+export function buildAIProvider(config: AppConfig): BuiltAIProvider {
+  const providers: IAIProvider[] = [];
+
+  // 1. Groq (reutiliza STT_API_KEY si STT_PROVIDER=groq, o GROQ_API_KEY específica)
+  const groqKey = config.GROQ_API_KEY || (config.STT_PROVIDER === 'groq' ? config.STT_API_KEY : undefined);
+  if (groqKey && (config.AI_PROVIDER === 'fallback' || config.AI_PROVIDER === 'groq')) {
+    providers.push(
+      new OpenAICompatibleChatProvider({
+        name: 'Groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiKey: groqKey,
+        model: config.GROQ_MODEL,
+        responseFormatJson: true,
+      })
+    );
+  }
+
+  // 2. OpenRouter (con fallback nativo en lista de modelos gratuitos seleccionados)
+  if (config.OPENROUTER_API_KEY && (config.AI_PROVIDER === 'fallback' || config.AI_PROVIDER === 'openrouter')) {
+    providers.push(
+      new OpenRouterProvider({
+        apiKey: config.OPENROUTER_API_KEY,
+        model: config.OPENROUTER_MODEL,
+        siteName: 'bot-platform',
+      })
+    );
+  }
+
+  // 3. Google Gemini directo (AI Studio)
+  if (config.GEMINI_API_KEY && (config.AI_PROVIDER === 'fallback' || config.AI_PROVIDER === 'gemini')) {
+    providers.push(
+      new OpenAICompatibleChatProvider({
+        name: 'Google Gemini',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        apiKey: config.GEMINI_API_KEY,
+        model: config.GEMINI_MODEL,
+        responseFormatJson: true,
+      })
+    );
+  }
+
+  if (providers.length === 0) {
+    const fallback = new OpenRouterProvider({
+      apiKey: config.OPENROUTER_API_KEY ?? 'dummy',
+      model: config.OPENROUTER_MODEL,
+    });
+    return { provider: fallback, modelDescription: config.OPENROUTER_MODEL };
+  }
+
+  if (providers.length === 1) {
+    return {
+      provider: providers[0],
+      modelDescription: (providers[0] as { model?: string }).model ?? config.OPENROUTER_MODEL,
+    };
+  }
+
+  const fallbackProvider = new FallbackAIProvider(providers);
+  return {
+    provider: fallbackProvider,
+    modelDescription: providers.map((p) => p.name).join(' -> '),
+  };
+}
 
 export interface CoreServices {
   users: UserService;
@@ -60,11 +138,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
   const invitations = new InvitationService(invitationRepo, audit);
   const resolver = new TenantResolver(users, memberships, membershipRepo, invitations);
 
-  const aiProvider = new OpenRouterProvider({
-    apiKey: config.OPENROUTER_API_KEY,
-    model: config.OPENROUTER_MODEL,
-    siteName: 'bot-platform',
-  });
+  const { provider: aiProvider, modelDescription } = buildAIProvider(config);
   const interpreter = new ActionInterpreter(aiProvider);
 
   const stt =
@@ -88,7 +162,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
     invitations,
     aiUsage: aiUsageRepo,
     aiProviderName: aiProvider.name,
-    aiModel: config.OPENROUTER_MODEL,
+    aiModel: modelDescription,
   };
 
   return { users, businesses, memberships, invitations, resolver, interpreter, stt, audit, flowBase, apiSecret: config.API_SECRET };

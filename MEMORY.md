@@ -24,6 +24,8 @@
   "ganancia"). Modo continuo (`/ventas`, `/gastos`) sin confirmación por ítem + `undo:last`.
   Calculador de precio (margen sobre venta vs recargo sobre costo).
 - Lecturas de gastos a nivel negocio; update/delete solo autor o OWNER.
+- IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini;
+  failover automático por 429, 5xx, timeout o respuesta no-JSON.
 
 ## Gotchas
 - `migration.sql` en UTF-8 sin BOM: `Set-Content -Encoding UTF8` mete BOM (P3009) y

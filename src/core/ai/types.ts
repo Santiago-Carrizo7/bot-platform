@@ -2,6 +2,8 @@ export interface CompletePromptParams {
   systemPrompt: string;
   userPrompt: string;
   temperature?: number;
+  /** Validador opcional: si devuelve false, proveedores compuestos (como Fallback) prueban el siguiente candidato. */
+  validateOutput?: (output: string) => boolean;
 }
 
 export interface IAIProvider {
