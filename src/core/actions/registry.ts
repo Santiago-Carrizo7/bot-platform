@@ -107,6 +107,13 @@ export interface TemplateDefinition {
   actions: ActionDef<unknown>[];
   commands: CommandDef[];
   /**
+   * Intento de interpretación directa/determinística sin IA para patrones triviales (ej. montos directos "3000").
+   */
+  interpretDirectly?: (
+    text: string,
+    activeActionName?: string | null
+  ) => { actionName: string; params: Record<string, unknown> } | null;
+  /**
    * Pista contextual que se agrega al /start, /menu y /ayuda (opcional).
    * Ej: guiar el alta inicial si el negocio todavía no tiene datos.
    */

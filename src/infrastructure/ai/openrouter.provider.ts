@@ -28,50 +28,59 @@ export class OpenRouterProvider implements IAIProvider {
       .map((m) => m.trim())
       .filter(Boolean);
 
-    try {
-      logger.debug(`[${this.name}] Enviando prompt al modelo(s): ${this.config.model}`);
-      const body: Record<string, unknown> = {
-        temperature: params.temperature ?? 0.1,
-        messages: [
-          { role: 'system', content: params.systemPrompt },
-          { role: 'user', content: params.userPrompt },
-        ],
-      };
-      if (models.length > 1) {
-        body.models = models;
-      } else {
-        body.model = models[0] ?? this.config.model;
-      }
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '');
-        logger.error(`[${this.name}] Error HTTP ${response.status}: ${errorBody}`);
-        throw new AIProviderError(
-          `OpenRouter respondió con estado ${response.status}`,
-          this.name,
-          response.status
-        );
-      }
-
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        throw new AIProviderError('OpenRouter no devolvió contenido en la respuesta', this.name);
-      }
-      return content;
-    } catch (error) {
-      if (error instanceof AIProviderError) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error(`[${this.name}] Error de conexión o ejecución: ${message}`);
-      throw new AIProviderError(`Fallo al comunicarse con ${this.name}: ${message}`, this.name);
+    if (models.length === 0) {
+      throw new AIProviderError('No hay modelos configurados para OpenRouter', this.name);
     }
+
+    let lastError: Error | null = null;
+    for (const model of models) {
+      try {
+        logger.debug(`[${this.name}] Enviando prompt al modelo: ${model}`);
+        const body: Record<string, unknown> = {
+          model,
+          temperature: params.temperature ?? 0.1,
+          messages: [
+            { role: 'system', content: params.systemPrompt },
+            { role: 'user', content: params.userPrompt },
+          ],
+        };
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => '');
+          logger.warn(`[${this.name}] Falló modelo ${model} (HTTP ${response.status}): ${errorBody}`);
+          lastError = new AIProviderError(
+            `OpenRouter (${model}) respondió con estado ${response.status}`,
+            this.name,
+            response.status
+          );
+          continue;
+        }
+
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) {
+          logger.warn(`[${this.name}] Modelo ${model} no devolvió contenido`);
+          lastError = new AIProviderError(`Modelo ${model} no devolvió contenido`, this.name);
+          continue;
+        }
+        return content;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        logger.warn(`[${this.name}] Error con modelo ${model}: ${lastError.message}`);
+      }
+    }
+
+    throw new AIProviderError(
+      `OpenRouter no pudo procesar la solicitud: ${lastError?.message ?? 'error desconocido'}`,
+      this.name
+    );
   }
 }

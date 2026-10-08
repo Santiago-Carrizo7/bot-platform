@@ -117,6 +117,17 @@ export class CashService {
   }
 
   /**
+   * Desglose de gastos por categoría en el mes en curso.
+   */
+  async getExpensesByCategory(
+    businessId: string,
+    refDate: Date = new Date()
+  ): Promise<Array<{ category: string; total: number; count: number }>> {
+    const { start, end } = monthRange(refDate);
+    return this.cash.getExpensesByCategory(businessId, start, end);
+  }
+
+  /**
    * Calculadora de precio de venta:
    * Recargo (markup): Precio = Costo * (1 + porcentaje / 100)
    * Margen: Precio = Costo / (1 - porcentaje / 100)

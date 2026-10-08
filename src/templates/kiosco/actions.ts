@@ -24,6 +24,7 @@ export interface KioscoActionDeps {
 }
 
 /** Parsea un texto con monto y concepto/nota opcional para el modo continuo. */
+/** Parsea un texto con monto y concepto/nota opcional para el modo continuo. */
 export function parseAmountAndNote(raw: string): { amount: number; note?: string } | null {
   const trimmed = raw.trim();
   const match = trimmed.match(/^\$?\s*([\d.,]+)(?:\s+(.*))?$/);
@@ -37,15 +38,92 @@ export function parseAmountAndNote(raw: string): { amount: number; note?: string
   } else if (clean.includes(',')) {
     clean = clean.replace(',', '.');
   } else if (clean.includes('.')) {
-    const parts = clean.split('.');
-    if (parts.length === 2 && parts[1].length === 3) {
-      clean = parts[0] + parts[1];
+    if (/^\d{1,3}(?:\.\d{3})+$/.test(clean)) {
+      clean = clean.replace(/\./g, '');
+    } else {
+      const parts = clean.split('.');
+      if (parts.length === 2 && parts[1].length === 3) {
+        clean = parts[0] + parts[1];
+      }
     }
   }
 
   const amount = parseFloat(clean);
   if (isNaN(amount) || amount <= 0) return null;
   return { amount: Math.round(amount * 100) / 100, note };
+}
+
+/**
+ * Parsea un ítem individual dentro de una lista de montos (ej: "2000", "una de 2.000", "otra de 3.800 puchos").
+ */
+function parseListItem(part: string): { amount: number; note?: string } | null {
+  const trimmed = part.trim();
+  if (!trimmed) return null;
+
+  // Si ya es un número directo (con o sin nota)
+  const direct = parseAmountAndNote(trimmed);
+  if (direct) return direct;
+
+  // Limpiar prefijos comunes de lenguaje natural en audios o texto:
+  // "una de 2.000", "otra de 3.800", "venta de 1500", "primera de 2000", "otra de 3500 puchos"
+  const match = trimmed.match(
+    /^(?:(?:hice|hubo|registré|tuvimos|vendí|vendi|cobré|cobre)\s+)?(?:(?:una|otra|un|otro|primera|segunda|tercera)\s+)?(?:ventas?|gastos?|operaci[oó]n)?\s*(?:de\s+|por\s+)?\$?\s*([\d.,]+)(?:\s+(.*))?$/i
+  );
+  if (match) {
+    const parsed = parseAmountAndNote(match[1]);
+    if (parsed) {
+      let note = match[2]?.trim() || undefined;
+      if (note) {
+        note = note.replace(/^(?:de|en|por)\s+/i, '').trim() || undefined;
+      }
+      return { amount: parsed.amount, note };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parsea múltiples montos de un texto o transcripción de audio (ej: "3200, 2800, 2500" o "hice dos ventas, una de 2000 y otra de 3800").
+ */
+export function parseAmountsList(raw: string): Array<{ amount: number; note?: string }> | null {
+  const trimmed = raw.trim();
+
+  // Caso A: Separados por comas, saltos de línea o "y"
+  if (trimmed.includes(',') || trimmed.includes('\n') || /\s+y\s+/i.test(trimmed)) {
+    const parts = trimmed.split(/[\n,]|(?:\s+y\s+)/i).map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      const items: Array<{ amount: number; note?: string }> = [];
+      for (const part of parts) {
+        const parsed = parseListItem(part);
+        if (parsed) {
+          items.push(parsed);
+        }
+      }
+      if (items.length > 1) return items;
+    }
+  }
+
+  // Caso B: Ráfaga de números separados solo por espacios (ej: "3200 2800 2500 8000")
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length > 1) {
+    const numbers: Array<{ amount: number; note?: string }> = [];
+    let allNumbers = true;
+    for (const tok of tokens) {
+      const parsed = parseAmountAndNote(tok);
+      if (parsed && !parsed.note) {
+        numbers.push(parsed);
+      } else {
+        allNumbers = false;
+        break;
+      }
+    }
+    if (allNumbers && numbers.length > 1) {
+      return numbers;
+    }
+  }
+
+  return null;
 }
 
 export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[] {
@@ -68,7 +146,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         const lines = i.ventas.map((v) => `• *${formatCurrency(v.monto)}*${v.nota ? ` (${esc(v.nota)})` : ''}`).join('\n');
         return `Entendí las ventas:\n${lines}\n\nTotal: *${formatCurrency(total)}*\n\n¿Confirmar?`;
       }
-      return `¿Confirmás registrar la venta de *${formatCurrency(i.monto!)}*${i.nota ? ` (${esc(i.nota)})` : ''}?`;
+      const amount = i.monto ?? 0;
+      return `¿Confirmás registrar la venta de *${formatCurrency(amount)}*${i.nota ? ` (${esc(i.nota)})` : ''}?`;
     },
     handler: async (ctx, input) => {
       const date = input.fecha ? new Date(input.fecha) : ctx.now;
@@ -84,7 +163,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         }
         return {
           reply: `✅ Registradas *${input.ventas.length}* ventas por un total de *${formatCurrency(total)}*.`,
-          inlineKeyboard: [[{ text: '↩️ Deshacer última', callbackData: 'undo:last' }]],
+          inlineKeyboard: [[{ text: '↩️ Deshacer última', callbackData: 'undo:ask' }]],
           audit: {
             action: 'sales.batch_recorded',
             metadata: { count: input.ventas.length, total },
@@ -100,7 +179,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       return {
         reply: `🟢 Venta registrada: *${formatCurrency(input.monto!)}*${input.nota ? ` (${esc(input.nota)})` : ''}.`,
-        inlineKeyboard: [[{ text: '↩️ Deshacer', callbackData: 'undo:last' }]],
+        inlineKeyboard: [[{ text: '↩️ Deshacer', callbackData: 'undo:ask' }]],
         audit: {
           action: 'sale.recorded',
           entityType: 'money_movement',
@@ -136,7 +215,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       return {
         reply: `🔴 Gasto registrado: *${formatCurrency(input.monto)}*\nConcepto: *${esc(input.concepto)}*\nCategoría: *${esc(movement.category ?? 'Otros')}*.`,
-        inlineKeyboard: [[{ text: '↩️ Deshacer', callbackData: 'undo:last' }]],
+        inlineKeyboard: [[{ text: '↩️ Deshacer', callbackData: 'undo:ask' }]],
         audit: {
           action: 'expense.recorded',
           entityType: 'money_movement',
@@ -229,19 +308,59 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           reply: {
             text: `↩️ Se anuló la última venta de *${formatCurrency(undoneAmount)}*.\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
             parseMode: 'Markdown',
-            inlineKeyboard: [
-              [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
-            ],
+            inlineKeyboard: count > 0
+              ? [
+                  [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+                ]
+              : [
+                  [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+                ],
           },
           updatedData: { ...data, count, total },
         };
       }
 
+      // 1. Verificar si envió una lista/ráfaga de números (ej. "3200 2800 2500" o "hice dos ventas, una de 2000 y otra de 3800")
+      const multiple = parseAmountsList(text);
+      if (multiple && multiple.length > 1) {
+        let addedTotal = 0;
+        const lines: string[] = [];
+        let lastId = '';
+        for (const item of multiple) {
+          const mov = await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
+            monto: item.amount,
+            nota: item.note,
+            fecha: ctx.now,
+          });
+          addedTotal += item.amount;
+          lastId = mov.id;
+          lines.push(`• *${formatCurrency(item.amount)}*${item.note ? ` (${esc(item.note)})` : ''}`);
+        }
+        const count = Number(data.count ?? 0) + multiple.length;
+        const total = Number(data.total ?? 0) + addedTotal;
+        return {
+          reply: {
+            text: [
+              `🟢 *${multiple.length} ventas registradas:*`,
+              ...lines,
+              '',
+              `_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            ].join('\n'),
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+            ],
+          },
+          updatedData: { ...data, count, total, lastMovementId: lastId },
+        };
+      }
+
+      // 2. Venta individual
       const parsed = parseAmountAndNote(text);
       if (!parsed) {
         return {
           reply: {
-            text: '⚠️ Mandá solamente el importe (ej. *2500* o *3500 gaseosa*), o tocá *🛑 Finalizar*.',
+            text: '⚠️ Mandá los importes (ej. *2500* o *3200 2800 1500*), o tocá *🛑 Finalizar*.',
             parseMode: 'Markdown',
             inlineKeyboard: [
               [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
@@ -264,7 +383,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           text: `🟢 Venta registrada: *${formatCurrency(parsed.amount)}*${parsed.note ? ` (${esc(parsed.note)})` : ''}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
           parseMode: 'Markdown',
           inlineKeyboard: [
-            [{ text: '↩️ Deshacer última', callbackData: 'undo:last' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+            [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
           ],
         },
         updatedData: { ...data, count, total, lastMovementId: movement.id },
@@ -325,9 +444,13 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           reply: {
             text: `↩️ Se anuló el último gasto de *${formatCurrency(undoneAmount)}*.\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
             parseMode: 'Markdown',
-            inlineKeyboard: [
-              [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
-            ],
+            inlineKeyboard: count > 0
+              ? [
+                  [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+                ]
+              : [
+                  [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+                ],
           },
           updatedData: { ...data, count, total },
         };
@@ -361,7 +484,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           text: `🔴 Gasto registrado: *${formatCurrency(parsed.amount)}* (${esc(concepto)})\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
           parseMode: 'Markdown',
           inlineKeyboard: [
-            [{ text: '↩️ Deshacer última', callbackData: 'undo:last' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+            [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
           ],
         },
         updatedData: { ...data, count, total, lastMovementId: movement.id },
@@ -435,13 +558,98 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     },
   };
 
+  const statsMenuKeyboard = [
+    [
+      { text: '📅 Hoy', callbackData: 'stats:hoy' },
+      { text: '📅 Ayer', callbackData: 'stats:ayer' },
+    ],
+    [
+      { text: '🗓️ Esta semana', callbackData: 'stats:semana' },
+      { text: '🗓️ Este mes', callbackData: 'stats:mes' },
+    ],
+    [
+      { text: '🏷️ Gastos por categoría', callbackData: 'stats:categorias' },
+      { text: '📋 Últimos movimientos', callbackData: 'stats:movimientos' },
+    ],
+  ];
+
+  const periodNavKeyboard = (current: string) => [
+    [
+      { text: current === 'hoy' ? '• Hoy •' : '📅 Hoy', callbackData: 'stats:hoy' },
+      { text: current === 'ayer' ? '• Ayer •' : '📅 Ayer', callbackData: 'stats:ayer' },
+      { text: current === 'semana' ? '• Semana •' : '🗓️ Semana', callbackData: 'stats:semana' },
+      { text: current === 'mes' ? '• Mes •' : '🗓️ Mes', callbackData: 'stats:mes' },
+    ],
+    [
+      { text: '🏷️ Gastos por categoría', callbackData: 'stats:categorias' },
+      { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' },
+    ],
+  ];
+
   const consultarResumen: ActionDef<ConsultarResumen> = {
     name: 'consultar_resumen',
     description:
-      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes"). Por defecto "hoy".',
+      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes", "categorias", "movimientos", "menu"). Por defecto "hoy".',
     kind: 'read',
     input: ConsultarResumenInput,
     handler: async (ctx, input) => {
+      if (input.periodo === 'menu') {
+        return {
+          reply: [
+            '📊 *Estadísticas de tu negocio*',
+            'Elegí qué período o información querés consultar:',
+          ].join('\n'),
+          inlineKeyboard: statsMenuKeyboard,
+        };
+      }
+
+      if (input.periodo === 'categorias') {
+        const cats = await cash.getExpensesByCategory(ctx.tenant.business.id, ctx.now);
+        if (cats.length === 0) {
+          return {
+            reply: '🏷️ *Gastos por categoría (este mes):*\n\nTodavía no hay gastos registrados este mes.',
+            inlineKeyboard: [
+              [{ text: '📊 Ver balance de caja', callbackData: 'stats:hoy' }, { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' }],
+            ],
+          };
+        }
+        const totalGastos = cats.reduce((acc, c) => acc + c.total, 0);
+        const lines = cats.map((c) => `• ${esc(c.category)}: *${formatCurrency(c.total)}* (${c.count} ${c.count === 1 ? 'gasto' : 'gastos'})`);
+        return {
+          reply: [
+            '🏷️ *Gastos por categoría (este mes):*',
+            '',
+            ...lines,
+            '',
+            `Total gastos: *${formatCurrency(totalGastos)}*`,
+          ].join('\n'),
+          inlineKeyboard: [
+            [{ text: '📊 Ver balance de caja', callbackData: 'stats:hoy' }, { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' }],
+          ],
+        };
+      }
+
+      if (input.periodo === 'movimientos') {
+        const list = await cash.listRecent(ctx.tenant.business.id, 10);
+        if (list.length === 0) {
+          return {
+            reply: '📋 *Últimos movimientos:*\n\nTodavía no hay movimientos registrados.',
+            inlineKeyboard: [[{ text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' }]],
+          };
+        }
+        const lines = list.map((m) => {
+          const icon = m.kind === 'IN' ? '🟢' : '🔴';
+          const sign = m.kind === 'IN' ? '+' : '-';
+          return `${icon} ${esc(m.concept)}: *${sign}${formatCurrency(Number(m.amount))}* _(${formatDateTime(m.date)})_`;
+        });
+        return {
+          reply: ['📋 *Últimos 10 movimientos:*', '', ...lines].join('\n'),
+          inlineKeyboard: [
+            [{ text: '📊 Ver balance de caja', callbackData: 'stats:hoy' }, { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' }],
+          ],
+        };
+      }
+
       let summary: PeriodSummary;
       if (input.periodo === 'ayer') {
         const ayer = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
@@ -455,11 +663,12 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         summary = await cash.getDaySummary(ctx.tenant.business.id, ctx.now);
       }
 
-      if (summary.ventasCount === 0 && summary.gastosCount === 0) {
-        return { reply: `📊 Todavía no registraste movimientos ${summary.periodLabel}.` };
-      }
-
       const sign = summary.balanceCaja >= 0 ? '+' : '';
+      const emptyNote =
+        summary.ventasCount === 0 && summary.gastosCount === 0
+          ? '\n_Todavía sin movimientos registrados en este período._\n'
+          : '';
+
       return {
         reply: [
           `📊 *Resumen de ${summary.periodLabel}:*`,
@@ -468,9 +677,12 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           `💸 Gastos: *${formatCurrency(summary.gastosTotal)}* (${summary.gastosCount} ${summary.gastosCount === 1 ? 'gasto' : 'gastos'})`,
           '',
           `⚖️ *Resultado registrado: ${sign}${formatCurrency(summary.balanceCaja)}*`,
-          '',
+          emptyNote,
           '_ℹ️ Este balance representa el flujo neto de dinero registrado, no la ganancia contable real ya que no deduce costos por producto._',
-        ].join('\n'),
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        inlineKeyboard: periodNavKeyboard(summary.periodLabel === 'ayer' ? 'ayer' : input.periodo),
       };
     },
   };

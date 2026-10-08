@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AppError } from '../errors/errors.js';
+import { logger } from '../logging/logger.js';
 import { evaluateAccess, shouldStartTrial } from '../tenant/business-status.js';
 import type { MembershipWithBusiness, TenantContext, User } from '../tenant/entities.js';
 import type {
@@ -155,6 +156,10 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
         await deps.conversations.clear(tenant.business.id, resolution.user.id);
         return res.reply;
       }
+      if (lower === '/cancelar' || lower === 'cancelar') {
+        await deps.conversations.clear(tenant.business.id, resolution.user.id);
+        return md('Modo continuo cancelado.');
+      }
       if (lower === '/deshacer' || lower === 'deshacer') {
         const res = await currentAction.handleContinuousStep(ctx, '/deshacer', active.data);
         if (res.updatedData) {
@@ -172,6 +177,20 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     }
   }
 
+  // Intento de interpretación directa rápida sin IA (patrones numéricos o comandos obvios).
+  const direct = deps.template.interpretDirectly?.(trimmed, active?.actionName);
+  if (direct) {
+    const directAction = deps.template.actions.find((a) => a.name === direct.actionName);
+    if (directAction) {
+      const baseData =
+        active?.phase === 'COLLECTING' && active.actionName === directAction.name ? active.data : {};
+      const merged = mergeData(baseData, direct.params);
+      return proceedWithAction(deps, tenant, resolution.user.id, directAction, merged, now, access, {
+        freshStart: !active || active.actionName !== directAction.name,
+      });
+    }
+  }
+
   // Límite diario de IA por negocio (evita factura abierta en trials).
   await enforceAiBudget(deps, tenant.business.id, now);
 
@@ -179,12 +198,25 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   const hintAction = active?.phase === 'COLLECTING' ? (active.actionName ?? undefined) : undefined;
   const dateStr = now.toISOString().slice(0, 10);
   const hints = await deps.template.resolveHints?.(tenant).catch(() => '');
-  const interpreted = await deps.interpreter.interpret(
-    deps.template.systemPrompt(tenant.business.name, dateStr, hints ?? ''),
-    deps.template.actions,
-    trimmed,
-    { hintAction, referenceDate: now, businessId: tenant.business.id }
-  );
+  let interpreted;
+  try {
+    interpreted = await deps.interpreter.interpret(
+      deps.template.systemPrompt(tenant.business.name, dateStr, hints ?? ''),
+      deps.template.actions,
+      trimmed,
+      { hintAction, referenceDate: now, businessId: tenant.business.id }
+    );
+  } catch (err) {
+    logger.warn('Error al interpretar mensaje con IA en pipeline', {
+      businessId: tenant.business.id,
+      text: trimmed,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return md(
+      '⚠️ No pude interpretar ese mensaje con el asistente inteligente.\n\n' +
+        'Podés ingresar un monto directamente (ej: *3000*, *vendí 1500* o *gasté 2000 en pan*) o usar el menú.'
+    );
+  }
   await deps.aiUsage.log({
     businessId: tenant.business.id,
     userId: resolution.user.id,
@@ -239,7 +271,48 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
     await deps.conversations.clear(tenant.business.id, resolution.user.id);
     return md('Modo cancelado.');
   }
-  if (data === 'undo:last') {
+  if (data.startsWith('stats:')) {
+    const statsAction = deps.template.actions.find((a) => a.name === 'consultar_resumen');
+    if (statsAction) {
+      const period = data.slice('stats:'.length);
+      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+      const res = await statsAction.handler(ctx, { periodo: period });
+      return {
+        ...md(res.reply),
+        inlineKeyboard: res.inlineKeyboard,
+      };
+    }
+  }
+  if (data === 'undo:ask') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    const count = Number(active?.data?.count ?? 0);
+    return {
+      text: `⚠️ *¿Confirmás anular la última operación?*\n\nSe eliminará el último movimiento de esta tanda (${count} restantes).`,
+      parseMode: 'Markdown',
+      inlineKeyboard: [
+        [
+          { text: '🗑️ Sí, anular', callbackData: 'undo:confirm' },
+          { text: '❌ No, mantener', callbackData: 'undo:cancel' },
+        ],
+      ],
+    };
+  }
+  if (data === 'undo:cancel') {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    const count = Number(active?.data?.count ?? 0);
+    return {
+      text: 'Operación mantenida. Podés seguir enviando importes o finalizar.',
+      parseMode: 'Markdown',
+      inlineKeyboard: count > 0
+        ? [
+            [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+          ]
+        : [
+            [{ text: '🛑 Finalizar', callbackData: 'continuous:fin' }],
+          ],
+    };
+  }
+  if (data === 'undo:confirm' || data === 'undo:last') {
     const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
     if (active && active.actionName) {
       const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
@@ -377,7 +450,15 @@ async function handleCommand(
   if (cmd.action) {
     const action = deps.template.actions.find((a) => a.name === cmd.action);
     if (!action) return md(MSG_UNKNOWN);
-    return startAction(deps, tenant, resolution.user.id, action, {}, now, evaluateAccess(tenant.business, now), true);
+    const rawArgs = text.slice(text.indexOf(name) + name.length).trim();
+    let initialData: Record<string, unknown> = {};
+    if (rawArgs && deps.template.interpretDirectly) {
+      const direct = deps.template.interpretDirectly(rawArgs, action.name);
+      if (direct && direct.actionName === action.name) {
+        initialData = direct.params;
+      }
+    }
+    return startAction(deps, tenant, resolution.user.id, action, initialData, now, evaluateAccess(tenant.business, now), true);
   }
   return md(cmd.reply ?? MSG_UNKNOWN);
 }
@@ -633,12 +714,17 @@ export function missingFields(input: z.ZodType<unknown>, data: unknown): string[
   const result = input.safeParse(data);
   if (result.success) return [];
   const missing = new Set<string>();
+  const obj = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   for (const issue of result.error.issues) {
     if (issue.path.length === 0) continue;
     const leaf = String(issue.path[issue.path.length - 1]);
+    const val = obj[leaf];
     const isMissing =
       (issue.code === 'invalid_type' && (issue as { received?: unknown }).received === 'undefined') ||
-      (issue.code === 'too_small' && issue.path.length > 0);
+      (issue.code === 'too_small' && issue.path.length > 0 && (val === undefined || val === '' || val === null)) ||
+      val === undefined ||
+      val === null ||
+      val === '';
     if (!isMissing) continue;
     // Índices numéricos (items.0.cantidad) → pedir por la hoja.
     missing.add(/^\d+$/.test(leaf) ? String(issue.path.slice(0, -1).join('.')) || leaf : leaf);

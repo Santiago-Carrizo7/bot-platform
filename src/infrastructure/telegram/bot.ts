@@ -1,6 +1,6 @@
 import { Bot, webhookCallback } from 'grammy';
 import type { RequestHandler } from 'express';
-import { AppError } from '../../core/errors/errors.js';
+import { AppError, AIProviderError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
 import type { FlowDeps, BotReply } from '../../core/messaging/flow.js';
 import { handleCallback, handleText } from '../../core/messaging/flow.js';
@@ -28,6 +28,8 @@ const BASE_COMMANDS = [
   { command: 'negocios', description: 'Cambiar de negocio' },
   { command: 'cancelar', description: 'Cancelar lo que estoy haciendo' },
 ];
+
+const lastInlineMsgIdByChat = new Map<number, number>();
 
 export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   const { token, templateId, flowDeps, resolver, sttService, visionService } = deps;
@@ -148,11 +150,18 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
         })
         .catch(async (editErr) => {
           logger.warn('No se pudo editar mensaje de audio, enviando uno nuevo', editErr);
-          await ctx.reply(finalText, {
+          const sent = await ctx.reply(finalText, {
             parse_mode: reply.parseMode ?? 'Markdown',
             reply_markup: finalInline,
           });
+          if (finalInline && sent?.message_id) {
+            statusMsgId = sent.message_id;
+          }
         });
+
+      if (finalInline && statusMsgId && ctx.chat) {
+        lastInlineMsgIdByChat.set(ctx.chat.id, statusMsgId);
+      }
     } catch (error) {
       const message =
         error instanceof AppError
@@ -304,13 +313,20 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
           },
         })
         .catch(async () => {
-          await ctx.reply(confirmText, {
+          const sent = await ctx.reply(confirmText, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: keyboardRows,
             },
           });
+          if (sent?.message_id) {
+            statusMsgId = sent.message_id;
+          }
         });
+
+      if (statusMsgId && ctx.chat) {
+        lastInlineMsgIdByChat.set(ctx.chat.id, statusMsgId);
+      }
     } catch (error) {
       const message =
         error instanceof AppError
@@ -338,21 +354,68 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   // Botones inline (confirmar/cancelar/menú/negocios).
   bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery().catch(() => undefined);
-    await replySafely(
-      ctx,
-      async () => {
-        const resolution = requireResolution(ctx);
-        if (!resolution.tenant) {
-          return { text: 'Necesitás una invitación para usar este bot.' };
+    const resolution = requireResolution(ctx);
+    if (!resolution.tenant) {
+      await ctx.reply('Necesitás una invitación para usar este bot.');
+      return;
+    }
+
+    try {
+      const reply = await handleCallback(flowDeps, {
+        resolution,
+        data: ctx.callbackQuery.data,
+        now: new Date(),
+      });
+
+      const hasInline = Boolean(reply.inlineKeyboard && reply.inlineKeyboard.length > 0);
+      const inlineKeyboard = hasInline
+        ? {
+            inline_keyboard: reply.inlineKeyboard!.map((row) =>
+              row.map((b) => ({ text: b.text, callback_data: b.callbackData }))
+            ),
+          }
+        : undefined;
+
+      const callbackMsg = ctx.callbackQuery.message;
+      if (callbackMsg && callbackMsg.chat) {
+        try {
+          await ctx.api.editMessageText(callbackMsg.chat.id, callbackMsg.message_id, reply.text, {
+            parse_mode: reply.parseMode,
+            reply_markup: inlineKeyboard,
+          });
+
+          if (hasInline) {
+            lastInlineMsgIdByChat.set(callbackMsg.chat.id, callbackMsg.message_id);
+          } else {
+            if (lastInlineMsgIdByChat.get(callbackMsg.chat.id) === callbackMsg.message_id) {
+              lastInlineMsgIdByChat.delete(callbackMsg.chat.id);
+            }
+          }
+          return;
+        } catch (editError) {
+          logger.warn('No se pudo editar el mensaje del callback, enviando uno nuevo', editError);
         }
-        return handleCallback(flowDeps, {
-          resolution,
-          data: ctx.callbackQuery.data,
-          now: new Date(),
-        });
-      },
-      quickRows
-    );
+      }
+
+      await replySafely(ctx, async () => reply, quickRows);
+    } catch (error) {
+      if (error instanceof AIProviderError) {
+        logger.warn('Error de IA en callback', { error: error.message });
+        await ctx
+          .reply(
+            '⚠️ El asistente inteligente no está disponible en este momento. Podés ingresar montos directamente (ej: *3000*) o usar el menú.'
+          )
+          .catch(() => undefined);
+        return;
+      }
+      if (error instanceof AppError) {
+        logger.warn('Error de aplicación en bot callback', { code: error.code, message: error.message });
+        await ctx.reply(error.message).catch(() => undefined);
+        return;
+      }
+      logger.error('Error no controlado al procesar callback', error);
+      await ctx.reply('Ocurrió un error inesperado. Probá de nuevo en un momento.').catch(() => undefined);
+    }
   });
 
   bot.catch((err) => {
@@ -473,19 +536,47 @@ async function replySafely(
   try {
     await ctx.replyWithChatAction('typing').catch(() => undefined);
     const reply = await run();
+
+    // Si había un mensaje previo con botones inline en este chat, quitarle la botonera
+    if (ctx.chat) {
+      const prevInlineMsgId = lastInlineMsgIdByChat.get(ctx.chat.id);
+      if (prevInlineMsgId) {
+        await ctx.api
+          .editMessageReplyMarkup(ctx.chat.id, prevInlineMsgId, {
+            reply_markup: { inline_keyboard: [] },
+          })
+          .catch(() => undefined);
+        lastInlineMsgIdByChat.delete(ctx.chat.id);
+      }
+    }
+
+    const hasInline = Boolean(reply.inlineKeyboard && reply.inlineKeyboard.length > 0);
     // Un mensaje lleva un solo reply_markup: el inline (confirmar/menú) gana;
     // si no hay, se muestra la barra persistente (ya visible desde antes igual).
-    const reply_markup = reply.inlineKeyboard
+    const reply_markup = hasInline
       ? {
-          inline_keyboard: reply.inlineKeyboard.map((row) =>
+          inline_keyboard: reply.inlineKeyboard!.map((row) =>
             row.map((b) => ({ text: b.text, callback_data: b.callbackData }))
           ),
         }
       : keyboardRows.length > 0
         ? { keyboard: keyboardRows.map((row) => row.map((text) => ({ text }))), resize_keyboard: true }
         : undefined;
-    await ctx.reply(reply.text, { parse_mode: reply.parseMode, reply_markup });
+
+    const sent = await ctx.reply(reply.text, { parse_mode: reply.parseMode, reply_markup });
+    if (hasInline && sent?.message_id && ctx.chat) {
+      lastInlineMsgIdByChat.set(ctx.chat.id, sent.message_id);
+    }
   } catch (error) {
+    if (error instanceof AIProviderError) {
+      logger.warn('Error de IA filtrado al usuario en replySafely', { error: error.message });
+      await ctx
+        .reply(
+          '⚠️ El asistente inteligente no está disponible en este momento. Podés ingresar montos directamente (ej: *3000*) o usar el menú.'
+        )
+        .catch(() => undefined);
+      return;
+    }
     // Los AppError son mensajes para el usuario; el resto es inesperado.
     if (error instanceof AppError) {
       logger.warn('Error de aplicación en bot', { code: error.code, message: error.message });
