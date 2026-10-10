@@ -192,6 +192,9 @@ export function inferCategory(concept: string): string {
     return 'Servicios';
   }
   if (lower.includes('alquiler')) return 'Alquiler';
+  if (lower.includes('sueldo') || lower.includes('empleado') || lower.includes('salario') || lower.includes('jornal')) {
+    return 'Sueldos';
+  }
   if (
     lower.includes('impuesto') ||
     lower.includes('afip') ||

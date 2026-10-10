@@ -10,6 +10,7 @@ export interface ActionContext {
   /** Usuario que ejecuta (actor, para auditoría). */
   actorUserId: string;
   now: Date;
+  isVoice?: boolean;
 }
 
 export interface InlineButton {
@@ -27,6 +28,11 @@ export interface ContinuousStepResult {
   reply: BotReply;
   updatedData?: Record<string, unknown>;
   finished?: boolean;
+  switchToConfirming?: {
+    actionName: string;
+    data: Record<string, unknown>;
+  };
+  audit?: ActionResult['audit'];
 }
 
 export interface ActionResult {
@@ -38,6 +44,10 @@ export interface ActionResult {
     entityType?: string;
     entityId?: string;
     metadata?: Record<string, unknown>;
+  };
+  continueInAction?: {
+    name: string;
+    data?: Record<string, unknown>;
   };
 }
 

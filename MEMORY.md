@@ -6,11 +6,7 @@
 ## Estado actual
 - Phase 0–3 + Sprint A + webhook en verde. Webhook en modo activo en Render.
 - Staging: Render free + Supabase + cron-job cada 12 min a /health (no duerme).
-- Templates: `gastos`, `kiosco` y `rotiseria` (ADR-011: docenas multi-tarifa,
-  jornada 00-05 AM, delivery zones y flete `🛵 Envíos`, ranking de zonas de flete,
-  edición rápida de precios de zona, guía explicada de carga por lote,
-  anulación 5 vs 10 ventas, separación `/menu` y `/carta`, replyMenu [1,2,2]).
-- 190 tests unitarios pasando limpios (191 total con integración opcional).
+
 - Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` OK, `pnpm build` OK.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 
@@ -18,14 +14,18 @@
 - Monolito modular; tenancy por `businessId`; un bot por vertical (registro estático);
   templates como módulos estáticos; IA con dispatch + Zod; confirmación en escrituras;
   trial 10 días desde 1ª escritura → `READ_ONLY`; tablas tipadas, sin `Record` genérico.
-- Rotisería UX y Menú: `/menu` muestra guía amigable interactiva; `/carta` lista productos y combos;
-  denominación unificada a `🛵 Envíos` (tarifas y botón en comanda); creación de comida como `➕ Crear comida`;
-  teclado persistente [1, 2, 2] activo tras comandos para mantener accesos rápidos.
-- Rotisería Ítems no catalogados: `calculatePricing` nunca arroja AppError por ítem ausente;
-  los cotiza a $0 (categoría `especial`) con botón de precio `rotiseria:precio_item:${idx}` (límite 64b).
-- Rotisería Delivery: tabla `rotiseria_delivery_zones` con `barrios[]` normalizados;
-  `deliveryFee === 0` es envío bonificado ($0), `deliveryFee === null` es mostrador;
-  segregación contable en reportes de turno y estadísticas (`foodTotal`, `deliveryTotal`).
+
+- Kiosco: 'ventas' y 'gastos' como acciones ágiles (`isContinuous`); ventas individuales
+  se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`
+  con confirmación numerada y corrección interactiva ("el 2 es 4000", "borrar 2" o botones).
+  Al confirmar lote, se cierra la sesión limpia sin retener al usuario.
+  Concepto y categoría no se duplican si son idénticos (ej. Alquiler).
+  Jerga argentina (palos, lucas, k, millones) y frases complejas delegan al LLM.
+  Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
+- Rotisería: docenas por tarifa (`priceDozen`); turno operativo 00-05 AM;
+  anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.
+- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`).
+
 - IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini.
 
 ## Gotchas

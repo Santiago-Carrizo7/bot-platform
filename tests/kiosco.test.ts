@@ -6,7 +6,7 @@ import type { ActionInterpreter } from '../src/core/ai/interpreter.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
 import { CashService, inferCategory } from '../src/templates/kiosco/domain/cash.service.js';
 import { buildKioscoActions } from '../src/templates/kiosco/actions.js';
-import { interpretDirectlyKiosco } from '../src/templates/kiosco/index.js';
+import { createKioscoTemplate, createKioscoTemplateWithCash, interpretDirectlyKiosco } from '../src/templates/kiosco/index.js';
 import type { CashRepository } from '../src/templates/kiosco/persistence/cash.repo.js';
 import {
   FakeAiUsageRepo,
@@ -201,26 +201,7 @@ describe('template kiosco: dominio financiero', () => {
 describe('template kiosco: flujo por bot (Telegram)', () => {
   function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
     const { cash, repo } = setupServices();
-    const actions = buildKioscoActions({ cash });
-    const template: TemplateDefinition = {
-      id: 'kiosco',
-      label: 'Kiosco',
-      welcome: () => 'Bienvenido',
-      systemPrompt: () => 'sys',
-      actions,
-      commands: [
-        { command: 'venta', action: 'registrar_venta' },
-        { command: 'ventas', action: 'modo_ventas' },
-        { command: 'gasto', action: 'registrar_gasto' },
-        { command: 'gastos', action: 'modo_gastos' },
-        { command: 'resumen', action: 'consultar_resumen' },
-        { command: 'movimientos', action: 'consultar_movimientos' },
-        { command: 'calcular', action: 'calcular_precio' },
-        { command: 'deshacer', action: 'deshacer_ultimo' },
-      ],
-      menu: [],
-      interpretDirectly: interpretDirectlyKiosco,
-    };
+    const { template } = createKioscoTemplateWithCash(cash);
     const businesses = new FakeBusinessRepo();
     const membershipRepo = new FakeMembershipRepo(businesses);
     const conversations = new FakeConversationRepo();
@@ -262,29 +243,28 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     return { deps, resolution, auditRepo, repo, businesses, conversations };
   }
 
-  it('modo normal: "Vendí 5000" pide confirmación Sí/No, registra, audita y ofrece Deshacer', async () => {
+  it('flujo ventas: "Vendí 5000" registra directamente, audita y ofrece Deshacer y Finalizar', async () => {
     const f = setupFlow([{ action: 'registrar_venta', params: { monto: 5000 } }]);
-    const ask = await handleText(f.deps, { resolution: f.resolution, text: 'Vendí 5000', now: NOW });
-    expect(ask.text).toContain('¿Confirmar?');
-    expect(ask.text).toContain('$ 5.000');
-
-    const done = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
-    expect(done.text).toContain('🟢 Venta registrada: *$ 5.000*');
-    expect(done.inlineKeyboard).toEqual([[{ text: '↩️ Deshacer', callbackData: 'undo:ask' }]]);
+    const res = await handleText(f.deps, { resolution: f.resolution, text: 'Vendí 5000', now: NOW });
+    expect(res.text).toContain('🟢 Venta registrada: *$ 5.000*');
+    expect(res.text).toContain('Total acumulado: $ 5.000 (1)');
+    expect(res.inlineKeyboard).toEqual([
+      [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+    ]);
     expect(f.auditRepo.entries).toHaveLength(1);
     expect(f.auditRepo.entries[0]).toMatchObject({ action: 'sale.recorded', actorUserId: ACTOR });
     expect(f.repo.movements).toHaveLength(1);
   });
 
-  it('modo normal: registrar gasto pide confirmación y categoriza', async () => {
+  it('flujo gastos: registrar gasto registra directamente y categoriza', async () => {
     const f = setupFlow([{ action: 'registrar_gasto', params: { monto: 3500, concepto: 'Coca Cola', categoria: 'Mercadería' } }]);
-    const ask = await handleText(f.deps, { resolution: f.resolution, text: 'Gasté 3500 en Coca Cola', now: NOW });
-    expect(ask.text).toContain('¿Confirmar?');
-    expect(ask.text).toContain('Coca Cola');
-
-    const done = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
-    expect(done.text).toContain('🔴 Gasto registrado: *$ 3.500*');
-    expect(done.text).toContain('Mercadería');
+    const res = await handleText(f.deps, { resolution: f.resolution, text: 'Gasté 3500 en Coca Cola', now: NOW });
+    expect(res.text).toContain('🔴 Gasto registrado: *$ 3.500*');
+    expect(res.text).toContain('Coca Cola');
+    expect(res.text).toContain('Mercadería');
+    expect(res.inlineKeyboard).toEqual([
+      [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+    ]);
     expect(f.repo.movements[0]).toMatchObject({ kind: 'OUT', amount: 3500, category: 'Mercadería' });
   });
 
@@ -299,41 +279,27 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(f.repo.movements).toHaveLength(0);
   });
 
-  it('modo continuo de ventas: /ventas activa modo rápido, números registran directo, deshacer funciona y /fin finaliza', async () => {
+  it('unificación de comandos: /ventas y /venta apuntan a ventas, /gastos y /gasto apuntan a gastos', async () => {
     const f = setupFlow([]);
 
-    // 1. Activar modo ventas
-    const start = await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
-    expect(start.text).toContain('🟢 *Modo ventas activo*');
+    // 1. /ventas inicia sesión continua de ventas
+    const resVentas = await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
+    expect(resVentas.text).toContain('Registro de ventas');
+    expect(resVentas.text).toContain('Tip: Para audios');
 
-    // 2. Enviar importes consecutivos (sin IA, registro inmediato)
-    const v1 = await handleText(f.deps, { resolution: f.resolution, text: '2500', now: NOW });
-    expect(v1.text).toContain('🟢 Venta registrada: *$ 2.500*');
-    expect(v1.text).toContain('Total acumulado: $ 2.500 (1)');
+    // 2. /venta 4500 registra directamente
+    const resVentaArg = await handleText(f.deps, { resolution: f.resolution, text: '/venta 4500', now: NOW });
+    expect(resVentaArg.text).toContain('🟢 Venta registrada: *$ 4.500*');
 
-    const v2 = await handleText(f.deps, { resolution: f.resolution, text: '4300', now: NOW });
-    expect(v2.text).toContain('🟢 Venta registrada: *$ 4.300*');
-    expect(v2.text).toContain('Total acumulado: $ 6.800 (2)');
+    // 3. /gastos inicia sesión continua de gastos
+    const resGastos = await handleText(f.deps, { resolution: f.resolution, text: '/gastos', now: NOW });
+    expect(resGastos.text).toContain('Registro de gastos');
+    expect(resGastos.text).toContain('Tip: Para audios');
 
-    // 3. Deshacer última venta desde callback
-    const undo = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
-    expect(undo.text).toContain('Se anuló la última venta de *$ 4.300*');
-    expect(undo.text).toContain('Total acumulado: $ 2.500 (1)');
-
-    // 4. Cargar otra venta con texto
-    const v3 = await handleText(f.deps, { resolution: f.resolution, text: '1800', now: NOW });
-    expect(v3.text).toContain('🟢 Venta registrada: *$ 1.800*');
-    expect(v3.text).toContain('Total acumulado: $ 4.300 (2)');
-
-    // 5. Finalizar con /fin
-    const end = await handleText(f.deps, { resolution: f.resolution, text: '/fin', now: NOW });
-    expect(end.text).toContain('🏁 *Registro de ventas finalizado*');
-    expect(end.text).toContain('Ventas registradas: *2*');
-    expect(end.text).toContain('Total acumulado: *$ 4.300*');
-
-    // Estado de conversación queda limpio
-    const conv = await f.conversations.get(BIZ, ACTOR);
-    expect(conv).toBeNull();
+    // 4. /gasto 3000 yerba registra directamente
+    const resGastoArg = await handleText(f.deps, { resolution: f.resolution, text: '/gasto 3000 yerba', now: NOW });
+    expect(resGastoArg.text).toContain('🔴 Gasto registrado: *$ 3.000*');
+    expect(resGastoArg.text).toContain('yerba');
   });
 
   it('calculador de precio: si falta tipo explica margen vs recargo; si está completo calcula ganancia', async () => {
@@ -346,7 +312,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
 
     // Caso 2: con margen especificado -> cálculo matemático
     const f2 = setupFlow([{ action: 'calcular_precio', params: { costo_unitario: 600, porcentaje: 40, tipo: 'margen', cantidad: 30 } }]);
-    const res = await handleText(f2.deps, { resolution: f2.resolution, text: 'costo 600, 40% de margen', now: NOW });
+    const res = await handleText(f2.deps, { resolution: f2.resolution, text: '30 alfajores costo 600, 40% de margen', now: NOW });
     expect(res.text).toContain('Precio de venta: $ 1.000');
     expect(res.text).toContain('Ganancia por unidad: *$ 400*');
     expect(res.text).toContain('Ganancia total del lote: *$ 12.000*');
@@ -381,29 +347,29 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(f.repo.movements[0].businessId).toBe(OTHER_BIZ);
   });
 
-  it('/venta sin argumentos pide el importe y no genera NaN', async () => {
+  it('/venta sin argumentos inicia sesión de ventas y no genera NaN', async () => {
     const f = setupFlow([]);
     const res = await handleText(f.deps, { resolution: f.resolution, text: '/venta', now: NOW });
-    expect(res.text).toContain('decime el monto');
+    expect(res.text).toContain('Registro de ventas');
     expect(res.text).not.toContain('NaN');
 
-    // Luego el usuario envía el monto suelto en modo COLLECTING
+    // Luego el usuario envía el monto suelto en modo continuo y se registra directamente
     const followUp = await handleText(f.deps, { resolution: f.resolution, text: '3500 alfajor', now: NOW });
-    expect(followUp.text).toContain('¿Confirmás registrar la venta de *$ 3.500*');
+    expect(followUp.text).toContain('🟢 Venta registrada: *$ 3.500* (alfajor)');
     expect(followUp.text).not.toContain('NaN');
   });
 
-  it('/venta con monto (/venta 5000) entra directo en confirmación', async () => {
+  it('/venta con monto (/venta 5000) registra venta directamente', async () => {
     const f = setupFlow([]);
     const res = await handleText(f.deps, { resolution: f.resolution, text: '/venta 5000', now: NOW });
-    expect(res.text).toContain('¿Confirmás registrar la venta de *$ 5.000*');
+    expect(res.text).toContain('🟢 Venta registrada: *$ 5.000*');
     expect(res.text).not.toContain('NaN');
   });
 
-  it('un número freestyle (3000) se interpreta directamente sin IA y pide confirmación', async () => {
+  it('un número freestyle (3000) se interpreta directamente sin IA y registra venta', async () => {
     const f = setupFlow([]); // Cola de IA vacía
     const res = await handleText(f.deps, { resolution: f.resolution, text: '3000', now: NOW });
-    expect(res.text).toContain('¿Confirmás registrar la venta de *$ 3.000*');
+    expect(res.text).toContain('🟢 Venta registrada: *$ 3.000*');
     expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
   });
 
@@ -419,73 +385,199 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(res.text).not.toContain('OpenRouter');
   });
 
-  it('modo continuo soporta deshacer multi-paso hasta vaciar la tanda', async () => {
+  it('multi-monto ventas: "vendí 5000 y vendí 12000" parsea dos ventas sin contaminar la nota y confirma', async () => {
     const f = setupFlow([]);
-    await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
+    const res = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 5000 y vendí 12000', now: NOW });
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
+    expect(res.text).not.toContain('detectadas en el audio');
+    expect(res.text).toContain('1. 🟢 *$ 5.000*');
+    expect(res.text).toContain('2. 🟢 *$ 12.000*');
+    expect(res.text).toContain('Total:* *$ 17.000* (2 ventas)');
+    expect(res.text).toContain('¿Confirmás o querés corregir alguna?');
+    expect(res.text).not.toContain('y vendí 12000'); // No debe quedar metido en la nota
 
-    await handleText(f.deps, { resolution: f.resolution, text: '1000', now: NOW });
-    await handleText(f.deps, { resolution: f.resolution, text: '2000', now: NOW });
-    await handleText(f.deps, { resolution: f.resolution, text: '3000', now: NOW });
-
-    // Deshacer paso 1: 3000 anulado -> quedan 2
-    const u1 = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
-    expect(u1.text).toContain('Se anuló la última venta de *$ 3.000*');
-    expect(u1.text).toContain('Total acumulado: $ 3.000 (2)');
-    expect(u1.inlineKeyboard?.[0]?.some((b) => b.callbackData === 'undo:ask')).toBe(true);
-
-    // Deshacer paso 2: 2000 anulado -> queda 1
-    const u2 = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
-    expect(u2.text).toContain('Se anuló la última venta de *$ 2.000*');
-    expect(u2.text).toContain('Total acumulado: $ 1.000 (1)');
-    expect(u2.inlineKeyboard?.[0]?.some((b) => b.callbackData === 'undo:ask')).toBe(true);
-
-    // Deshacer paso 3: 1000 anulado -> quedan 0
-    const u3 = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:last', now: NOW });
-    expect(u3.text).toContain('Se anuló la última venta de *$ 1.000*');
-    expect(u3.text).toContain('Total acumulado: $ 0 (0)');
-    // Cuando quedan 0, ya no debe tener deshacer, solo finalizar
-    expect(u3.inlineKeyboard?.[0]?.some((b) => b.callbackData === 'undo:ask')).toBe(false);
-    expect(u3.inlineKeyboard?.[0]?.some((b) => b.callbackData === 'continuous:fin')).toBe(true);
-  });
-
-  it('modo continuo procesa ráfagas de números de audio/texto en un solo paso', async () => {
-    const f = setupFlow([]);
-    await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
-
-    // Enviar ráfaga de 4 números separados por espacio
-    const res = await handleText(f.deps, { resolution: f.resolution, text: '3200 2800 2500 8000', now: NOW });
-    expect(res.text).toContain('4 ventas registradas');
-    expect(res.text).toContain('$ 3.200');
-    expect(res.text).toContain('$ 2.800');
-    expect(res.text).toContain('$ 2.500');
-    expect(res.text).toContain('$ 8.000');
-    expect(res.text).toContain('Total acumulado: $ 16.500 (4)');
-    expect(f.repo.movements).toHaveLength(4);
-  });
-
-  it('audio o texto con múltiples ventas fuera de modo continuo pide confirmación conjunta', async () => {
-    const f = setupFlow([]);
-    const res = await handleText(f.deps, {
-      resolution: f.resolution,
-      text: 'hice dos ventas, una de 2.000 y otra de 3.800',
-      now: NOW,
-    });
-    expect(res.text).toContain('Entendí las ventas:');
-    expect(res.text).toContain('• *$ 2.000*');
-    expect(res.text).toContain('• *$ 3.800*');
-    expect(res.text).toContain('Total: *$ 5.800*');
-    expect(res.text).toContain('¿Confirmar?');
-
-    // Confirmar registra ambas en la base de datos
     const confirmed = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
-    expect(confirmed.text).toContain('Registradas *2* ventas por un total de *$ 5.800*');
+    expect(confirmed.text).toContain('2 ventas registradas con éxito');
     expect(f.repo.movements).toHaveLength(2);
   });
 
-  it('deshacer con confirmación preventiva (undo:ask -> undo:cancel / undo:confirm)', async () => {
+  it('si el mensaje proviene de un audio (isVoice: true), muestra "Ventas detectadas en el audio:"', async () => {
     const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 5000 y vendí 12000',
+      now: NOW,
+      isVoice: true,
+    });
+    expect(res.text).toContain('Ventas detectadas en el audio:');
+    expect(res.text).toContain('1. 🟢 *$ 5.000*');
+    expect(res.text).toContain('2. 🟢 *$ 12.000*');
+  });
+
+  it('en modo continuo, enviar números por texto muestra "Confirmar ventas" y no "audio"', async () => {
+    const f = setupFlow([]);
+    // Inicia ventas
     await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
-    await handleText(f.deps, { resolution: f.resolution, text: '5000', now: NOW });
+    // Manda números por texto
+    const res = await handleText(f.deps, { resolution: f.resolution, text: '3000 4000', now: NOW });
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
+    expect(res.text).not.toContain('detectadas en el audio');
+    expect(res.text).toContain('1. 🟢 *$ 3.000*');
+    expect(res.text).toContain('2. 🟢 *$ 4.000*');
+  });
+
+  it('multi-monto ventas: "vendí 3000 y 12000" parsea ambas ventas correctamente', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 3000 y 12000', now: NOW });
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
+    expect(res.text).toContain('1. 🟢 *$ 3.000*');
+    expect(res.text).toContain('2. 🟢 *$ 12.000*');
+    expect(res.text).toContain('Total:* *$ 15.000* (2 ventas)');
+  });
+
+  it('ráfaga de gastos: "gasté 3000 en coca y 5000 en pan" extrae lote, confirma y registra', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'gasté 3000 en coca y 5000 en pan',
+      now: NOW,
+    });
+    expect(res.text).toContain('📋 *Confirmar gastos:*');
+    expect(res.text).not.toContain('detectados en el audio');
+    expect(res.text).toContain('1. 🔴 *$ 3.000* - coca');
+    expect(res.text).toContain('2. 🔴 *$ 5.000* - pan');
+    expect(res.text).toContain('Total:* *$ 8.000* (2 gastos)');
+    expect(res.text).toContain('¿Confirmás o querés corregir alguna?');
+
+    const confirmed = await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
+    expect(confirmed.text).toContain('2 gastos registrados con éxito');
+    expect(f.repo.movements).toHaveLength(2);
+    expect(f.repo.movements[0]).toMatchObject({ kind: 'OUT', amount: 3000, concept: 'coca' });
+    expect(f.repo.movements[1]).toMatchObject({ kind: 'OUT', amount: 5000, concept: 'pan' });
+    expect(f.auditRepo.entries).toHaveLength(1);
+    expect(f.auditRepo.entries[0]).toMatchObject({ action: 'kiosco.lote_registrado' });
+  });
+
+  it('ráfaga de gastos: "pagué 12000 al proveedor y 4500 de luz"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'pagué 12000 al proveedor y 4500 de luz',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar gastos:');
+    expect(res.text).toContain('1. 🔴 *$ 12.000* - proveedor');
+    expect(res.text).toContain('2. 🔴 *$ 4.500* - luz');
+    expect(res.text).toContain('Total:* *$ 16.500* (2 gastos)');
+  });
+
+  it('corrección interactiva de lote por texto libre y por botón', async () => {
+    const f = setupFlow([]);
+    // 1. Entra lote con 3 ventas
+    const initial = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 12000, 3000 y 8000',
+      now: NOW,
+    });
+    expect(initial.text).toContain('Confirmar ventas:');
+    expect(initial.text).toContain('1. 🟢 *$ 12.000*');
+    expect(initial.text).toContain('2. 🟢 *$ 3.000*');
+    expect(initial.text).toContain('3. 🟢 *$ 8.000*');
+    expect(initial.text).toContain('Total:* *$ 23.000* (3 ventas)');
+
+    // 2. Corrección por texto libre: "el 2 es 3300"
+    const textFix = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'el 2 es 3300',
+      now: NOW,
+    });
+    expect(textFix.text).toContain('2. 🟢 *$ 3.300*');
+    expect(textFix.text).toContain('Total:* *$ 23.300* (3 ventas)');
+
+    // 3. Borrar por texto libre: "borrar 3"
+    const delFix = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'borrar 3',
+      now: NOW,
+    });
+    expect(delFix.text).toContain('Total:* *$ 15.300* (2 ventas)');
+
+    // 4. Corrección por botón interactivo: tocar "Corregir un monto"
+    const promptReply = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'kiosco:correct_prompt',
+      now: NOW,
+    });
+    expect(promptReply.text).toContain('Elegí qué monto querés corregir');
+    expect(promptReply.inlineKeyboard).toBeDefined();
+
+    // Tocar el botón de editar ítem 1
+    const editReply = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'kiosco:edit_item:0',
+      now: NOW,
+    });
+    expect(editReply.text).toContain('ítem 1');
+
+    // Responder con el nuevo importe: 10000
+    const fixedNum = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '10000',
+      now: NOW,
+    });
+    expect(fixedNum.text).toContain('1. 🟢 *$ 10.000*');
+    expect(fixedNum.text).toContain('Total:* *$ 13.300* (2 ventas)');
+
+    // 5. Confirmar y verificar persistencia
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('2 ventas registradas con éxito');
+    expect(f.repo.movements).toHaveLength(2);
+    expect(f.repo.movements[0].amount).toBe(10000);
+    expect(f.repo.movements[1].amount).toBe(3300);
+  });
+
+  it('calculadora asesor de precios: consulta abierta de lote sin porcentaje muestra 3 opciones de kiosco', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'gasté 30.000 en comprar un pack de 12 hierbas para el mate ¿a cuánto vendo cada una?',
+      now: NOW,
+    });
+    expect(res.text).toContain('Precios sugeridos de venta (guía de kiosco):');
+    expect(res.text).toContain('Lote de *12 unidades*');
+    expect(res.text).toContain('Costo por unidad: *$ 2.500*');
+    expect(res.text).toContain('Rotación rápida (+30% recargo):');
+    expect(res.text).toContain('$ 3.250');
+    expect(res.text).toContain('Kiosco estándar (+50% recargo - recomendado):');
+    expect(res.text).toContain('$ 3.750');
+    expect(res.text).toContain('Mayor ganancia (+75% recargo):');
+    expect(res.text).toContain('$ 4.375');
+    // Cero llamadas a IA
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+  });
+
+  it('calculadora protección anti-gasto: "compré 30 alfajores a 18000 a cuánto lo vendo para ganar 40%" va a calculadora', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'compré 30 alfajores a 18000 a cuánto lo vendo para ganar 40%',
+      now: NOW,
+    });
+    expect(res.text).toContain('¿Querés calcular usando *margen* o *recargo* para ganar *40%*?');
+    expect(res.text).toContain('Costo unitario: *$ 600*');
+    expect(f.repo.movements).toHaveLength(0); // NUNCA se registra como gasto
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+  });
+
+  it('deshacer con confirmación preventiva (undo:ask -> undo:cancel / undo:confirm)', async () => {
+    const f = setupFlow([{ action: 'registrar_venta', params: { monto: 5000 } }]);
+    await handleText(f.deps, { resolution: f.resolution, text: 'Vendí 5000', now: NOW });
+    await handleCallback(f.deps, { resolution: f.resolution, data: 'confirm:yes', now: NOW });
+    expect(f.repo.movements).toHaveLength(1);
 
     // Tocar botón deshacer pide verificación
     const ask = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:ask', now: NOW });
@@ -500,7 +592,8 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
 
     // Confirmar sí anula
     const confirm = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:confirm', now: NOW });
-    expect(confirm.text).toContain('Se anuló la última venta de *$ 5.000*');
+    expect(confirm.text).toContain('Se anuló el último movimiento');
+    expect(confirm.text).toContain('$ 5.000');
     expect(f.repo.movements).toHaveLength(0);
   });
 
@@ -526,4 +619,82 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(cats.text).toContain('Gastos por categoría (este mes):');
     expect(cats.text).toContain('Servicios: *$ 8.000*');
   });
+
+  it('template kiosco: replyMenu y menu unificados sin modo continuo y con Deshacer última acción', () => {
+    const bundle = createKioscoTemplate({ db: {} as any });
+    const replyLabels = bundle.template.replyMenu?.map((m) => m.label) || [];
+    expect(replyLabels).toContain('💰 Ventas');
+    expect(replyLabels).toContain('💸 Gastos');
+    expect(replyLabels).toContain('↩️ Deshacer última acción');
+    expect(replyLabels.some((l) => l.toLowerCase().includes('modo'))).toBe(false);
+
+    const menuLabels = bundle.template.menu?.map((m) => m.label) || [];
+    expect(menuLabels.some((l) => l.toLowerCase().includes('continuo'))).toBe(false);
+    expect(menuLabels.some((l) => l.toLowerCase().includes('rápido'))).toBe(false);
+
+    const commands = bundle.template.commands.map((c) => c.command);
+    expect(commands).toContain('ventas');
+    expect(commands).toContain('venta');
+    expect(commands).toContain('gastos');
+    expect(commands).toContain('gasto');
+    expect(commands).toContain('deshacer');
+  });
+
+  it('concepto de gasto no duplica categoría si son iguales (ej: Alquiler no muestra Alquiler [Alquiler])', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'pagué 150000 de alquiler',
+      now: NOW,
+    });
+    // Gasto individual directo
+    expect(res.text).toContain('$ 150.000');
+    expect(res.text.toLowerCase()).toContain('concepto: *alquiler*');
+    expect(res.text).not.toContain('alquiler [Alquiler]');
+    expect(res.text).not.toContain('Alquiler [Alquiler]');
+  });
+
+  it('lote confirmado cierra la sesión limpia sin botones residuales de deshacer/finalizar', async () => {
+    const f = setupFlow([]);
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '3000 y 5000',
+      now: NOW,
+    });
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('2 ventas registradas con éxito');
+    expect(confirmed.inlineKeyboard).toBeUndefined();
+    // Conversación debe haber quedado limpia
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('frases con jerga argentina y millones delegan al LLM sin romper números con comas', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 150000, concepto: 'Alquiler', categoria: 'Alquiler' },
+            { tipo: 'GASTO', monto: 1200000, concepto: 'Sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'pagué 150.000 de alquiler y que le pagué 1.200.000 al sueldo de un empleado',
+      now: NOW,
+    });
+    // Debe haber llamado a la IA porque es una frase compleja con millones
+    expect(f.deps.interpreter.interpret).toHaveBeenCalled();
+    expect(res.text).toContain('1. 🔴 *$ 150.000* - Alquiler');
+    expect(res.text).toContain('2. 🔴 *$ 1.200.000* - Sueldo de empleado');
+    expect(res.text).toContain('Total:* *$ 1.350.000* (2 gastos)');
+  });
 });
+
