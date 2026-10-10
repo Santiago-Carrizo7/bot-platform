@@ -28,3 +28,19 @@ export function formatDateTime(date: Date): string {
 export function esc(text: string): string {
   return escapeMarkdown(text);
 }
+
+/** Formatea concepto y categoría de gasto evitando duplicados tipo 'Alquiler [Alquiler]'. */
+export function formatExpenseConcept(concept: string, category?: string | null): string {
+  const cleanConcept = concept.trim();
+  if (!category) return `*${esc(cleanConcept)}*`;
+  const cleanCategory = category.trim();
+  if (
+    cleanConcept.toLowerCase() === cleanCategory.toLowerCase() ||
+    cleanCategory.toLowerCase() === 'otros' ||
+    cleanConcept.toLowerCase().includes(cleanCategory.toLowerCase())
+  ) {
+    return `*${esc(cleanConcept)}*`;
+  }
+  return `*${esc(cleanConcept)}* [${esc(cleanCategory)}]`;
+}
+

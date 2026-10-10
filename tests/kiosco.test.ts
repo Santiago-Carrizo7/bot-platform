@@ -639,4 +639,62 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(commands).toContain('gasto');
     expect(commands).toContain('deshacer');
   });
+
+  it('concepto de gasto no duplica categoría si son iguales (ej: Alquiler no muestra Alquiler [Alquiler])', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'pagué 150000 de alquiler',
+      now: NOW,
+    });
+    // Gasto individual directo
+    expect(res.text).toContain('$ 150.000');
+    expect(res.text.toLowerCase()).toContain('concepto: *alquiler*');
+    expect(res.text).not.toContain('alquiler [Alquiler]');
+    expect(res.text).not.toContain('Alquiler [Alquiler]');
+  });
+
+  it('lote confirmado cierra la sesión limpia sin botones residuales de deshacer/finalizar', async () => {
+    const f = setupFlow([]);
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '3000 y 5000',
+      now: NOW,
+    });
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('2 ventas registradas con éxito');
+    expect(confirmed.inlineKeyboard).toBeUndefined();
+    // Conversación debe haber quedado limpia
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('frases con jerga argentina y millones delegan al LLM sin romper números con comas', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 150000, concepto: 'Alquiler', categoria: 'Alquiler' },
+            { tipo: 'GASTO', monto: 1200000, concepto: 'Sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'pagué 150.000 de alquiler y que le pagué 1.200.000 al sueldo de un empleado',
+      now: NOW,
+    });
+    // Debe haber llamado a la IA porque es una frase compleja con millones
+    expect(f.deps.interpreter.interpret).toHaveBeenCalled();
+    expect(res.text).toContain('1. 🔴 *$ 150.000* - Alquiler');
+    expect(res.text).toContain('2. 🔴 *$ 1.200.000* - Sueldo de empleado');
+    expect(res.text).toContain('Total:* *$ 1.350.000* (2 gastos)');
+  });
 });
+

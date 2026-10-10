@@ -16,7 +16,7 @@ import {
   type RegistrarVentaInput as RegistrarVenta,
   type RegistrarLoteInput as RegistrarLote,
 } from './schemas.js';
-import { esc, formatCurrency, formatDateTime } from './format.js';
+import { esc, formatCurrency, formatDateTime, formatExpenseConcept } from './format.js';
 import type { PeriodSummary } from './types.js';
 
 export interface KioscoActionDeps {
@@ -34,10 +34,25 @@ export function parseAmountAndNote(raw: string): { amount: number; note?: string
 
   let clean = numStr;
   if (clean.includes('.') && clean.includes(',')) {
-    clean = clean.replace(/\./g, '').replace(',', '.');
+    // Ej: 1.200.000,50 o 1,200,000.50
+    const lastDot = clean.lastIndexOf('.');
+    const lastComma = clean.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      // Formato argentino: 1.200.000,50
+      clean = clean.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato anglosajón: 1,200,000.50
+      clean = clean.replace(/,/g, '');
+    }
   } else if (clean.includes(',')) {
-    clean = clean.replace(',', '.');
+    // Si tiene comas como separador de miles: 1,200,000 o 150,000
+    if (/^\d{1,3}(?:,\d{3})+$/.test(clean)) {
+      clean = clean.replace(/,/g, '');
+    } else {
+      clean = clean.replace(',', '.');
+    }
   } else if (clean.includes('.')) {
+    // Si tiene puntos como separador de miles: 1.200.000 o 150.000
     if (/^\d{1,3}(?:\.\d{3})+$/.test(clean)) {
       clean = clean.replace(/\./g, '');
     } else {
@@ -89,9 +104,20 @@ function parseListItem(part: string): { amount: number; note?: string } | null {
 export function parseAmountsList(raw: string): Array<{ amount: number; note?: string }> | null {
   const trimmed = raw.trim();
 
+  // Si contiene modismos complejos o frases largas con palabras de jerga, dejar al LLM
+  if (
+    /(?:palo|lucas?|\b[kK]\b|mill[oó]n|millones)/i.test(trimmed) ||
+    trimmed.split(/\s+/).length > 12
+  ) {
+    return null;
+  }
+
   // Caso A: Separados por comas, saltos de línea o "y"
   if (trimmed.includes(',') || trimmed.includes('\n') || /\s+y\s+/i.test(trimmed)) {
-    const parts = trimmed.split(/[\n,]|(?:\s+y\s+)/i).map((p) => p.trim()).filter(Boolean);
+    const parts = trimmed
+      .split(/[\n]|(?:\s+y\s+)|(?:,(?!\d{3}\b))/i)
+      .map((p) => p.trim())
+      .filter(Boolean);
     if (parts.length > 1) {
       const items: Array<{ amount: number; note?: string }> = [];
       for (const part of parts) {
@@ -131,11 +157,23 @@ export function parseAmountsList(raw: string): Array<{ amount: number; note?: st
  */
 export function parseExpensesList(raw: string): Array<{ amount: number; concepto: string }> | null {
   const trimmed = raw.trim();
+  // Si contiene modismos complejos o frases largas con verbos o millones, dejarlo al LLM
+  if (
+    /(?:palo|lucas?|\b[kK]\b|mill[oó]n|millones|sueldo|empleado)/i.test(trimmed) ||
+    trimmed.split(/\s+/).length > 12
+  ) {
+    return null;
+  }
+
   if (!trimmed.includes(',') && !trimmed.includes('\n') && !/\s+y\s+/i.test(trimmed)) {
     return null;
   }
 
-  const parts = trimmed.split(/[\n,]|(?:\s+y\s+)/i).map((p) => p.trim()).filter(Boolean);
+  // Dividir por saltos de línea, 'y' o comas que NO sean separadores numéricos (ej: no dividir '1,200,000')
+  const parts = trimmed
+    .split(/[\n]|(?:\s+y\s+)|(?:,(?!\d{3}\b))/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (parts.length < 2) return null;
 
   const items: Array<{ amount: number; concepto: string }> = [];
@@ -514,7 +552,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         return {
           reply: [
             `🔴 Gasto registrado: *${formatCurrency(amount)}*`,
-            `Concepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]`,
+            `Concepto: ${formatExpenseConcept(concept, movement.category)}`,
             `_Total acumulado: ${formatCurrency(amount)} (1)_`,
             '',
             'Podés seguir enviando gastos para sumar a esta tanda o tocar Finalizar.',
@@ -606,7 +644,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
         return {
           reply: {
-            text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: ${formatExpenseConcept(concept, movement.category)}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
             parseMode: 'Markdown',
             inlineKeyboard: [
               [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
@@ -691,7 +729,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       return {
         reply: {
-          text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+          text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: ${formatExpenseConcept(concept, movement.category)}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
           parseMode: 'Markdown',
           inlineKeyboard: [
             [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
@@ -1062,7 +1100,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       lines.push('');
       lines.push('¿Confirmás o querés corregir alguna?');
-      lines.push('_(Podés mandar un audio o texto diciendo la opción que querés cambiar por el monto, ej: "el 2 es 3300" o "borrar 2")_');
+      lines.push('_(Mandá un texto diciendo la opción que querés cambiar por el monto, ej: "el 2 es 4000" o "borrar 2", o usá el botón de corregir un monto que se encuentra debajo)_');
 
       return lines.join('\n');
     },
@@ -1113,22 +1151,9 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         resLines.push(`• ${countVentas} ventas: ${formatCurrency(totalVentas)}`);
         resLines.push(`• ${countGastos} gastos: ${formatCurrency(totalGastos)}`);
       }
-      resLines.push('');
-      resLines.push('Podés seguir enviando números para sumar a esta tanda o tocar Finalizar cuando termines.');
 
       return {
         reply: resLines.join('\n'),
-        inlineKeyboard: [
-          [{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
-        ],
-        continueInAction: {
-          name: isOnlyGastos ? 'registrar_gasto' : 'registrar_venta',
-          data: {
-            count: isOnlyGastos ? countGastos : countVentas,
-            total: isOnlyGastos ? totalGastos : totalVentas,
-            lastMovementId,
-          },
-        },
         audit: {
           action: 'kiosco.lote_registrado',
           metadata: {

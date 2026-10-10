@@ -145,10 +145,11 @@ export function interpretDirectlyKiosco(
   }
 
   // 6. PATRONES DE MONTO INDIVIDUAL
-  // 6.A. Gasto individual
-  const gastoMatch = trimmed.match(
-    /^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i
-  );
+  // 6.A. Gasto individual (solo si NO tiene conectores de múltiples cláusulas o jerga)
+  const isComplex = /\s+y\s+|mill[oó]n|palo|lucas?|\b[kK]\b|sueldo/i.test(trimmed);
+  const gastoMatch = !isComplex
+    ? trimmed.match(/^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i)
+    : null;
   if (gastoMatch) {
     const num = parseAmountAndNote(gastoMatch[1]);
     if (num) {
@@ -167,17 +168,19 @@ export function interpretDirectlyKiosco(
     }
   }
 
-  // 6.C. Número suelto o con nota
-  const parsedDirect = parseAmountAndNote(trimmed);
-  if (parsedDirect) {
-    const noteLower = (parsedDirect.note || '').toLowerCase();
-    const isExpense = ['proveedor', 'mayorista', 'luz', 'gas', 'internet', 'agua', 'alquiler', 'afip'].some((w) =>
-      noteLower.includes(w)
-    );
-    if (isExpense) {
-      return { actionName: 'registrar_gasto', params: { monto: parsedDirect.amount, concepto: parsedDirect.note || 'Gasto' } };
+  // 6.C. Número suelto o con nota (solo si es simple y no una oración compleja)
+  if (!isComplex) {
+    const parsedDirect = parseAmountAndNote(trimmed);
+    if (parsedDirect) {
+      const noteLower = (parsedDirect.note || '').toLowerCase();
+      const isExpense = ['proveedor', 'mayorista', 'luz', 'gas', 'internet', 'agua', 'alquiler', 'afip'].some((w) =>
+        noteLower.includes(w)
+      );
+      if (isExpense) {
+        return { actionName: 'registrar_gasto', params: { monto: parsedDirect.amount, concepto: parsedDirect.note || 'Gasto' } };
+      }
+      return { actionName: 'registrar_venta', params: { monto: parsedDirect.amount, nota: parsedDirect.note } };
     }
-    return { actionName: 'registrar_venta', params: { monto: parsedDirect.amount, nota: parsedDirect.note } };
   }
 
   return null;
@@ -305,7 +308,7 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
         }
 
         return {
-          text: `✏️ *Ingresá el nuevo importe para el ítem ${idx + 1} (actual: ${formatCurrency(item.monto)}):*\n\nPodés escribir el número o mandar un audio (ej: *3300*).`,
+          text: `✏️ *Ingresá el nuevo importe para el ítem ${idx + 1} (actual: ${formatCurrency(item.monto)}):*\n\nPodés escribir el número directamente (ej: *3300*).`,
           parseMode: 'Markdown',
           inlineKeyboard: [
             [

@@ -8,8 +8,9 @@
 - Staging: Render free + Supabase + cron-job cada 12 min a /health (no duerme).
 - Templates: `gastos`, `rotiseria` y `kiosco` (sesión rápida en mostrador: ventas directas
   sin confirmación con acumulador; audios/lotes en confirmación numerada con corrección
-  por texto/botones; tip de audios < 1 min; calculadora con asesor de margen).
-- 179 tests unitarios pasando limpios (180 total con integración opcional).
+  por texto/botones; tip de audios < 1 min; salida limpia de sesión al confirmar;
+  jerga argentina en LLM para palos/lucas/millones; calculadora con asesor de margen).
+- 182 tests unitarios pasando limpios (183 total con integración opcional).
 - Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` OK, `pnpm build` OK.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 
@@ -19,7 +20,10 @@
   trial 10 días desde 1ª escritura → `READ_ONLY`; tablas tipadas, sin `Record` genérico.
 - Kiosco: 'ventas' y 'gastos' como acciones ágiles (`isContinuous`); ventas individuales
   se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`
-  con confirmación numerada y corrección interactiva ("el 2 es 3300", "borrar 2" o botones).
+  con confirmación numerada y corrección interactiva ("el 2 es 4000", "borrar 2" o botones).
+  Al confirmar lote, se cierra la sesión limpia sin retener al usuario.
+  Concepto y categoría no se duplican si son idénticos (ej. Alquiler).
+  Jerga argentina (palos, lucas, k, millones) y frases complejas delegan al LLM.
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
 - Rotisería: docenas por tarifa (`priceDozen`); turno operativo 00-05 AM;
   anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.

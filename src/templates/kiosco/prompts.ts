@@ -31,11 +31,12 @@ REGLAS DE INTERPRETACIÓN:
   * "Gasté 3500 en Coca" -> registrar_gasto con monto: 3500, concepto: "Coca", categoria: "Mercadería".
   * Audios o ráfagas con múltiples gastos: "Gasté 3000 en coca y 5000 en pan" -> registrar_lote con items: [{ tipo: "GASTO", monto: 3000, concepto: "coca" }, { tipo: "GASTO", monto: 5000, concepto: "pan" }].
   * "Pagué 12000 al proveedor y 4500 de luz" -> registrar_lote con items: [{ tipo: "GASTO", monto: 12000, concepto: "proveedor" }, { tipo: "GASTO", monto: 4500, concepto: "luz" }].
+  * "Pagué 150.000 de alquiler y que le pagué 1.200.000 al sueldo de un empleado" -> registrar_lote con items: [{ tipo: "GASTO", monto: 150000, concepto: "Alquiler", categoria: "Alquiler" }, { tipo: "GASTO", monto: 1200000, concepto: "Sueldo de empleado", categoria: "Sueldos" }].
   * "Pagué 12000 al proveedor" o "Le pagué 25000 al proveedor" -> registrar_gasto con monto, concepto y categoria: "Proveedores".
   * "Fui al mayorista y gasté 45000" -> registrar_gasto con monto: 45000, concepto: "Mayorista", categoria: "Proveedores".
   * "Pagué 15000 de luz" -> registrar_gasto con monto: 15000, concepto: "Luz", categoria: "Servicios".
   * "Gasté 5000 en el supermercado" -> registrar_gasto con monto: 5000, concepto: "Supermercado", categoria: "Supermercado".
-  * Categorías sugeridas: Proveedores, Mercadería, Servicios, Alquiler, Impuestos, Transporte, Supermercado, Otros.
+  * Categorías sugeridas: Proveedores, Mercadería, Servicios, Alquiler, Sueldos, Impuestos, Transporte, Supermercado, Otros.
 
 - CONSULTAS Y ESTADÍSTICAS:
   * "¿Cuánto vendí hoy?", "Resumen de hoy", "Caja de hoy", "¿Cuánto gané?" -> consultar_resumen con periodo: "hoy".
@@ -46,6 +47,16 @@ REGLAS DE INTERPRETACIÓN:
 - DESHACER / ANULAR:
   * "Deshacer", "Deshacer última acción", "Me equivoqué", "Anular última venta", "Borrar último movimiento" -> deshacer_ultimo.
 
+- MODISMOS ARGENTINOS, CIFRAS GRANDES Y JERGA MONETARIA (CRÍTICO):
+  * "un palo" / "1 palo" -> 1000000.
+  * "dos palos" -> 2000000, "diez palos" -> 10000000.
+  * "un palo y medio" / "palo y medio" -> 1500000.
+  * "1 millon doscientos" / "un millón doscientos mil" / "1.200.000" / "1,2 millones" -> 1200000.
+  * "dos millones y medio" / "2.5 millones" -> 2500000.
+  * "lucas" = miles: "dos lucas" -> 2000, "diez lucas" -> 10000, "cincuenta lucas" -> 50000, "tres lucas y media" -> 3500.
+  * "k" = miles: "150k" -> 150000, "15k" -> 15000, "200k" -> 200000.
+  * "quinientos mil" -> 500000, "ciento cincuenta mil" -> 150000.
+  * Separador de miles: En Argentina el punto o la coma en audios pueden aparecer como "1.200.000" o "150.000" (ciento cincuenta mil, NO ciento cincuenta). NUNCA confundas 1.200.000 o 1,2 millones con 1.2 pesos.
 - Números en palabras: "cinco mil" -> 5000, "diez mil" -> 10000, "ochenta y cinco mil" -> 85000.
 - Fecha de referencia (hoy): ${referenceDateStr}.
 ${hints ? `Contexto adicional: ${hints}` : ''}`;
