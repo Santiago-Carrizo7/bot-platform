@@ -8,6 +8,7 @@ const VentaItemSchema = z.object({
 const NoReconocidoSchema = z.object({
   texto: z.string().trim().min(1),
   cantidad: z.number().optional(),
+  sugerencia: z.string().trim().nullable().optional(),
 });
 
 export const RegistrarVentaInput = z
@@ -31,11 +32,16 @@ export const RegistrarVentaInput = z
     }
     if (data.items.length === 0) {
       if (data.no_reconocidos && data.no_reconocidos.length > 0) {
-        const bullets = data.no_reconocidos.map((n) => `• ${n.texto}`).join('\n');
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `⚠️ No reconocí estos productos en la carta:\n${bullets}\n\nPor favor repetí el pedido usando los nombres del menú o consultá /menu.`,
-        });
+        const hasSuggestion = data.no_reconocidos.some((n) => n.sugerencia != null && n.sugerencia.trim() !== '');
+        if (!hasSuggestion) {
+          const bullets = data.no_reconocidos.map((n) => `• ${n.texto}`).join('\n');
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `⚠️ No reconocí estos productos en la carta:\n${bullets}\n\nPor favor repetí el pedido usando los nombres del menú o consultá /menu.`,
+          });
+          return;
+        }
+        // Si hay al menos una sugerencia, se permite continuar a CONFIRMING para ofrecer desambiguación.
         return;
       }
       ctx.addIssue({
@@ -46,6 +52,14 @@ export const RegistrarVentaInput = z
     }
   });
 export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
+
+export const CrearEditarPromoInput = z.object({
+  promo_id: z.string().trim().optional(),
+  nombre: z.string().trim().optional(),
+  precio: z.number().positive().optional(),
+  descripcion: z.string().trim().optional(),
+});
+export type CrearEditarPromoInput = z.infer<typeof CrearEditarPromoInput>;
 
 export const AnularVentaInput = z.object({
   sale_id: z.string().trim().optional(),

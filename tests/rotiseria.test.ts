@@ -130,16 +130,21 @@ class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
     return this.s.promos.find((p) => p.id === id && p.businessId === businessId) ?? null;
   }
 
-  async listPromos(businessId: string) {
-    return this.s.promos.filter((p) => p.businessId === businessId && p.isActive);
+  async listPromos(businessId: string, options: { includeInactive?: boolean } = {}) {
+    return this.s.promos.filter((p) => p.businessId === businessId && (options.includeInactive ? true : p.isActive));
   }
 
-  async updatePromo(id: string, _b: string, data: { name?: string; description?: string; price?: number }) {
+  async updatePromo(
+    id: string,
+    _b: string,
+    data: { name?: string; description?: string; price?: number; isActive?: boolean }
+  ) {
     const pr = this.s.promos.find((x) => x.id === id);
     if (!pr) throw new Error('no encontrado');
     if (data.name !== undefined) pr.name = data.name.trim();
     if (data.description !== undefined) pr.description = data.description?.trim() || null;
     if (data.price !== undefined) pr.price = data.price as unknown as RotiseriaPromo['price'];
+    if (data.isActive !== undefined) pr.isActive = data.isActive;
     return pr;
   }
 
@@ -1178,20 +1183,23 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
     ]);
 
-    // 3. menuCommands (7 comandos exactos para el botón azul de Telegram)
+    // 3. menuCommands (9 comandos exactos para el botón azul de Telegram)
     expect(t.menuCommands).toEqual([
       { command: 'venta', description: '📝 Registrar venta' },
+      { command: 'promo', description: '🎁 Gestionar promociones' },
+      { command: 'comida', description: '➕ Crear comida o empanada' },
+      { command: 'precio', description: '🏷️ Modificar precios de la carta' },
       { command: 'dias', description: '📅 Control de días recientes' },
       { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
-      { command: 'anular', description: '↩️ Anular última venta' },
-      { command: 'precio', description: '🏷️ Modificar precios de la carta' },
-      { command: 'menu', description: '📋 Ver carta y promociones vigentes' },
       { command: 'ventas', description: '🧾 Últimas ventas registradas' },
+      { command: 'anular', description: '↩️ Anular última venta' },
+      { command: 'carta', description: '📋 Ver carta y promociones vigentes' },
     ]);
 
     // 4. menu (inline de /menu)
     expect(t.menu.map((m) => m.action)).toEqual([
       'registrar_venta',
+      'crear_editar_promo',
       'control_dias',
       'menu_estadisticas',
       'anular_venta',
@@ -1199,7 +1207,294 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       'consultar_menu',
       'consultar_ventas',
       'crear_producto',
-      'crear_promo',
     ]);
+  });
+
+  it('desambiguación interactiva: sugerencia con resolver suma producto y recalcula docenas', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [],
+          no_reconocidos: [
+            { texto: 'carneee', cantidad: 12, sugerencia: 'Empanada de Carne' },
+          ],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({
+      businessId: BIZ,
+      name: 'Empanada de Carne',
+      priceUnit: 1500,
+      priceDozen: 15000,
+      category: 'empanadas',
+    });
+
+    // 1. Mensaje con término dudoso
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '12 de carneee',
+      now: NOW,
+    });
+
+    expect(ask.text).toContain('Dudoso: *carneee* (¿quisiste decir *Empanada de Carne*?)');
+    const flatButtons = ask.inlineKeyboard?.flat() ?? [];
+    const resolverBtn = flatButtons.find((b) => b.callbackData.startsWith('rotiseria:resolver:'));
+    const ignoreBtn = flatButtons.find((b) => b.callbackData.startsWith('rotiseria:ignorar:'));
+
+    expect(resolverBtn).toBeDefined();
+    expect(resolverBtn?.text).toContain('¿Era Empanada de Carne? (12 u.)');
+    expect(ignoreBtn).toBeDefined();
+
+    // 2. Click en resolver
+    const resolved = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: resolverBtn!.callbackData,
+      now: NOW,
+    });
+
+    expect(resolved.text).toContain('1x Docena (12 Empanada de Carne)');
+    expect(resolved.text).toContain('$ 15.000');
+    expect(resolved.text).not.toContain('Dudoso');
+
+    // 3. Confirmar la venta ya resuelta
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('Total cobrado: *$ 15.000*');
+    expect(f.store.sales).toHaveLength(1);
+    expect(Number(f.store.sales[0].total)).toBe(15000);
+  });
+
+  it('desambiguación interactiva: ignorar ítem descarta el pedido si no quedan productos válidos', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [],
+          no_reconocidos: [
+            { texto: 'carneee', cantidad: 12, sugerencia: 'Empanada de Carne' },
+          ],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({
+      businessId: BIZ,
+      name: 'Empanada de Carne',
+      priceUnit: 1500,
+      priceDozen: 15000,
+    });
+
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '12 de carneee',
+      now: NOW,
+    });
+
+    const ignoreBtn = ask.inlineKeyboard?.flat().find((b) => b.callbackData.startsWith('rotiseria:ignorar:'));
+    expect(ignoreBtn).toBeDefined();
+
+    const ignored = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: ignoreBtn!.callbackData,
+      now: NOW,
+    });
+
+    expect(ignored.text).toContain('❌ Pedido cancelado al no contener productos de la carta.');
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('gestión integral de promociones: listar, crear, editar precio, descripción y pausar/activar', async () => {
+    const f = setupFlow([]);
+
+    // 1. Listar promos vacías
+    const listEmpty = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/promo',
+      now: NOW,
+    });
+    expect(listEmpty.text).toContain('Gestión de Promociones');
+    expect(listEmpty.inlineKeyboard?.[0]?.[0]?.text).toContain('➕ Crear nueva promo');
+
+    // 2. Click en nueva promo
+    const askNew = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:promo:nueva',
+      now: NOW,
+    });
+    expect(askNew.text).toContain('Nueva Promoción');
+
+    // 3. Crear promo vía texto directo delimitado con pipes
+    const createdResult = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Promo 2 | 18000 | 1 Pizza Especial + 6 Empanadas',
+      now: NOW,
+    });
+    expect(createdResult.text).toContain('Promo *Promo 2* creada por *$ 18.000*.');
+    expect(f.auditRepo.entries.some((e) => e.action === 'promo.created')).toBe(true);
+
+    const promoCreated = await f.products.findPromoByName(BIZ, 'Promo 2');
+    expect(promoCreated).toBeDefined();
+    expect(Number(promoCreated?.price)).toBe(18000);
+    expect(promoCreated?.isActive).toBe(true);
+
+    // 4. Ver ficha de la promo creada
+    const card = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: `rotiseria:promo:editar:${promoCreated!.id}`,
+      now: NOW,
+    });
+    expect(card.text).toContain('Promo: Promo 2');
+    expect(card.text).toContain('$ 18.000');
+    expect(card.text).toContain('1 Pizza Especial');
+    expect(card.text).toContain('Activa');
+
+    // 5. Cambiar precio de la promo
+    await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: `rotiseria:promo:edit_price:${promoCreated!.id}`,
+      now: NOW,
+    });
+    const priceUpdated = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '19500',
+      now: NOW,
+    });
+    expect(priceUpdated.text).toContain('actualizado a *$ 19.500*');
+    expect(f.auditRepo.entries.some((e) => e.action === 'promo.price_updated')).toBe(true);
+
+    // 6. Cambiar descripción de la promo
+    await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: `rotiseria:promo:edit_desc:${promoCreated!.id}`,
+      now: NOW,
+    });
+    const descUpdated = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 Pizza Napolitana + 6 Empanadas',
+      now: NOW,
+    });
+    expect(descUpdated.text).toContain('1 Pizza Napolitana');
+    expect(f.auditRepo.entries.some((e) => e.action === 'promo.updated')).toBe(true);
+
+    // 7. Pausar / desactivar promo
+    const deactivated = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: `rotiseria:promo:deactivate:${promoCreated!.id}`,
+      now: NOW,
+    });
+    expect(deactivated.text).toContain('Pausada');
+    expect(f.auditRepo.entries.some((e) => e.action === 'promo.deactivated')).toBe(true);
+
+    const promoPausada = await f.products.findPromoById(promoCreated!.id, BIZ);
+    expect(promoPausada?.isActive).toBe(false);
+
+    // 8. Reactivar promo
+    const reactivated = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: `rotiseria:promo:activate:${promoCreated!.id}`,
+      now: NOW,
+    });
+    expect(reactivated.text).toContain('Activa');
+    expect(f.auditRepo.entries.some((e) => e.action === 'promo.activated')).toBe(true);
+  });
+
+  it('inmutabilidad histórica de promos en estadísticas: cambiar precio de promo no altera ventas pasadas', async () => {
+    const f = setupFlow([]);
+
+    // 1. Crear promo inicial a $16.000
+    const promo = await f.products.createPromo({
+      businessId: BIZ,
+      name: 'Promo 1',
+      price: 16000,
+      description: 'Muzza + 6 empanadas',
+    });
+
+    // 2. Registrar venta con Promo 1 a $16.000
+    await f.sales.createSale(BIZ, ACTOR, [{ name: 'Promo 1', quantity: 2 }], undefined, NOW);
+
+    // 3. Modificar precio vigente de la promo a $22.000
+    await f.products.updatePromo(promo.id, BIZ, { price: 22000 });
+
+    // 4. Consultar estadísticas: deben reflejar los $32.000 históricos exactos
+    const stats = await f.sales.getStatsSummary(BIZ, 'esta_semana', NOW);
+    expect(stats.salesTotal).toBe(32000);
+    expect(stats.salesCount).toBe(1);
+    expect(stats.promosSummary).toBeDefined();
+    expect(stats.promosSummary?.totalQuantity).toBe(2);
+    expect(stats.promosSummary?.totalAmount).toBe(32000);
+    expect(stats.promosSummary?.promos[0].name).toBe('Promo 1');
+    expect(stats.promosSummary?.promos[0].subtotal).toBe(32000);
+
+    // 5. Formato en pantalla con sección Promos vendidas
+    const statsReply = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/stats',
+      now: NOW,
+    });
+    const statsDetail = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:stats:esta_semana',
+      now: NOW,
+    });
+    expect(statsDetail.text).toContain('🎁 *Promos vendidas:*');
+    expect(statsDetail.text).toContain('Promo 1*: 2 u. — *$ 32.000*');
+    expect(statsDetail.text).toContain('Total combos: *2* u. (*$ 32.000*)');
+  });
+
+  it('historial de ventas interactivo (selector 5 vs 10 ventas)', async () => {
+    const f = setupFlow([]);
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada', priceUnit: 1500 });
+
+    // Crear 8 ventas
+    for (let i = 1; i <= 8; i++) {
+      await f.sales.createSale(BIZ, ACTOR, [{ name: 'Empanada', quantity: i }], undefined, NOW);
+    }
+
+    // 1. Consulta inicial: muestra 5 ventas y botón de ver 10
+    const view5 = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/ventas',
+      now: NOW,
+    });
+    expect(view5.text).toContain('Últimas 5 ventas');
+    const flatButtons = view5.inlineKeyboard?.flat() ?? [];
+    const btn10 = flatButtons.find((b) => b.callbackData === 'rotiseria:historial:10');
+    expect(btn10).toBeDefined();
+    expect(btn10?.text).toContain('Ver últimas 10 ventas');
+
+    // 2. Click en ver 10 ventas: muestra 8 ventas (todas las existentes) y botón de volver a 5
+    const view10 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:historial:10',
+      now: NOW,
+    });
+    expect(view10.text).toContain('Últimas 8 ventas');
+    const flatButtons10 = view10.inlineKeyboard?.flat() ?? [];
+    const btn5 = flatButtons10.find((b) => b.callbackData === 'rotiseria:historial:5');
+    expect(btn5).toBeDefined();
+    expect(btn5?.text).toContain('Ver últimas 5 ventas');
+
+    // 3. Volver a 5 ventas
+    const back5 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:historial:5',
+      now: NOW,
+    });
+    expect(back5.text).toContain('Últimas 5 ventas');
+
+    // 4. Cerrar historial
+    const closed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:historial:cerrar',
+      now: NOW,
+    });
+    expect(closed.text).toContain('Operación cerrada');
   });
 });

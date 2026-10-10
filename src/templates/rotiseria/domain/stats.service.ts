@@ -1,5 +1,5 @@
 import type { SaleRepository, RotiseriaSaleWithItems } from '../persistence/sale.repo.js';
-import type { CategorySummary, StatsSummary } from '../types.js';
+import type { CategorySummary, PromosSummary, StatsSummary } from '../types.js';
 import { formatDateOnly, round2 } from '../format.js';
 import { getShiftDate } from './shift.js';
 
@@ -72,6 +72,9 @@ export class StatsService {
     const productCounts: Record<string, { quantity: number; subtotal: number; category: string }> = {};
     const categoryTotals: Record<string, { quantity: number; subtotal: number }> = {};
     const productsByCategory: Record<string, Record<string, { quantity: number; subtotal: number }>> = {};
+    const promoCounts: Record<string, { quantity: number; subtotal: number }> = {};
+    let totalPromoQty = 0;
+    let totalPromoAmount = 0;
 
     for (const sale of sales) {
       if (sale.isCancelled) {
@@ -90,6 +93,16 @@ export class StatsService {
           }
           productCounts[item.name].quantity += qty;
           productCounts[item.name].subtotal = round2(productCounts[item.name].subtotal + sub);
+
+          if (item.promoId) {
+            if (!promoCounts[item.name]) {
+              promoCounts[item.name] = { quantity: 0, subtotal: 0 };
+            }
+            promoCounts[item.name].quantity += qty;
+            promoCounts[item.name].subtotal = round2(promoCounts[item.name].subtotal + sub);
+            totalPromoQty += qty;
+            totalPromoAmount = round2(totalPromoAmount + sub);
+          }
 
           if (!categoryTotals[cat]) {
             categoryTotals[cat] = { quantity: 0, subtotal: 0 };
@@ -127,6 +140,18 @@ export class StatsService {
         .sort((a, b) => b.quantity - a.quantity || b.subtotal - a.subtotal);
     }
 
+    let promosSummary: PromosSummary | undefined;
+    if (totalPromoQty > 0) {
+      const promoList = Object.entries(promoCounts)
+        .map(([name, data]) => ({ name, quantity: data.quantity, subtotal: data.subtotal }))
+        .sort((a, b) => b.quantity - a.quantity || b.subtotal - a.subtotal);
+      promosSummary = {
+        promos: promoList,
+        totalQuantity: totalPromoQty,
+        totalAmount: totalPromoAmount,
+      };
+    }
+
     return {
       periodLabel,
       periodKey,
@@ -137,6 +162,7 @@ export class StatsService {
       top3Products,
       categories,
       productsByCategory: formattedProductsByCategory,
+      promosSummary,
     };
   }
 

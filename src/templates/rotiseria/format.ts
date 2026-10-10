@@ -88,7 +88,7 @@ export interface FormatSaleSummaryParams {
   isModifying?: boolean;
   now?: Date;
   timezone?: string;
-  noReconocidos?: string[];
+  noReconocidos?: Array<{ texto: string; cantidad?: number; sugerencia?: string | null } | string>;
 }
 
 /**
@@ -112,8 +112,20 @@ export function formatSaleSummary(params: FormatSaleSummaryParams): string {
 
   if (params.noReconocidos && params.noReconocidos.length > 0) {
     parts.push('');
-    for (const term of params.noReconocidos) {
-      parts.push(`⚠️ No reconocí *${esc(term)}* (no fue sumado al pedido)`);
+    for (const item of params.noReconocidos) {
+      if (typeof item === 'string') {
+        parts.push(`⚠️ No reconocí *${esc(item)}* (no fue sumado al pedido)`);
+      } else {
+        const texto = item.texto;
+        const sugerencia = item.sugerencia;
+        if (sugerencia && sugerencia.trim() !== '') {
+          parts.push(`⚠️ Dudoso: *${esc(texto)}* (¿quisiste decir *${esc(sugerencia)}*?)`);
+        } else if (sugerencia === null) {
+          parts.push(`⚠️ El producto '${esc(texto)}' no existe en la carta y no fue agregado.`);
+        } else {
+          parts.push(`⚠️ No reconocí *${esc(texto)}* (no fue sumado al pedido)`);
+        }
+      }
     }
   }
 

@@ -121,9 +121,12 @@ export class ProductRepository {
     });
   }
 
-  async listPromos(businessId: string): Promise<RotiseriaPromo[]> {
+  async listPromos(businessId: string, options: { includeInactive?: boolean } = {}): Promise<RotiseriaPromo[]> {
     return this.db.rotiseriaPromo.findMany({
-      where: { businessId, isActive: true },
+      where: {
+        businessId,
+        ...(options.includeInactive ? {} : { isActive: true }),
+      },
       orderBy: { name: 'asc' },
     });
   }
@@ -140,6 +143,7 @@ export class ProductRepository {
         ...(data.name !== undefined ? { name: data.name.trim() } : {}),
         ...(data.description !== undefined ? { description: data.description?.trim() || null } : {}),
         ...(data.price !== undefined ? { price: data.price } : {}),
+        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
       },
     });
   }

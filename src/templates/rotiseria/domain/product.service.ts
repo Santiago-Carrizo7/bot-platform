@@ -94,12 +94,16 @@ export class ProductService {
     return this.repo.deactivatePromo(id);
   }
 
-  async listPromos(businessId: string): Promise<RotiseriaPromo[]> {
-    return this.repo.listPromos(businessId);
+  async listPromos(businessId: string, options: { includeInactive?: boolean } = {}): Promise<RotiseriaPromo[]> {
+    return this.repo.listPromos(businessId, options);
   }
 
   async findPromoByName(businessId: string, name: string): Promise<RotiseriaPromo | null> {
     return this.repo.findPromoByName(businessId, name);
+  }
+
+  async findPromoById(id: string, businessId: string): Promise<RotiseriaPromo | null> {
+    return this.repo.findPromoById(id, businessId);
   }
 
   // --- LOOKUP PARA PRICING ---

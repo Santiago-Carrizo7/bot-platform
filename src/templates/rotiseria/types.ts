@@ -24,6 +24,13 @@ export interface UpdatePromoData {
   name?: string;
   description?: string;
   price?: number;
+  isActive?: boolean;
+}
+
+export interface NoReconocidoItem {
+  texto: string;
+  cantidad?: number;
+  sugerencia?: string | null;
 }
 
 export interface SaleLineInput {
@@ -71,6 +78,18 @@ export interface CategorySummary {
   subtotal: number;
 }
 
+export interface PromoStatItem {
+  name: string;
+  quantity: number;
+  subtotal: number;
+}
+
+export interface PromosSummary {
+  promos: PromoStatItem[];
+  totalQuantity: number;
+  totalAmount: number;
+}
+
 export interface StatsSummary {
   periodLabel: string;
   periodKey: string;
@@ -81,4 +100,5 @@ export interface StatsSummary {
   top3Products: Array<{ name: string; quantity: number; subtotal: number }>;
   categories: CategorySummary[];
   productsByCategory: Record<string, Array<{ name: string; quantity: number; subtotal: number }>>;
+  promosSummary?: PromosSummary;
 }

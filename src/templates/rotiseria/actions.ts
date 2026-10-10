@@ -7,6 +7,7 @@ import {
   ConsultarEstadisticasInput,
   ConsultarMenuInput,
   ControlDiasInput,
+  CrearEditarPromoInput,
   CrearProductoInput,
   CrearPromoInput,
   EmptyInput,
@@ -17,6 +18,7 @@ import {
   type ConsultarEstadisticasInput as ConsultarEstadisticas,
   type ConsultarMenuInput as ConsultarMenu,
   type ControlDiasInput as ControlDias,
+  type CrearEditarPromoInput as CrearEditarPromo,
   type CrearProductoInput as CrearProducto,
   type CrearPromoInput as CrearPromo,
   type EmptyInput as Empty,
@@ -60,16 +62,48 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       nombre: '¿Qué producto o promo?',
       cantidad: '¿Qué cantidad?',
     },
-    confirmButtons: () => [
-      [
-        { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
-        { text: '❌ Cancelar', callbackData: 'confirm:no' },
-      ],
-      [
+    confirmButtons: (input: any) => {
+      const rows: InlineButton[][] = [];
+      const noRec = Array.isArray(input.no_reconocidos) ? input.no_reconocidos : [];
+
+      for (let idx = 0; idx < noRec.length; idx++) {
+        const item = noRec[idx];
+        const cant = item.cantidad || 1;
+        const texto = item.texto;
+        const sugerencia = item.sugerencia;
+        if (sugerencia && typeof sugerencia === 'string' && sugerencia.trim() !== '') {
+          rows.push([
+            {
+              text: `¿Era ${sugerencia}? (${cant} u.)`,
+              callbackData: `rotiseria:resolver:${encodeURIComponent(sugerencia)}:${cant}`,
+            },
+            {
+              text: `🗑️ Ignorar '${texto}'`,
+              callbackData: `rotiseria:ignorar:${idx}`,
+            },
+          ]);
+        }
+      }
+
+      const hasItems = Array.isArray(input.items) && input.items.length > 0;
+      if (hasItems) {
+        rows.push([
+          { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+          { text: '❌ Cancelar', callbackData: 'confirm:no' },
+        ]);
+      } else {
+        rows.push([
+          { text: '❌ Cancelar', callbackData: 'confirm:no' },
+        ]);
+      }
+
+      rows.push([
         { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
         { text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' },
-      ],
-    ],
+      ]);
+
+      return rows;
+    },
     summarize: async (i: any, ctx?: ActionContext) => {
       const items = Array.isArray(i.items) ? i.items : [];
       let breakdown: string[] | undefined;
@@ -90,7 +124,15 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       }
 
       const noReconocidos = Array.isArray(i.no_reconocidos)
-        ? i.no_reconocidos.map((x: any) => String(x.texto ?? x))
+        ? i.no_reconocidos.map((x: any) =>
+            typeof x === 'object' && x !== null
+              ? {
+                  texto: String(x.texto ?? ''),
+                  cantidad: Number(x.cantidad ?? 1),
+                  sugerencia: x.sugerencia !== undefined ? (x.sugerencia ? String(x.sugerencia) : null) : undefined,
+                }
+              : String(x)
+          )
         : undefined;
 
       return formatSaleSummary({
@@ -370,6 +412,14 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         }
       }
 
+      if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
+        lines.push('', '🎁 *Promos vendidas:*');
+        for (const pr of stats.promosSummary.promos) {
+          lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
+        }
+        lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
+      }
+
       const buttons = [
         [
           { text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${input.periodo || 'esta_semana'}` },
@@ -493,6 +543,91 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     },
   };
 
+  const crearEditarPromo: ActionDef<CrearEditarPromo> = {
+    name: 'crear_editar_promo',
+    description:
+      'Gestión integral de promociones de la rotisería: crear nuevos combos/promos, modificar precios, descripciones o pausar/activar.',
+    kind: 'read',
+    input: CrearEditarPromoInput,
+    handler: async (ctx, input) => {
+      const businessId = ctx.tenant.business.id;
+
+      // 1. Modificación directa si viene promo_id
+      if (input.promo_id) {
+        const promo = await products.findPromoById(input.promo_id, businessId);
+        if (!promo) {
+          throw new AppError('Promo no encontrada.');
+        }
+        if (input.precio !== undefined) {
+          const updated = await products.updatePromo(promo.id, businessId, { price: input.precio });
+          return {
+            reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.price))}*.`,
+            audit: {
+              action: 'promo.price_updated',
+              entityType: 'rotiseria_promo',
+              entityId: updated.id,
+              metadata: { price: Number(updated.price) },
+            },
+          };
+        }
+        if (input.descripcion !== undefined) {
+          const updated = await products.updatePromo(promo.id, businessId, { description: input.descripcion });
+          return {
+            reply: `✅ Descripción de *${esc(updated.name)}* actualizada: ${updated.description ? `_${esc(updated.description)}_` : '_(Sin descripción)_'}.`,
+            audit: {
+              action: 'promo.updated',
+              entityType: 'rotiseria_promo',
+              entityId: updated.id,
+              metadata: { description: updated.description },
+            },
+          };
+        }
+      }
+
+      // 2. Creación directa si viene nombre y precio
+      if (input.nombre && input.precio) {
+        const created = await products.createPromo({
+          businessId,
+          name: input.nombre,
+          price: input.precio,
+          description: input.descripcion,
+        });
+        return {
+          reply: `✅ Promo *${esc(created.name)}* creada por *${formatCurrency(Number(created.price))}*.`,
+          audit: {
+            action: 'promo.created',
+            entityType: 'rotiseria_promo',
+            entityId: created.id,
+            metadata: { name: created.name, price: Number(created.price) },
+          },
+        };
+      }
+
+      // 3. Menú interactivo de gestión de promos
+      const promoList = await products.listPromos(businessId, { includeInactive: true });
+      const rows: InlineButton[][] = [
+        [{ text: '➕ Crear nueva promo', callbackData: 'rotiseria:promo:nueva' }],
+      ];
+
+      for (const pr of promoList) {
+        const statusIcon = pr.isActive ? '🟢' : '⏸️';
+        rows.push([
+          {
+            text: `${statusIcon} ${pr.name} (${formatCurrency(Number(pr.price))})`,
+            callbackData: `rotiseria:promo:editar:${pr.id}`,
+          },
+        ]);
+      }
+
+      rows.push([{ text: '❌ Cancelar', callbackData: 'rotiseria:promo:cancelar' }]);
+
+      return {
+        reply: '🎁 *Gestión de Promociones*\n\nSeleccioná una promo para editar o creá una nueva:',
+        inlineKeyboard: rows,
+      };
+    },
+  };
+
   const consultarMenu: ActionDef<ConsultarMenu> = {
     name: 'consultar_menu',
     description: 'Muestra la lista de comidas, empanadas, pizzas y promos con sus precios vigentes. Dato opcional: categoria.',
@@ -550,18 +685,33 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     kind: 'read',
     input: HistorialVentasInput,
     handler: async (ctx, input) => {
-      const recent = await sales.listRecentSales(ctx.tenant.business.id, input.limite);
+      const limit = input.limite || 5;
+      const recent = await sales.listRecentSales(ctx.tenant.business.id, limit);
       if (recent.length === 0) {
         return { reply: 'Todavía no hay ventas registradas.' };
       }
 
+      const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
       const blocks = recent.map((sale) => {
+        const num = formatSaleNumber(sale.id);
         const status = sale.isCancelled ? ' ❌ *[ANULADA]*' : '';
         const items = sale.items.map((it) => `  • ${formatQty(Number(it.quantity))}x ${esc(it.name)}`).join('\n');
-        return `🛒 *${formatCurrency(Number(sale.total))}* — _${formatDateTime(sale.createdAt)}_${status}\n${items}`;
+        return `🛒 *Venta #${num}* (*${formatCurrency(Number(sale.total))}*) — _${formatRealDateWithDay(sale.shiftDate)}_ (${formatTimeOnly(sale.createdAt, tz)} hs)${status}\n${items}`;
       });
 
-      return { reply: ['🧾 *Últimas ventas:*', '', ...blocks].join('\n') };
+      const buttons: InlineButton[][] = [
+        [
+          limit === 5
+            ? { text: '📄 Ver últimas 10 ventas', callbackData: 'rotiseria:historial:10' }
+            : { text: '📄 Ver últimas 5 ventas', callbackData: 'rotiseria:historial:5' },
+          { text: '❌ Cerrar', callbackData: 'rotiseria:historial:cerrar' },
+        ],
+      ];
+
+      return {
+        reply: [`🧾 *Últimas ${recent.length} ventas:*`, '', ...blocks].join('\n'),
+        inlineKeyboard: buttons,
+      };
     },
   };
 
@@ -574,6 +724,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     cambiarPrecio,
     crearProducto,
     crearPromo,
+    crearEditarPromo,
     consultarMenu,
     consultarVentas,
   ] as unknown as ActionDef<unknown>[];
