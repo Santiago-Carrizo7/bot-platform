@@ -230,7 +230,6 @@ model StockMovement {
   businessId  String
   business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   productId   String?
-  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   productName String
   quantity    Decimal  @db.Decimal(12, 2)
   reason      String
@@ -297,9 +296,8 @@ model RotiseriaSale {
   updatedAt         DateTime            @updatedAt
   items             RotiseriaSaleItem[]
 
-  @@index([businessId, shiftDate])
+  @@index([businessId, shiftDate, isCancelled])
   @@index([businessId, createdAt])
-  @@index([businessId, isCancelled])
   @@map("rotiseria_sales")
 }
 
@@ -312,13 +310,15 @@ model RotiseriaSaleItem {
   promoId   String?
   promo     RotiseriaPromo?   @relation(fields: [promoId], references: [id], onDelete: SetNull)
   name      String
+  category  String            @default("general")
   quantity  Decimal           @db.Decimal(12, 2)
   unitPrice Decimal           @db.Decimal(12, 2)
   subtotal  Decimal           @db.Decimal(12, 2)
 
   @@index([saleId])
   @@index([productId])
-  @@index([promoId])
+  @@index([category])
   @@map("rotiseria_sale_items")
 }
+
 

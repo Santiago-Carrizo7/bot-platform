@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RotiseriaProduct, RotiseriaPromo, RotiseriaSale, RotiseriaSaleItem } from '@prisma/client';
 import { handleCallback, handleText, type FlowDeps, type ResolutionInfo } from '../src/core/messaging/flow.js';
-import type { ActionDef, TemplateDefinition } from '../src/core/actions/registry.js';
+import type { ActionDef } from '../src/core/actions/registry.js';
 import type { ActionInterpreter } from '../src/core/ai/interpreter.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
 import { ProductService } from '../src/templates/rotiseria/domain/product.service.js';
 import { SaleService } from '../src/templates/rotiseria/domain/sale.service.js';
-import { calculatePricing } from '../src/templates/rotiseria/domain/pricing.js';
+import { StatsService } from '../src/templates/rotiseria/domain/stats.service.js';
 import { getShiftDate, formatShiftLabel } from '../src/templates/rotiseria/domain/shift.js';
-import { buildRotiseriaActions } from '../src/templates/rotiseria/actions.js';
+import { formatRealDateWithDay } from '../src/templates/rotiseria/format.js';
+import { applyModification, parseModificationText } from '../src/templates/rotiseria/domain/modification.js';
+import { createRotiseriaTemplate } from '../src/templates/rotiseria/index.js';
 import type { ProductRepository } from '../src/templates/rotiseria/persistence/product.repo.js';
 import type { SaleRepository, RotiseriaSaleWithItems } from '../src/templates/rotiseria/persistence/sale.repo.js';
 import {
@@ -157,7 +159,7 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
     userId: string,
     total: number,
     shiftDate: Date,
-    lines: Array<{ productId?: string | null; promoId?: string | null; name: string; quantity: number; unitPrice: number; subtotal: number }>,
+    lines: Array<{ productId?: string | null; promoId?: string | null; name: string; category?: string; quantity: number; unitPrice: number; subtotal: number }>,
     note?: string
   ): Promise<RotiseriaSaleWithItems> {
     const saleId = nid('sale');
@@ -167,6 +169,7 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
       productId: l.productId ?? null,
       promoId: l.promoId ?? null,
       name: l.name,
+      category: l.category ?? 'general',
       quantity: l.quantity as unknown as RotiseriaSaleItem['quantity'],
       unitPrice: l.unitPrice as unknown as RotiseriaSaleItem['unitPrice'],
       subtotal: l.subtotal as unknown as RotiseriaSaleItem['subtotal'],
@@ -219,8 +222,9 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
   }
 
   async findByShiftDate(businessId: string, shiftDate: Date) {
+    const targetIso = shiftDate.toISOString().slice(0, 10);
     return this.s.sales.filter(
-      (s) => s.businessId === businessId && s.shiftDate.getTime() === shiftDate.getTime()
+      (s) => s.businessId === businessId && s.shiftDate.toISOString().slice(0, 10) === targetIso
     );
   }
 
@@ -229,14 +233,19 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
       (s) => s.businessId === businessId && s.shiftDate >= start && s.shiftDate <= end
     );
   }
+
+  async findAll(businessId: string) {
+    return this.s.sales.filter((s) => s.businessId === businessId);
+  }
 }
 
 function setupServices(store = newStore()) {
   const productRepo = new FakeRotiseriaProductRepo(store) as unknown as ProductRepository;
   const saleRepo = new FakeRotiseriaSaleRepo(store) as unknown as SaleRepository;
   const products = new ProductService(productRepo);
-  const sales = new SaleService(saleRepo, products);
-  return { products, sales, store };
+  const stats = new StatsService(saleRepo);
+  const sales = new SaleService(saleRepo, products, stats);
+  return { products, sales, stats, store };
 }
 
 describe('rotiseria: cálculo de docenas y promos', () => {
@@ -255,7 +264,6 @@ describe('rotiseria: cálculo de docenas y promos', () => {
     await products.createProduct({ businessId: BIZ, name: 'Carne', priceUnit: 1500, priceDozen: 15000 });
 
     const result = await sales.createSale(BIZ, ACTOR, [{ name: 'Carne', quantity: 15 }]);
-    // 1 docena (15000) + 3 unidades (3 * 1500 = 4500) = 19500
     expect(Number(result.sale.total)).toBe(19500);
     expect(result.pricing.breakdown).toEqual(
       expect.arrayContaining([
@@ -286,8 +294,34 @@ describe('rotiseria: cálculo de docenas y promos', () => {
       { name: 'Carne', quantity: 8 },
       { name: 'Jamón y Queso', quantity: 6 },
     ]);
-    // 1 docena ($15000) + 2 remanente ($3000) = $18000
     expect(Number(result.sale.total)).toBe(18000);
+  });
+
+  it('sabores con distintas tarifas de docena calculan sus docenas por separado sin mezclarse erróneamente', async () => {
+    const { products, sales } = setupServices();
+    // Clásicas: docena 15.000 ($1500 unit)
+    await products.createProduct({ businessId: BIZ, name: 'Carne', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' });
+    await products.createProduct({ businessId: BIZ, name: 'Pollo', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' });
+    // Especiales: docena 22.000 ($2200 unit)
+    await products.createProduct({ businessId: BIZ, name: 'Salmón', priceUnit: 2200, priceDozen: 22000, category: 'empanadas' });
+
+    // 6 Carne + 6 Pollo = 1 docena clásica ($15.000)
+    // 14 Salmón = 1 docena especial ($22.000) + 2 Salmón sueltas (2 * 2200 = $4.400)
+    // Total = 15.000 + 22.000 + 4.400 = 41.400
+    const result = await sales.createSale(BIZ, ACTOR, [
+      { name: 'Carne', quantity: 6 },
+      { name: 'Pollo', quantity: 6 },
+      { name: 'Salmón', quantity: 14 },
+    ]);
+
+    expect(Number(result.sale.total)).toBe(41400);
+    expect(result.pricing.breakdown).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('1x Docena (6 Carne, 6 Pollo) — *$ 15.000*'),
+        expect.stringContaining('1x Docena (12 Salmón) — *$ 22.000*'),
+        expect.stringContaining('2x *Salmón* (sueltas) — *$ 4.400*'),
+      ])
+    );
   });
 
   it('productos regulares sin docena (pizzas, sándwiches) se calculan a precio unitario', async () => {
@@ -299,7 +333,6 @@ describe('rotiseria: cálculo de docenas y promos', () => {
       { name: 'Pizza Muzzarella', quantity: 2 },
       { name: 'Sándwich Milanesa', quantity: 1 },
     ]);
-    // 2 * 9000 + 8500 = 26500
     expect(Number(result.sale.total)).toBe(26500);
   });
 
@@ -312,29 +345,30 @@ describe('rotiseria: cálculo de docenas y promos', () => {
       { name: 'Promo 1', quantity: 1 },
       { name: 'Carne', quantity: 12 },
     ]);
-    // 16000 + 15000 = 31000
     expect(Number(result.sale.total)).toBe(31000);
   });
 });
 
 describe('rotiseria: jornada gastronómica (turno operativo)', () => {
   it('ventas de noche (23:30 hs) computan a la fecha del día', () => {
-    // 2026-10-08 23:30 hs en Argentina (UTC-3 es 2026-10-09 02:30 UTC)
     const nightTime = new Date('2026-10-09T02:30:00Z');
     const shift = getShiftDate(nightTime);
     expect(shift.getUTCDate()).toBe(8);
   });
 
-  it('ventas de madrugada (00:00 a 04:59 AM) computan al día calendario anterior', () => {
-    // 2026-10-09 02:15 AM en Argentina (UTC-3 es 2026-10-09 05:15 UTC)
-    const earlyMorning = new Date('2026-10-09T05:15:00Z');
+  it('ventas de madrugada (00:00 a 04:59 AM) computan al día calendario anterior con fecha real', () => {
+    // 02:30 AM en Argentina (05:30 UTC) del 9 de octubre -> computa al 8 de octubre
+    const earlyMorning = new Date('2026-10-09T05:30:00Z');
     const shift = getShiftDate(earlyMorning);
-    // Debe computar al turno de "anoche": 08 de octubre
     expect(shift.getUTCDate()).toBe(8);
+
+    const label = formatShiftLabel(shift);
+    expect(label).toBe('Turno del Jueves 08/10/2026');
+    expect(label).not.toContain('ayer');
+    expect(label).not.toContain('hoy');
   });
 
   it('ventas a partir de las 05:00 AM computan al día calendario actual', () => {
-    // 2026-10-09 05:01 AM en Argentina (UTC-3 es 2026-10-09 08:01 UTC)
     const morningTime = new Date('2026-10-09T08:01:00Z');
     const shift = getShiftDate(morningTime);
     expect(shift.getUTCDate()).toBe(9);
@@ -344,9 +378,7 @@ describe('rotiseria: jornada gastronómica (turno operativo)', () => {
     const { products, sales } = setupServices();
     await products.createProduct({ businessId: BIZ, name: 'Pizza', priceUnit: 8000 });
 
-    // Venta a las 23:00 del día 8
     await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 1 }], undefined, new Date('2026-10-09T02:00:00Z'));
-    // Venta a las 02:00 AM del día 9 (computa a la noche del 8)
     await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 1 }], undefined, new Date('2026-10-09T05:00:00Z'));
 
     const summary = await sales.getDaySummary(BIZ, undefined, new Date('2026-10-09T05:30:00Z'));
@@ -365,12 +397,10 @@ describe('rotiseria: anulación lógica y reportes', () => {
 
     expect(store.sales).toHaveLength(2);
 
-    // Anular s2
     const cancelled = await sales.cancelSale(BIZ, ACTOR, s2.sale.id, 'Cliente canceló el pedido');
     expect(cancelled.isCancelled).toBe(true);
     expect(cancelled.cancelReason).toBe('Cliente canceló el pedido');
 
-    // Reporte de caja solo debe sumar s1
     const summary = await sales.getDaySummary(BIZ);
     expect(summary.salesCount).toBe(1);
     expect(summary.salesTotal).toBe(8000);
@@ -385,7 +415,6 @@ describe('rotiseria: anulación lógica y reportes', () => {
     await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 1 }]);
     const s2 = await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 2 }]);
 
-    // Anular sin pasar ID
     const cancelled = await sales.cancelSale(BIZ, ACTOR);
     expect(cancelled.id).toBe(s2.sale.id);
     expect(cancelled.isCancelled).toBe(true);
@@ -402,6 +431,105 @@ describe('rotiseria: anulación lógica y reportes', () => {
   });
 });
 
+describe('rotiseria: modificación incremental (applyModification y parseModificationText)', () => {
+  it('aplica sumas, reducciones, límites, reemplazos y eliminaciones a un pedido', () => {
+    const initial = [
+      { name: 'Empanada de Carne', quantity: 12 },
+      { name: 'Pizza Muzzarella', quantity: 1 },
+    ];
+
+    // 1. Sumar
+    const p1 = applyModification(initial, { add: [{ name: 'Empanada de Pollo', quantity: 2 }] });
+    expect(p1).toHaveLength(3);
+    expect(p1.find((p) => p.name === 'Empanada de Pollo')?.quantity).toBe(2);
+
+    // 2. Reducir cantidad (bajale 2 a carne)
+    const p2 = applyModification(p1, { reduce: [{ name: 'carne', quantity: 2 }] });
+    expect(p2.find((p) => p.name === 'Empanada de Carne')?.quantity).toBe(10);
+
+    // 3. Fijar cantidad exacta (dejá solo 6 de carne)
+    const p3 = applyModification(p2, { setQuantity: [{ name: 'carne', quantity: 6 }] });
+    expect(p3.find((p) => p.name === 'Empanada de Carne')?.quantity).toBe(6);
+
+    // 4. Reemplazo con transferencia de cantidad (cambiá carne por jamón y queso)
+    const p4 = applyModification(p3, { remove: ['carne'], add: [{ name: 'Jamón y Queso', quantity: 6 }] });
+    expect(p4.some((p) => p.name.includes('Carne'))).toBe(false);
+    expect(p4.find((p) => p.name === 'Jamón y Queso')?.quantity).toBe(6);
+
+    // 5. Eliminar completamente (sacá la pizza)
+    const p5 = applyModification(p4, { remove: ['pizza'] });
+    expect(p5.some((p) => p.name.includes('Pizza'))).toBe(false);
+    expect(p5).toHaveLength(2); // Jamón y Queso (6) + Pollo (2)
+  });
+
+  it('parseModificationText detecta correctamente órdenes de corrección con modismos gastronómicos', () => {
+    // Suma
+    const p1 = parseModificationText('sumale 2 de pollo');
+    expect(p1?.add).toEqual([{ name: 'pollo', quantity: 2 }]);
+
+    // Eliminación total
+    const p2 = parseModificationText('sacá la pizza');
+    expect(p2?.remove).toEqual(['pizza']);
+
+    const p2b = parseModificationText('sin empanadas');
+    expect(p2b?.remove).toEqual(['empanadas']);
+
+    const p2c = parseModificationText('eliminá la muzza');
+    expect(p2c?.remove).toEqual(['muzza']);
+
+    // Reducción
+    const p3 = parseModificationText('bajale 2 a las empanadas');
+    expect(p3?.reduce).toEqual([{ name: 'empanadas', quantity: 2 }]);
+
+    // Cantidad fija
+    const p4 = parseModificationText('dejá solo 6 de carne');
+    expect(p4?.setQuantity).toEqual([{ name: 'carne', quantity: 6 }]);
+
+    // Reemplazo
+    const p5 = parseModificationText('cambiá las de carne por pollo');
+    expect(p5?.remove).toEqual(['carne']);
+    expect(p5?.add).toEqual([{ name: 'pollo', quantity: 1 }]);
+
+    const p6 = parseModificationText('cambiá 6 de carne por pollo');
+    expect(p6?.remove).toEqual(['carne']);
+    expect(p6?.add).toEqual([{ name: 'pollo', quantity: 6 }]);
+  });
+});
+
+describe('rotiseria: estadísticas avanzadas con drill-down', () => {
+  it('calcula semana_cerrada (lunes a domingo) y excluye ventas anuladas', async () => {
+    const { products, sales, stats } = setupServices();
+    await products.createProduct({ businessId: BIZ, name: 'Empanada Carne', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' });
+    await products.createProduct({ businessId: BIZ, name: 'Pizza Muzza', priceUnit: 9000, category: 'pizzas' });
+
+    // Jueves 08/10/2026. Semana lunes 05/10 a domingo 11/10
+    const thuDate = new Date('2026-10-08T15:00:00Z');
+    const monDate = new Date('2026-10-05T15:00:00Z');
+    const prevSunday = new Date('2026-10-04T15:00:00Z');
+
+    // Venta lunes 5/10 (en la semana)
+    await sales.createSale(BIZ, ACTOR, [{ name: 'Empanada Carne', quantity: 12 }], undefined, monDate);
+    // Venta jueves 8/10 (en la semana)
+    const sThu = await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza Muzza', quantity: 1 }], undefined, thuDate);
+    // Venta domingo 4/10 (fuera de la semana)
+    await sales.createSale(BIZ, ACTOR, [{ name: 'Pizza Muzza', quantity: 2 }], undefined, prevSunday);
+
+    // Anular venta del jueves
+    await sales.cancelSale(BIZ, ACTOR, sThu.sale.id, 'Error de comanda');
+
+    const summary = await stats.getStats(BIZ, 'semana_cerrada', thuDate);
+    // Solo debe sumar la venta activa del lunes
+    expect(summary.salesTotal).toBe(15000);
+    expect(summary.salesCount).toBe(1);
+    expect(summary.cancelledCount).toBe(1);
+    expect(summary.top3Products).toHaveLength(1);
+    expect(summary.top3Products[0].name).toBe('Empanada Carne');
+    expect(summary.categories[0].category).toBe('empanadas');
+    expect(summary.productsByCategory['empanadas']).toHaveLength(1);
+    expect(summary.productsByCategory['empanadas'][0].name).toBe('Empanada Carne');
+  });
+});
+
 describe('rotiseria: catálogo base idempotente', () => {
   it('seedBaseCatalog es idempotente y no duplica productos ni promos', async () => {
     const { products, store } = setupServices();
@@ -410,7 +538,6 @@ describe('rotiseria: catálogo base idempotente', () => {
     expect(store.products).toHaveLength(5);
     expect(store.promos).toHaveLength(1);
 
-    // Segunda ejecución
     await products.seedBaseCatalog(BIZ);
     expect(store.products).toHaveLength(5);
     expect(store.promos).toHaveLength(1);
@@ -421,29 +548,12 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
   function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
     const store = newStore();
     const { products, sales } = setupServices(store);
-    const actions = buildRotiseriaActions({ products, sales });
-    const template: TemplateDefinition = {
-      id: 'rotiseria',
-      label: 'Rotisería / Sándwiches y Empanadas',
-      welcome: () => 'Bienvenido a la rotisería',
-      systemPrompt: () => 'sys',
-      actions,
-      commands: [
-        { command: 'venta', action: 'registrar_venta' },
-        { command: 'dias', action: 'control_dias' },
-        { command: 'stats', action: 'consultar_estadisticas' },
-        { command: 'anular', action: 'anular_venta' },
-        { command: 'precio', action: 'cambiar_precio' },
-      ],
-      replyMenu: [
-        { label: '📝 Registrar venta', action: 'registrar_venta' },
-        { label: '📅 Control de días', action: 'control_dias' },
-        { label: '📈 Estadísticas', action: 'consultar_estadisticas' },
-        { label: '↩️ Anular venta', action: 'anular_venta' },
-        { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
-      ],
-      menu: [],
-    };
+    const bundle = createRotiseriaTemplate({
+      db: {} as any,
+      products,
+      sales,
+    });
+    const template = bundle.template;
 
     const businesses = new FakeBusinessRepo();
     const membershipRepo = new FakeMembershipRepo(businesses);
@@ -485,10 +595,10 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     };
     const tenant: TenantContext = { business, membership, user, botTemplateId: 'rotiseria' };
     const resolution: ResolutionInfo = { user, tenant, justJoined: false, memberships: [], needsInvitation: false };
-    return { deps, resolution, auditRepo, store, products, sales };
+    return { deps, resolution, auditRepo, store, products, sales, conversations, template };
   }
 
-  it('freestyle "1 docena de carne y una muzza" → summarize pide confirmación → yes crea venta y audita', async () => {
+  it('freestyle "1 docena de carne y una muzza" → summarize pide confirmación con 4 botones → yes crea venta y audita', async () => {
     const f = setupFlow([
       {
         action: 'registrar_venta',
@@ -513,6 +623,17 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     expect(ask.text).toContain('¿Confirmar venta?');
     expect(ask.text).toContain('Empanada de Carne');
     expect(ask.text).toContain('Pizza Muzzarella');
+    // Verifica los 4 botones inline exactos del spec
+    expect(ask.inlineKeyboard).toEqual([
+      [
+        { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+        { text: '❌ Cancelar', callbackData: 'confirm:no' },
+      ],
+      [
+        { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+        { text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' },
+      ],
+    ]);
 
     const confirmed = await handleCallback(f.deps, {
       resolution: f.resolution,
@@ -520,13 +641,168 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       now: NOW,
     });
 
-    expect(confirmed.text).toContain('Venta registrada por *$ 24.000*');
+    expect(confirmed.text).toContain('✅ Venta #');
+    expect(confirmed.text).toContain('Total cobrado: *$ 24.000*');
+    expect(confirmed.text).toContain('Fecha del turno: *Jueves 08/10/2026*');
     expect(f.auditRepo.entries).toHaveLength(1);
     expect(f.auditRepo.entries[0]).toMatchObject({
       action: 'sale.created',
       entityType: 'rotiseria_sale',
       actorUserId: ACTOR,
     });
+  });
+
+  it('ciclo de corrección: rotiseria:modificar pone en COLLECTING y mensaje posterior actualiza el borrador', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+    // 1. Mensaje inicial
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne',
+      now: NOW,
+    });
+
+    // 2. Click en "Modificar pedido"
+    const modAsk = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:modificar',
+      now: NOW,
+    });
+
+    expect(modAsk.text).toContain('Detalle del pedido:');
+    expect(modAsk.text).toContain('¿Qué modificamos o agregamos?');
+
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv?.phase).toBe('COLLECTING');
+    expect(conv?.data._modifying).toBe(true);
+
+    // 3. Modificación directa determinística: "sumale 2 de carne"
+    const updatedAsk = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'sumale 2 de carne',
+      now: NOW,
+    });
+
+    expect(updatedAsk.text).toContain('Pedido actualizado');
+    expect(updatedAsk.text).toContain('1x Docena (12 Empanada de Carne)');
+    expect(updatedAsk.text).toContain('2x *Empanada de Carne* (sueltas)');
+    expect(updatedAsk.text).toContain('$ 18.000');
+    expect(updatedAsk.inlineKeyboard).toBeDefined();
+
+    // 4. Confirmar venta modificada
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    // 1 docena (15000) + 2 remanente (3000) = 18000
+    expect(confirmed.text).toContain('Total cobrado: *$ 18.000*');
+  });
+
+  it('cambiar fecha: rotiseria:fecha muestra selector y rotiseria:setdate actualiza shiftDate', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Pizza Muzzarella', cantidad: 1 }],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza Muzzarella', priceUnit: 9000 });
+
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'una muzza',
+      now: NOW,
+    });
+
+    // 1. Click en Cambiar fecha
+    const dateMenu = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:fecha',
+      now: NOW,
+    });
+
+    expect(dateMenu.text).toContain('Seleccioná la fecha operativa');
+    expect(dateMenu.inlineKeyboard).toBeDefined();
+
+    // 2. Elegir fecha de ayer
+    const picked = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:setdate:2026-10-07',
+      now: NOW,
+    });
+
+    expect(picked.text).toContain('2026');
+    expect(picked.text).toContain('Miércoles 07/10/2026');
+
+    // 3. Confirmar venta con fecha elegida
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('✅ Venta #');
+    expect(confirmed.text).toContain('Total cobrado: *$ 9.000*');
+    const createdSale = f.store.sales[0];
+    expect(createdSale.shiftDate.toISOString()).toContain('2026-10-07');
+  });
+
+  it('navegación de estadísticas por 3 niveles: menú -> período -> categorías -> detalle', async () => {
+    const f = setupFlow([]);
+    await f.products.createProduct({ businessId: BIZ, name: 'Carne', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' });
+    await f.products.createProduct({ businessId: BIZ, name: 'Muzza', priceUnit: 9000, category: 'pizzas' });
+
+    await f.sales.createSale(BIZ, ACTOR, [{ name: 'Carne', quantity: 12 }], undefined, NOW);
+    await f.sales.createSale(BIZ, ACTOR, [{ name: 'Muzza', quantity: 1 }], undefined, NOW);
+
+    // Nivel 1: Menú selector
+    const l1 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:stats_menu',
+      now: NOW,
+    });
+    expect(l1.text).toContain('Estadísticas del Negocio');
+    expect(l1.inlineKeyboard).toBeDefined();
+
+    // Nivel 2: Ver período esta_semana
+    const l2 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:stats:esta_semana',
+      now: NOW,
+    });
+    expect(l2.text).toContain('Facturación neta: *$ 24.000*');
+    expect(l2.text).toContain('Top 3 productos más vendidos');
+    expect(l2.text).toContain('Desglose por categorías');
+
+    // Nivel 3: Selector de categorías
+    const l3Menu = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:catmenu:esta_semana',
+      now: NOW,
+    });
+    expect(l3Menu.text).toContain('Categorías vendidas');
+
+    // Nivel 3: Detalle de categoría empanadas
+    const l3Detail = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:catdetail:esta_semana:empanadas',
+      now: NOW,
+    });
+    expect(l3Detail.text).toContain('Detalle: Empanadas');
+    expect(l3Detail.text).toContain('Carne');
   });
 
   it('comando /dias responde directamente sin pedir confirmación', async () => {
@@ -538,14 +814,15 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     });
 
     expect(reply.text).toContain('Control de días');
-    expect(reply.text).toContain('0 pedido');
+    expect(reply.text).toContain('Últimos 7 turnos');
+    expect(reply.text).toContain('Sin ventas registradas');
   });
 
-  it('anular venta mediante comando y confirmación', async () => {
+  it('anular venta mediante comando y confirmación interactiva', async () => {
     const f = setupFlow([
       {
         action: 'anular_venta',
-        params: { motivo: 'Error de tipeo' },
+        params: {},
       },
     ]);
 
@@ -558,16 +835,371 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       now: NOW,
     });
 
-    expect(ask.text).toContain('¿Confirmar anulación de venta?');
-    expect(ask.text).toContain('última venta activa');
+    expect(ask.text).toContain('¿Qué venta deseás anular?');
+    expect(ask.inlineKeyboard).toEqual([
+      [{ text: '↩️ Anular última venta', callbackData: 'rotiseria:anular_ultima' }],
+      [{ text: '📋 Elegir de las últimas 5 ventas', callbackData: 'rotiseria:anular_listar' }],
+      [{ text: '❌ Cancelar', callbackData: 'rotiseria:anular_cancelar' }],
+    ]);
+
+    const askConfirm = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:anular_ultima',
+      now: NOW,
+    });
+
+    expect(askConfirm.text).toContain('¿Confirmás la anulación de esta venta?');
+    expect(askConfirm.text).toContain('Pizza');
+    expect(askConfirm.text).toContain('$ 5.000');
+
+    const confirmCb = askConfirm.inlineKeyboard?.[0]?.[0]?.callbackData;
+    expect(confirmCb).toMatch(/^rotiseria:anular_confirmar:/);
 
     const confirmed = await handleCallback(f.deps, {
       resolution: f.resolution,
-      data: 'confirm:yes',
+      data: confirmCb!,
       now: NOW,
     });
 
     expect(confirmed.text).toContain('anulada correctamente');
     expect(f.auditRepo.entries.some((e) => e.action === 'sale.cancelled')).toBe(true);
+  });
+
+  it('modificación interactiva: sacar un producto del pedido ("sacá la pizza") recalcula subtotales y comanda', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [
+            { nombre: 'Empanada de Carne', cantidad: 12 },
+            { nombre: 'Pizza Muzzarella', cantidad: 1 },
+          ],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza Muzzarella', priceUnit: 9000 });
+
+    // 1. Mensaje inicial: empanadas + pizza = $24.000
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne y una muzza',
+      now: NOW,
+    });
+
+    // 2. Click en Modificar pedido
+    const modAsk = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:modificar',
+      now: NOW,
+    });
+    expect(modAsk.text).toContain('Detalle del pedido:');
+    expect(modAsk.text).toContain('¿Qué modificamos o agregamos?');
+
+    // 3. Modificación: "sacá la pizza"
+    const modUpdated = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'sacá la pizza',
+      now: NOW,
+    });
+
+    expect(modUpdated.text).toContain('Pedido actualizado');
+    expect(modUpdated.text).toContain('1x Docena (12 Empanada de Carne)');
+    expect(modUpdated.text).not.toContain('Pizza Muzzarella');
+    expect(modUpdated.text).toContain('$ 15.000');
+
+    // 4. Confirmar venta modificada sin pizza
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('Total cobrado: *$ 15.000*');
+    expect(confirmed.text).not.toContain('Pizza Muzzarella');
+  });
+
+  it('no_reconocidos: 100% de productos no reconocidos aborta sin crear borrador', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [],
+          no_reconocidos: [{ texto: 'chicle bazooka', cantidad: 2 }],
+        },
+      },
+    ]);
+
+    const reply = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'dos chicles bazooka',
+      now: NOW,
+    });
+
+    expect(reply.text).toContain('⚠️ No reconocí estos productos en la carta:');
+    expect(reply.text).toContain('• chicle bazooka');
+
+    // El borrador debe estar limpio (sin draft pendiente)
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('no_reconocidos: productos válidos mezclados con no reconocidos muestra viñeta de advertencia', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Pizza Muzzarella', cantidad: 1 }],
+          no_reconocidos: [{ texto: 'un marroc', cantidad: 1 }],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza Muzzarella', priceUnit: 9000 });
+
+    const reply = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'una muzza y un marroc',
+      now: NOW,
+    });
+
+    expect(reply.text).toContain('¿Confirmar venta?');
+    expect(reply.text).toContain('Pizza Muzzarella');
+    expect(reply.text).toContain('⚠️ No reconocí *un marroc* (no fue sumado al pedido)');
+    expect(reply.inlineKeyboard).toBeDefined();
+  });
+
+  it('cambiar fecha: selector dinámico con Turno actual y Ayer, y rechazo de fechas futuras', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Pizza Muzzarella', cantidad: 1 }],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza Muzzarella', priceUnit: 9000 });
+
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'una muzza',
+      now: NOW,
+    });
+
+    // 1. Abrir selector de fecha
+    const dateMenu = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:fecha',
+      now: NOW,
+    });
+
+    expect(dateMenu.text).toContain('Seleccioná la fecha operativa');
+    const flatButtons = dateMenu.inlineKeyboard?.flat().map((b) => b.text) ?? [];
+    expect(flatButtons.some((b) => b.includes('(Turno actual)'))).toBe(true);
+    expect(flatButtons.some((b) => b.includes('(Ayer)'))).toBe(true);
+
+    // 2. Click en otra fecha manual
+    const askDate = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:askdate',
+      now: NOW,
+    });
+    expect(askDate.text).toContain('Escribí la fecha operativa');
+
+    // 3. Enviar fecha futura (debe rebotar)
+    const futureErr = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '15/10/2026',
+      now: NOW,
+    });
+    expect(futureErr.text).toContain('⚠️ La fecha no puede ser futura');
+
+    // 4. Enviar fecha pasada válida
+    const validPast = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '07/10/2026',
+      now: NOW,
+    });
+    expect(validPast.text).toContain('Miércoles 07/10/2026');
+  });
+
+  it('cambio de precio guiado por categorías hasta actualización en base de datos y auditoría', async () => {
+    const f = setupFlow([]);
+    const prod = await f.products.createProduct({
+      businessId: BIZ,
+      name: 'Empanada Salteña',
+      priceUnit: 1400,
+      priceDozen: 14000,
+      category: 'empanadas',
+    });
+
+    // 1. Iniciar cambio de precio
+    const reply1 = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/precio',
+      now: NOW,
+    });
+    expect(reply1.text).toContain('Cambiar Precios');
+    const catCb = reply1.inlineKeyboard?.[0]?.[0]?.callbackData;
+    expect(catCb).toBe('rotiseria:price_cat:empanadas');
+
+    // 2. Seleccionar categoría empanadas
+    const reply2 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: catCb!,
+      now: NOW,
+    });
+    expect(reply2.text).toContain('el producto a modificar');
+    const prodCb = reply2.inlineKeyboard?.[0]?.[0]?.callbackData;
+    expect(prodCb).toBe(`rotiseria:price_prod:${prod.id}`);
+
+    // 3. Seleccionar producto
+    const reply3 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: prodCb!,
+      now: NOW,
+    });
+    expect(reply3.text).toContain('Ingresá el nuevo precio');
+
+    // 4. Escribir nuevos precios "1600 / 17000"
+    const updateResult = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1600 / 17000',
+      now: NOW,
+    });
+    expect(updateResult.text).toContain('actualizado a');
+    expect(updateResult.text).toContain('$ 1.600');
+    expect(updateResult.text).toContain('$ 17.000');
+
+    // Verificar en store
+    const updatedProd = await f.products.findProductByName(BIZ, 'Empanada Salteña');
+    expect(Number(updatedProd?.priceUnit)).toBe(1600);
+    expect(Number(updatedProd?.priceDozen)).toBe(17000);
+
+    // Verificar auditoría
+    expect(f.auditRepo.entries.some((e) => e.action === 'product.price_updated')).toBe(true);
+  });
+
+  it('control de días semáforo y detalle comanda por comanda interactivo', async () => {
+    const f = setupFlow([]);
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza', priceUnit: 8000 });
+    await f.sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 1 }], undefined, NOW);
+
+    // 1. Ver control de días
+    const reply = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/dias',
+      now: NOW,
+    });
+
+    expect(reply.text).toContain('🟢 Jueves 08/10/2026: 1 ventas — *$ 8.000*');
+    const viewCb = reply.inlineKeyboard?.[0]?.[0]?.callbackData;
+    expect(viewCb).toBe('rotiseria:ver_dia:2026-10-08');
+
+    // 2. Click en ver comanda por comanda de ese día
+    const detail = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: viewCb!,
+      now: NOW,
+    });
+
+    expect(detail.text).toContain('Detalle del Jueves 08/10/2026');
+    expect(detail.text).toContain('1* ventas | Total recaudado: *$ 8.000*');
+    expect(detail.text).toContain('1x Pizza');
+
+    // 3. Volver al semáforo
+    const back = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:control_dias_back',
+      now: NOW,
+    });
+    expect(back.text).toContain('Control de días recientes');
+  });
+
+  it('anulación interactiva: listar últimas 5 y cancelar operación', async () => {
+    const f = setupFlow([]);
+    await f.products.createProduct({ businessId: BIZ, name: 'Pizza', priceUnit: 5000 });
+    await f.sales.createSale(BIZ, ACTOR, [{ name: 'Pizza', quantity: 1 }]);
+
+    // 1. Abrir menú anulación
+    const menu = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'anular venta',
+      now: NOW,
+    });
+
+    // 2. Elegir listar últimas 5
+    const list = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:anular_listar',
+      now: NOW,
+    });
+    expect(list.text).toContain('Seleccioná la venta que querés anular:');
+    const viewCb = list.inlineKeyboard?.[0]?.[0]?.callbackData;
+    expect(viewCb).toMatch(/^rotiseria:anular_ver:/);
+
+    // 3. Ver venta
+    const viewSale = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: viewCb!,
+      now: NOW,
+    });
+    expect(viewSale.text).toContain('¿Confirmás la anulación de esta venta?');
+
+    // 4. Cancelar
+    const cancelled = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:anular_cancelar',
+      now: NOW,
+    });
+    expect(cancelled.text).toContain('Operación cancelada');
+  });
+
+  it('menú y UX: welcome, replyMenu layout, menuCommands y menu inline están alineados', () => {
+    const bundle = createRotiseriaTemplate({ db: {} as any });
+    const t = bundle.template;
+
+    // 1. Mensaje de bienvenida
+    const welcomeMsg = t.welcome('Rotisería Don Pepe', 'Luciano');
+    expect(welcomeMsg).toContain('👋 ¡Hola! Soy el asistente de *Rotisería Don Pepe*.');
+    expect(welcomeMsg).toContain('📝 Para registrar ventas, mandame un audio o escribí directo:');
+    expect(welcomeMsg).toContain('• "Una docena de salteñas y dos sándwiches de milanesa"');
+    expect(welcomeMsg).toContain('• "3 empanadas de pollo y una coca"');
+    expect(welcomeMsg).toContain('Tenés los accesos rápidos en los botones de abajo o tocá /menu para ver opciones.');
+
+    // 2. replyMenu (5 botones, layout [1, 2, 2], acción 'registrar_venta')
+    expect(t.replyMenuLayout).toEqual([1, 2, 2]);
+    expect(t.replyMenu).toEqual([
+      { label: '📝 Registrar venta', action: 'registrar_venta' },
+      { label: '📅 Control de días', action: 'control_dias' },
+      { label: '📈 Estadísticas', action: 'menu_estadisticas' },
+      { label: '↩️ Anular venta', action: 'anular_venta' },
+      { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
+    ]);
+
+    // 3. menuCommands (7 comandos exactos para el botón azul de Telegram)
+    expect(t.menuCommands).toEqual([
+      { command: 'venta', description: '📝 Registrar venta' },
+      { command: 'dias', description: '📅 Control de días recientes' },
+      { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
+      { command: 'anular', description: '↩️ Anular última venta' },
+      { command: 'precio', description: '🏷️ Modificar precios de la carta' },
+      { command: 'menu', description: '📋 Ver carta y promociones vigentes' },
+      { command: 'ventas', description: '🧾 Últimas ventas registradas' },
+    ]);
+
+    // 4. menu (inline de /menu)
+    expect(t.menu.map((m) => m.action)).toEqual([
+      'registrar_venta',
+      'control_dias',
+      'menu_estadisticas',
+      'anular_venta',
+      'cambiar_precio',
+      'consultar_menu',
+      'consultar_ventas',
+      'crear_producto',
+      'crear_promo',
+    ]);
   });
 });

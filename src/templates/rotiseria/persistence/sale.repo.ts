@@ -20,35 +20,47 @@ export class SaleRepository {
     note?: string,
     tx?: Prisma.TransactionClient
   ): Promise<RotiseriaSaleWithItems> {
-    const c = this.client(tx);
-    const sale = await c.rotiseriaSale.create({
-      data: {
-        businessId,
-        userId,
-        total,
-        shiftDate,
-        isCancelled: false,
-        note: note?.trim() || null,
-      },
-    });
+    const run = async (c: Db) => {
+      const sale = await c.rotiseriaSale.create({
+        data: {
+          businessId,
+          userId,
+          total,
+          shiftDate,
+          isCancelled: false,
+          note: note?.trim() || null,
+        },
+      });
 
-    await c.rotiseriaSaleItem.createMany({
-      data: lines.map((l) => ({
-        saleId: sale.id,
-        productId: l.productId ?? null,
-        promoId: l.promoId ?? null,
-        name: l.name,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        subtotal: l.subtotal,
-      })),
-    });
+      await c.rotiseriaSaleItem.createMany({
+        data: lines.map((l) => ({
+          saleId: sale.id,
+          productId: l.productId ?? null,
+          promoId: l.promoId ?? null,
+          name: l.name,
+          category: l.category && l.category.trim() ? l.category.trim() : 'general',
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          subtotal: l.subtotal,
+        })),
+      });
 
-    const items = await c.rotiseriaSaleItem.findMany({
-      where: { saleId: sale.id },
-    });
+      const items = await c.rotiseriaSaleItem.findMany({
+        where: { saleId: sale.id },
+      });
 
-    return { ...sale, items };
+      return { ...sale, items };
+    };
+
+    if (tx) {
+      return run(tx);
+    }
+
+    if ('$transaction' in this.db && typeof (this.db as any).$transaction === 'function') {
+      return this.db.$transaction(async (trx) => run(trx));
+    }
+
+    return run(this.db);
   }
 
   async findById(id: string, businessId: string): Promise<RotiseriaSaleWithItems | null> {
@@ -136,6 +148,23 @@ export class SaleRepository {
   async findByDateRange(businessId: string, start: Date, end: Date): Promise<RotiseriaSaleWithItems[]> {
     const sales = await this.db.rotiseriaSale.findMany({
       where: { businessId, shiftDate: { gte: start, lte: end } },
+      orderBy: { createdAt: 'desc' },
+    });
+    const items = await this.db.rotiseriaSaleItem.findMany({
+      where: { saleId: { in: sales.map((s) => s.id) } },
+    });
+    const bySale = new Map<string, RotiseriaSaleItem[]>();
+    for (const item of items) {
+      const arr = bySale.get(item.saleId) ?? [];
+      arr.push(item);
+      bySale.set(item.saleId, arr);
+    }
+    return sales.map((s) => ({ ...s, items: bySale.get(s.id) ?? [] }));
+  }
+
+  async findAll(businessId: string): Promise<RotiseriaSaleWithItems[]> {
+    const sales = await this.db.rotiseriaSale.findMany({
+      where: { businessId },
       orderBy: { createdAt: 'desc' },
     });
     const items = await this.db.rotiseriaSaleItem.findMany({

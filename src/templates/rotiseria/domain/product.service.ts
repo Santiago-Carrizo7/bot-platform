@@ -47,6 +47,21 @@ export class ProductService {
     return this.repo.findProductByName(businessId, name);
   }
 
+  async findProductById(id: string, businessId: string): Promise<RotiseriaProduct | null> {
+    return this.repo.findProductById(id, businessId);
+  }
+
+  async listActiveCategories(businessId: string): Promise<string[]> {
+    const prods = await this.repo.listProducts(businessId, { limit: 200 });
+    const set = new Set<string>();
+    for (const p of prods) {
+      if (p.category) {
+        set.add(p.category.toLowerCase().trim());
+      }
+    }
+    return Array.from(set);
+  }
+
   // --- PROMOS ---
 
   async createPromo(data: CreatePromoData): Promise<RotiseriaPromo> {

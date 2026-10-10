@@ -1,10 +1,11 @@
 import { AppError } from '../../../core/errors/errors.js';
 import type { DaySummary, PricingResult, SaleLineInput, StatsSummary } from '../types.js';
 import { calculatePricing } from './pricing.js';
-import { getShiftDate, getShiftDateRange, formatShiftLabel } from './shift.js';
+import { getShiftDate, formatShiftLabel } from './shift.js';
 import { ProductService } from './product.service.js';
+import { StatsService } from './stats.service.js';
 import { SaleRepository, type RotiseriaSaleWithItems } from '../persistence/sale.repo.js';
-import { formatDateOnly, round2 } from '../format.js';
+import { round2 } from '../format.js';
 
 export interface CreatedRotiseriaSale {
   sale: RotiseriaSaleWithItems;
@@ -12,10 +13,15 @@ export interface CreatedRotiseriaSale {
 }
 
 export class SaleService {
+  private readonly stats: StatsService;
+
   constructor(
     private readonly repo: SaleRepository,
-    private readonly products: ProductService
-  ) {}
+    private readonly products: ProductService,
+    stats?: StatsService
+  ) {
+    this.stats = stats ?? new StatsService(repo);
+  }
 
   async createSale(
     businessId: string,
@@ -23,11 +29,12 @@ export class SaleService {
     items: SaleLineInput[],
     note?: string,
     now: Date = new Date(),
-    timezone = 'America/Argentina/Buenos_Aires'
+    timezone = 'America/Argentina/Buenos_Aires',
+    customShiftDate?: Date
   ): Promise<CreatedRotiseriaSale> {
     const catalog = await this.products.getCatalogLookup(businessId);
     const pricing = calculatePricing(items, catalog);
-    const shiftDate = getShiftDate(now, timezone);
+    const shiftDate = customShiftDate ?? getShiftDate(now, timezone);
 
     const sale = await this.repo.create(
       businessId,
@@ -107,7 +114,7 @@ export class SaleService {
 
     return {
       shiftDate,
-      shiftDateStr: formatShiftLabel(shiftDate, now, timezone),
+      shiftDateStr: formatShiftLabel(shiftDate),
       salesTotal,
       salesCount,
       cancelledTotal,
@@ -118,56 +125,11 @@ export class SaleService {
 
   async getStatsSummary(
     businessId: string,
-    period: 'semana' | 'mes' = 'semana',
+    period: string = 'esta_semana',
     now: Date = new Date(),
     timezone = 'America/Argentina/Buenos_Aires'
   ): Promise<StatsSummary> {
-    const currentShift = getShiftDate(now, timezone);
-    const daysBack = period === 'mes' ? 30 : 7;
-
-    const startDate = new Date(currentShift);
-    startDate.setUTCDate(startDate.getUTCDate() - (daysBack - 1));
-
-    const sales = await this.repo.findByDateRange(businessId, startDate, currentShift);
-
-    let salesTotal = 0;
-    let salesCount = 0;
-    let cancelledCount = 0;
-    const productCounts: Record<string, { quantity: number; subtotal: number }> = {};
-
-    for (const sale of sales) {
-      if (sale.isCancelled) {
-        cancelledCount++;
-      } else {
-        salesTotal = round2(salesTotal + Number(sale.total));
-        salesCount++;
-
-        for (const item of sale.items) {
-          if (!productCounts[item.name]) {
-            productCounts[item.name] = { quantity: 0, subtotal: 0 };
-          }
-          productCounts[item.name].quantity += Number(item.quantity);
-          productCounts[item.name].subtotal = round2(productCounts[item.name].subtotal + Number(item.subtotal));
-        }
-      }
-    }
-
-    const averageTicket = salesCount > 0 ? round2(salesTotal / salesCount) : 0;
-    const topProducts = Object.entries(productCounts)
-      .map(([name, data]) => ({ name, quantity: data.quantity, subtotal: data.subtotal }))
-      .sort((a, b) => b.quantity - a.quantity)
-      .slice(0, 5);
-
-    const periodLabel = period === 'mes' ? 'Últimos 30 días' : 'Últimos 7 días';
-
-    return {
-      periodLabel,
-      salesTotal,
-      salesCount,
-      averageTicket,
-      cancelledCount,
-      topProducts,
-    };
+    return this.stats.getStats(businessId, period, now, timezone);
   }
 
   async listRecentSales(businessId: string, limit = 10): Promise<RotiseriaSaleWithItems[]> {
@@ -176,5 +138,22 @@ export class SaleService {
 
   async findLastActiveSale(businessId: string): Promise<RotiseriaSaleWithItems | null> {
     return this.repo.findLastActive(businessId);
+  }
+
+  async findSaleById(saleId: string, businessId: string): Promise<RotiseriaSaleWithItems | null> {
+    return this.repo.findById(saleId, businessId);
+  }
+
+  async findByShiftDate(businessId: string, shiftDate: Date): Promise<RotiseriaSaleWithItems[]> {
+    return this.repo.findByShiftDate(businessId, shiftDate);
+  }
+
+  async getRecentShiftsSummary(
+    businessId: string,
+    now: Date = new Date(),
+    daysCount = 7,
+    timezone = 'America/Argentina/Buenos_Aires'
+  ) {
+    return this.stats.getRecentShiftsSummary(businessId, now, daysCount, timezone);
   }
 }

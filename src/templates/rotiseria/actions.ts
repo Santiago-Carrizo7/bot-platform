@@ -1,4 +1,4 @@
-import type { ActionDef, ActionContext } from '../../core/actions/registry.js';
+import type { ActionDef, ActionContext, InlineButton } from '../../core/actions/registry.js';
 import type { ProductService } from './domain/product.service.js';
 import type { SaleService } from './domain/sale.service.js';
 import {
@@ -23,7 +23,20 @@ import {
   type HistorialVentasInput as HistorialVentas,
   type RegistrarVentaInput as RegistrarVenta,
 } from './schemas.js';
-import { esc, formatCurrency, formatDateTime, formatQty } from './format.js';
+import {
+  esc,
+  formatCurrency,
+  formatDateTime,
+  formatDateOnly,
+  formatQty,
+  formatRealDateWithDay,
+  formatSaleNumber,
+  formatSaleReceipt,
+  formatSaleSummary,
+  formatTimeOnly,
+  getCategoryIcon,
+} from './format.js';
+import { calculatePricing } from './domain/pricing.js';
 import { AppError } from '../../core/errors/errors.js';
 
 export interface RotiseriaActionDeps {
@@ -37,7 +50,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
   const registrarVenta: ActionDef<RegistrarVenta> = {
     name: 'registrar_venta',
     description:
-      'Registra una venta de rotisería con empanadas, pizzas, sándwiches o promos. Datos: items (lista de {nombre, cantidad}), nota (opcional). El total y docenas los calcula automáticamente el sistema.',
+      'Registra una venta de rotisería con empanadas, pizzas, sándwiches o promos. Datos: items (lista de {nombre, cantidad}), nota (opcional), fecha (opcional, YYYY-MM-DD). El total y docenas los calcula automáticamente el sistema.',
     kind: 'write',
     input: RegistrarVentaInput,
     intro:
@@ -47,26 +60,80 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       nombre: '¿Qué producto o promo?',
       cantidad: '¿Qué cantidad?',
     },
-    summarize: (i) => {
-      const lines = i.items.map((it) => `• ${formatQty(it.cantidad)}x ${esc(it.nombre)}`).join('\n');
-      return ['Entendí el pedido:', '', lines, i.nota ? `\n📝 Nota: ${esc(i.nota)}` : '', '\n¿Confirmar venta?'].join('\n');
+    confirmButtons: () => [
+      [
+        { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+        { text: '❌ Cancelar', callbackData: 'confirm:no' },
+      ],
+      [
+        { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+        { text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' },
+      ],
+    ],
+    summarize: async (i: any, ctx?: ActionContext) => {
+      const items = Array.isArray(i.items) ? i.items : [];
+      let breakdown: string[] | undefined;
+      let total: number | undefined;
+
+      if (ctx && items.length > 0) {
+        try {
+          const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+          const pricing = calculatePricing(
+            items.map((it: any) => ({ name: it.nombre, quantity: it.cantidad })),
+            catalog
+          );
+          breakdown = pricing.breakdown;
+          total = pricing.total;
+        } catch {
+          // Si el catálogo falla o producto no existe, fallback a lista limpia
+        }
+      }
+
+      const noReconocidos = Array.isArray(i.no_reconocidos)
+        ? i.no_reconocidos.map((x: any) => String(x.texto ?? x))
+        : undefined;
+
+      return formatSaleSummary({
+        items,
+        nota: i.nota,
+        fecha: i.fecha,
+        breakdown,
+        total,
+        isModifying: Boolean(i._modifying),
+        now: ctx?.now,
+        timezone: ctx?.tenant.business.timezone,
+        noReconocidos,
+      });
     },
     handler: async (ctx, input) => {
+      let customDate: Date | undefined;
+      if (input.fecha) {
+        const d = new Date(input.fecha.includes('T') ? input.fecha : `${input.fecha}T12:00:00Z`);
+        if (!isNaN(d.getTime())) customDate = d;
+      }
+
       const result = await sales.createSale(
         ctx.tenant.business.id,
         ctx.actorUserId,
         input.items.map((it) => ({ name: it.nombre, quantity: it.cantidad })),
-        input.nota
+        input.nota,
+        ctx.now,
+        ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires',
+        customDate
       );
 
-      const replyLines = [
-        `✅ Venta registrada por *${formatCurrency(Number(result.sale.total))}*`,
-        '',
-        ...result.pricing.breakdown,
-      ];
+      const receipt = formatSaleReceipt({
+        saleId: result.sale.id,
+        total: Number(result.sale.total),
+        shiftDate: result.sale.shiftDate,
+        createdAt: result.sale.createdAt,
+        breakdown: result.pricing.breakdown,
+        timezone: ctx.tenant.business.timezone,
+        note: result.sale.note ?? undefined,
+      });
 
       return {
-        reply: replyLines.join('\n'),
+        reply: receipt,
         audit: {
           action: 'sale.created',
           entityType: 'rotiseria_sale',
@@ -84,38 +151,44 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
   const anularVenta: ActionDef<AnularVenta> = {
     name: 'anular_venta',
     description:
-      'Anula lógicamente una venta para corregir un error de caja. Datos opcionales: sale_id (si se omite anula la última activa), motivo.',
-    kind: 'write',
+      'Anula lógicamente una venta para corregir un error de caja. Despliega un menú interactivo con las últimas ventas o la última activa.',
+    kind: 'read',
     input: AnularVentaInput,
-    intro: 'Para anular una venta decime si es la última o indicame el código de la venta.',
-    summarize: (i) => {
-      return [
-        '⚠️ ¿Confirmar anulación de venta?',
-        '',
-        i.sale_id ? `Venta: #${esc(i.sale_id)}` : 'Se anulará la *última venta activa* registrada.',
-        i.motivo ? `Motivo: ${esc(i.motivo)}` : '',
-        '\nEsta venta se descontará de los totales de caja y estadísticas.',
-      ].join('\n');
-    },
     handler: async (ctx, input) => {
-      const cancelled = await sales.cancelSale(
-        ctx.tenant.business.id,
-        ctx.actorUserId,
-        input.sale_id,
-        input.motivo
-      );
+      if (input.sale_id) {
+        const sale = await sales.findSaleById(input.sale_id, ctx.tenant.business.id);
+        if (!sale) {
+          throw new AppError(`No se encontró la venta con ID "${input.sale_id}".`);
+        }
+        const saleNum = formatSaleNumber(sale.id);
+        const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+        const itemsList = sale.items.map((it) => `• ${formatQty(Number(it.quantity))}x ${esc(it.name)}`).join('\n');
+        const text = [
+          '⚠️ ¿Confirmás la anulación de esta venta?',
+          '',
+          `🆔 Venta #${saleNum}`,
+          `📅 Fecha: ${formatRealDateWithDay(sale.shiftDate)} (${formatTimeOnly(sale.createdAt, tz)} hs)`,
+          'Detalle:',
+          itemsList || '• (Sin detalle)',
+          `Total: *${formatCurrency(Number(sale.total))}*`,
+        ].join('\n');
+
+        return {
+          reply: text,
+          inlineKeyboard: [
+            [{ text: '✅ Sí, anular venta', callbackData: `rotiseria:anular_confirmar:${sale.id}` }],
+            [{ text: '❌ No, volver', callbackData: 'rotiseria:anular_cancelar' }],
+          ],
+        };
+      }
 
       return {
-        reply: `↩️ Venta por *${formatCurrency(Number(cancelled.total))}* anulada correctamente.\nYa no computa en el turno actual.`,
-        audit: {
-          action: 'sale.cancelled',
-          entityType: 'rotiseria_sale',
-          entityId: cancelled.id,
-          metadata: {
-            total: Number(cancelled.total),
-            reason: input.motivo,
-          },
-        },
+        reply: '↩️ ¿Qué venta deseás anular?',
+        inlineKeyboard: [
+          [{ text: '↩️ Anular última venta', callbackData: 'rotiseria:anular_ultima' }],
+          [{ text: '📋 Elegir de las últimas 5 ventas', callbackData: 'rotiseria:anular_listar' }],
+          [{ text: '❌ Cancelar', callbackData: 'rotiseria:anular_cancelar' }],
+        ],
       };
     },
   };
@@ -123,141 +196,213 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
   const cambiarPrecio: ActionDef<CambiarPrecio> = {
     name: 'cambiar_precio',
     description:
-      'Modifica el precio unitario o precio de docena de un producto o el precio de una promo. Datos: nombre, precio_unitario (opcional), precio_docena (opcional).',
-    kind: 'write',
+      'Modifica el precio de un producto o promo. Si no se especifican datos, abre el menú interactivo guiado por categorías.',
+    kind: 'read',
     input: CambiarPrecioInput,
-    intro:
-      'Decime qué producto querés modificar y su nuevo precio. Ejemplo: *"Subir la docena de carne a 16000"* o *"Muzza a 9500"*.',
-    fieldPrompts: {
-      nombre: '¿Qué producto o promo?',
-      precio_unitario: '¿Nuevo precio unitario?',
-    },
-    summarize: (i) => {
-      const parts = [
-        'Entendí el cambio de precio:',
-        '',
-        `🏷️ *${esc(i.nombre)}*`,
-        i.precio_unitario ? `• Precio unitario: *${formatCurrency(i.precio_unitario)}*` : '',
-        i.precio_docena ? `• Precio docena: *${formatCurrency(i.precio_docena)}*` : '',
-        '\n¿Confirmar?',
-      ].filter(Boolean);
-      return parts.join('\n');
-    },
     handler: async (ctx, input) => {
       const businessId = ctx.tenant.business.id;
-      const product = await products.findProductByName(businessId, input.nombre);
+
+      // 1. Invocación de menú interactivo por categorías
+      if (!input.nombre && !input.product_id) {
+        const categories = await products.listActiveCategories(businessId);
+        if (categories.length === 0) {
+          return { reply: 'Todavía no hay productos cargados en la carta.' };
+        }
+        const rows: InlineButton[][] = [];
+        let currentRow: InlineButton[] = [];
+        for (const cat of categories) {
+          const icon = getCategoryIcon(cat);
+          const label = `${icon} ${cat.charAt(0).toUpperCase() + cat.slice(1)}`;
+          currentRow.push({ text: label, callbackData: `rotiseria:price_cat:${cat}` });
+          if (currentRow.length === 2) {
+            rows.push(currentRow);
+            currentRow = [];
+          }
+        }
+        if (currentRow.length > 0) rows.push(currentRow);
+        rows.push([{ text: '❌ Cancelar', callbackData: 'rotiseria:price_cancel' }]);
+
+        return {
+          reply: '🏷️ *Cambiar Precios*\n\nSeleccioná la categoría del producto que querés actualizar:',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 2. Modificación efectiva
+      let product = input.product_id
+        ? await products.findProductById(input.product_id, businessId)
+        : null;
+
+      if (!product && input.nombre) {
+        product = await products.findProductByName(businessId, input.nombre);
+      }
+
       if (product) {
         const updated = await products.updateProduct(product.id, businessId, {
           priceUnit: input.precio_unitario,
           priceDozen: input.precio_docena,
         });
-        const details = [
-          `✅ Precio actualizado para *${esc(updated.name)}*:`,
-          `• Unitario: *${formatCurrency(Number(updated.priceUnit))}*`,
-          updated.priceDozen ? `• Docena: *${formatCurrency(Number(updated.priceDozen))}*` : '',
-        ]
-          .filter(Boolean)
-          .join('\n');
-
+        const docenaText = updated.priceDozen ? ` (Docena: *${formatCurrency(Number(updated.priceDozen))}*)` : '';
         return {
-          reply: details,
+          reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.priceUnit))}*${docenaText}.`,
           audit: {
             action: 'product.price_updated',
             entityType: 'rotiseria_product',
             entityId: updated.id,
-            metadata: { priceUnit: Number(updated.priceUnit), priceDozen: updated.priceDozen ? Number(updated.priceDozen) : null },
+            metadata: {
+              priceUnit: Number(updated.priceUnit),
+              priceDozen: updated.priceDozen ? Number(updated.priceDozen) : null,
+            },
           },
         };
       }
 
-      const promo = await products.findPromoByName(businessId, input.nombre);
-      if (promo) {
-        if (!input.precio_unitario) {
-          throw new AppError('Para una promo tenés que indicar el precio.');
+      if (input.nombre) {
+        const promo = await products.findPromoByName(businessId, input.nombre);
+        if (promo && input.precio_unitario) {
+          const updated = await products.updatePromo(promo.id, businessId, {
+            price: input.precio_unitario,
+          });
+          return {
+            reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.price))}*.`,
+            audit: {
+              action: 'promo.price_updated',
+              entityType: 'rotiseria_promo',
+              entityId: updated.id,
+              metadata: { price: Number(updated.price) },
+            },
+          };
         }
-        const updated = await products.updatePromo(promo.id, businessId, {
-          price: input.precio_unitario,
-        });
-        return {
-          reply: `✅ Precio actualizado para la promo *${esc(updated.name)}*: *${formatCurrency(Number(updated.price))}*.`,
-          audit: {
-            action: 'promo.price_updated',
-            entityType: 'rotiseria_promo',
-            entityId: updated.id,
-            metadata: { price: Number(updated.price) },
-          },
-        };
       }
 
-      throw new AppError(`No encontré ningún producto o promo con el nombre "${input.nombre}".`);
+      throw new AppError(`No encontré ningún producto o promo.`);
     },
   };
 
   const controlDias: ActionDef<ControlDias> = {
     name: 'control_dias',
-    description: 'Consulta las ventas del turno actual o de una fecha anterior (cierre de anoche). Dato opcional: fecha.',
+    description: 'Consulta el control de turnos recientes (panel semáforo de los últimos 7 días) o detalle de una fecha.',
     kind: 'read',
     input: ControlDiasInput,
     handler: async (ctx, input) => {
-      let targetDate: Date | undefined;
+      const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+
       if (input.fecha) {
+        let targetDate: Date | undefined;
         const clean = input.fecha.toLowerCase().trim();
         if (clean === 'ayer' || clean === 'anoche') {
           targetDate = new Date();
           targetDate.setUTCDate(targetDate.getUTCDate() - 1);
         } else if (clean !== 'hoy') {
-          const parsed = new Date(input.fecha);
+          const parsed = new Date(input.fecha.includes('T') ? input.fecha : `${input.fecha}T12:00:00Z`);
           if (!isNaN(parsed.getTime())) {
             targetDate = parsed;
           }
         }
+
+        const s = await sales.getDaySummary(ctx.tenant.business.id, targetDate, ctx.now, tz);
+        const lines = [
+          `📅 *Control de días — ${s.shiftDateStr}*`,
+          '',
+          `🛒 Ventas: *${formatCurrency(s.salesTotal)}* (${s.salesCount} pedido${s.salesCount !== 1 ? 's' : ''})`,
+          s.cancelledCount > 0 ? `↩️ Anuladas: ${s.cancelledCount} (*${formatCurrency(s.cancelledTotal)}*)` : '',
+        ].filter(Boolean);
+
+        if (s.topProducts.length > 0) {
+          lines.push('', '🔥 *Más vendidos del turno:*');
+          for (const p of s.topProducts.slice(0, 5)) {
+            lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* (${formatCurrency(p.subtotal)})`);
+          }
+        }
+
+        return { reply: lines.join('\n') };
       }
 
-      const s = await sales.getDaySummary(ctx.tenant.business.id, targetDate);
+      // Semáforo últimos 7 turnos
+      const shifts = await sales.getRecentShiftsSummary(ctx.tenant.business.id, ctx.now, 7, tz);
+      const lines = ['📅 *Control de días recientes (Últimos 7 turnos):*', ''];
+      const buttons: InlineButton[][] = [];
 
-      const lines = [
-        `📅 *Control de días — ${s.shiftDateStr}*`,
-        '',
-        `🛒 Ventas: *${formatCurrency(s.salesTotal)}* (${s.salesCount} pedido${s.salesCount !== 1 ? 's' : ''})`,
-        s.cancelledCount > 0 ? `↩️ Anuladas: ${s.cancelledCount} (*${formatCurrency(s.cancelledTotal)}*)` : '',
-      ].filter(Boolean);
-
-      if (s.topProducts.length > 0) {
-        lines.push('', '🔥 *Más vendidos del turno:*');
-        for (const p of s.topProducts.slice(0, 5)) {
-          lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* (${formatCurrency(p.subtotal)})`);
+      for (const day of shifts) {
+        if (day.count > 0) {
+          lines.push(`🟢 ${formatRealDateWithDay(day.date)}: ${day.count} ventas — *${formatCurrency(day.total)}*`);
+          buttons.push([
+            { text: `🔍 Ver ${formatDateOnly(day.date)}`, callbackData: `rotiseria:ver_dia:${day.dateStr}` },
+          ]);
+        } else {
+          lines.push(`⚪ ${formatRealDateWithDay(day.date)}: Sin ventas registradas`);
         }
       }
 
-      return { reply: lines.join('\n') };
+      buttons.push([{ text: '❌ Cerrar', callbackData: 'rotiseria:cerrar' }]);
+      return { reply: lines.join('\n'), inlineKeyboard: buttons };
     },
   };
 
   const consultarEstadisticas: ActionDef<ConsultarEstadisticas> = {
     name: 'consultar_estadisticas',
-    description: 'Muestra estadísticas generales: facturación neta, ticket promedio y productos más vendidos. Dato opcional: periodo (semana o mes).',
+    description: 'Muestra estadísticas generales: facturación neta, ticket promedio y productos más vendidos. Dato opcional: periodo (esta_semana, semana_cerrada, este_mes, historico).',
     kind: 'read',
     input: ConsultarEstadisticasInput,
     handler: async (ctx, input) => {
-      const stats = await sales.getStatsSummary(ctx.tenant.business.id, input.periodo);
+      const stats = await sales.getStatsSummary(ctx.tenant.business.id, input.periodo, ctx.now);
 
       const lines = [
-        `📈 *Estadísticas — ${stats.periodLabel}*`,
+        `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
         '',
         `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
-        `🧾 Cantidad de ventas: *${stats.salesCount}*`,
+        `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
         `🏷️ Ticket promedio: *${formatCurrency(stats.averageTicket)}*`,
         stats.cancelledCount > 0 ? `↩️ Pedidos anulados: *${stats.cancelledCount}*` : '',
       ].filter(Boolean);
 
-      if (stats.topProducts.length > 0) {
-        lines.push('', '🏆 *Productos estrella:*');
-        for (const p of stats.topProducts) {
+      if (stats.top3Products.length > 0) {
+        lines.push('', '🏆 *Top 3 productos más vendidos:*');
+        for (const p of stats.top3Products) {
           lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
         }
       }
 
-      return { reply: lines.join('\n') };
+      if (stats.categories.length > 0) {
+        lines.push('', '📊 *Desglose por categorías:*');
+        for (const c of stats.categories) {
+          lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
+        }
+      }
+
+      const buttons = [
+        [
+          { text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${input.periodo || 'esta_semana'}` },
+          { text: '🔄 Cambiar período', callbackData: 'rotiseria:stats_menu' },
+        ],
+      ];
+
+      return { reply: lines.join('\n'), inlineKeyboard: buttons };
+    },
+  };
+
+  const menuEstadisticas: ActionDef<Empty> = {
+    name: 'menu_estadisticas',
+    description: 'Menú interactivo de estadísticas de la rotisería por períodos.',
+    kind: 'read',
+    input: EmptyInput,
+    handler: async () => {
+      return {
+        reply: '📈 *Estadísticas del Negocio*\n\nSeleccioná el período que querés consultar:',
+        inlineKeyboard: [
+          [
+            { text: '📅 Últimos 7 días', callbackData: 'rotiseria:stats:esta_semana' },
+            { text: '🗓️ Semana (Lun a Dom)', callbackData: 'rotiseria:stats:semana_cerrada' },
+          ],
+          [
+            { text: '📆 Este mes', callbackData: 'rotiseria:stats:este_mes' },
+            { text: '📈 Histórico', callbackData: 'rotiseria:stats:historico' },
+          ],
+          [
+            { text: '🗂️ Otro mes', callbackData: 'rotiseria:stats_ask_month' },
+          ],
+        ],
+      };
     },
   };
 
@@ -278,15 +423,15 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         'Entendí el producto:',
         '',
         `📦 *${esc(i.nombre)}*`,
-        `• Unitario: *${formatCurrency(i.precio_unitario)}*`,
-        i.precio_docena ? `• Docena: *${formatCurrency(i.precio_docena)}*` : '',
+        `• Precio unitario: *${formatCurrency(i.precio_unitario)}*`,
+        i.precio_docena ? `• Precio docena: *${formatCurrency(i.precio_docena)}*` : '',
         `• Categoría: *${esc(i.categoria)}*`,
         '\n¿Confirmar creación?',
       ]
         .filter(Boolean)
         .join('\n'),
     handler: async (ctx, input) => {
-      const created = await products.createProduct({
+      const p = await products.createProduct({
         businessId: ctx.tenant.business.id,
         name: input.nombre,
         priceUnit: input.precio_unitario,
@@ -295,12 +440,12 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       });
 
       return {
-        reply: `✅ Producto *${esc(created.name)}* creado con éxito.`,
+        reply: `✅ Creado *${esc(p.name)}* a ${formatCurrency(Number(p.priceUnit))}${p.priceDozen ? ` (docena ${formatCurrency(Number(p.priceDozen))})` : ''}.`,
         audit: {
           action: 'product.created',
           entityType: 'rotiseria_product',
-          entityId: created.id,
-          metadata: { priceUnit: Number(created.priceUnit), priceDozen: created.priceDozen ? Number(created.priceDozen) : null },
+          entityId: p.id,
+          metadata: { name: p.name, priceUnit: Number(p.priceUnit) },
         },
       };
     },
@@ -308,10 +453,11 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
 
   const crearPromo: ActionDef<CrearPromo> = {
     name: 'crear_promo',
-    description: 'Crea una promoción cerrada (combo). Datos: nombre, precio, descripcion (opcional).',
+    description:
+      'Crea una nueva promoción fija con precio cerrado. Datos: nombre, precio, descripcion (opcional).',
     kind: 'write',
     input: CrearPromoInput,
-    intro: 'Para crear una promo decime nombre y precio. Ejemplo: *"Crear Promo 2 a 18000: 2 Muzzas y 6 empanadas"*.',
+    intro: 'Para crear una promo decime el nombre y precio. Ejemplo: *"Promo 1 a 16000: Muzza + 6 empanadas"*.',
     fieldPrompts: {
       nombre: '¿Cómo se llama la promo?',
       precio: '¿Cuál es el precio de la promo?',
@@ -320,14 +466,15 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       [
         'Entendí la promo:',
         '',
-        `🎁 *${esc(i.nombre)}* — *${formatCurrency(i.precio)}*`,
-        i.descripcion ? `📝 ${esc(i.descripcion)}` : '',
+        `🎁 *${esc(i.nombre)}*`,
+        `• Precio: *${formatCurrency(i.precio)}*`,
+        i.descripcion ? `• Detalle: ${esc(i.descripcion)}` : '',
         '\n¿Confirmar creación?',
       ]
         .filter(Boolean)
         .join('\n'),
     handler: async (ctx, input) => {
-      const created = await products.createPromo({
+      const pr = await products.createPromo({
         businessId: ctx.tenant.business.id,
         name: input.nombre,
         price: input.precio,
@@ -335,12 +482,12 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       });
 
       return {
-        reply: `✅ Promo *${esc(created.name)}* creada con éxito.`,
+        reply: `✅ Promo *${esc(pr.name)}* creada por ${formatCurrency(Number(pr.price))}.`,
         audit: {
           action: 'promo.created',
           entityType: 'rotiseria_promo',
-          entityId: created.id,
-          metadata: { price: Number(created.price) },
+          entityId: pr.id,
+          metadata: { name: pr.name, price: Number(pr.price) },
         },
       };
     },
@@ -348,35 +495,49 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
 
   const consultarMenu: ActionDef<ConsultarMenu> = {
     name: 'consultar_menu',
-    description: 'Consulta los productos y promociones disponibles con sus precios. Dato opcional: categoria.',
+    description: 'Muestra la lista de comidas, empanadas, pizzas y promos con sus precios vigentes. Dato opcional: categoria.',
     kind: 'read',
     input: ConsultarMenuInput,
     handler: async (ctx, input) => {
       const [productList, promoList] = await Promise.all([
-        products.listProducts(ctx.tenant.business.id, { category: input.categoria }),
+        products.listProducts(ctx.tenant.business.id, { category: input.categoria, limit: 100 }),
         products.listPromos(ctx.tenant.business.id),
       ]);
 
       if (productList.length === 0 && promoList.length === 0) {
-        return { reply: 'No hay productos ni promociones cargadas todavía.' };
+        return {
+          reply:
+            'Todavía no tenés comidas ni promos cargadas.\nPodés crear una escribiendo *"Crear empanada de carne a 1500, docena 15000"*.',
+        };
       }
 
       const lines: string[] = ['📋 *Menú y Precios:*', ''];
 
-      if (promoList.length > 0) {
+      if (promoList.length > 0 && !input.categoria) {
         lines.push('🎁 *Promociones:*');
         for (const pr of promoList) {
-          lines.push(`• *${esc(pr.name)}*: *${formatCurrency(Number(pr.price))}*${pr.description ? ` (${esc(pr.description)})` : ''}`);
+          const desc = pr.description ? ` _(${esc(pr.description)})_` : '';
+          lines.push(`• *${esc(pr.name)}*: *${formatCurrency(Number(pr.price))}*${desc}`);
         }
         lines.push('');
       }
 
-      if (productList.length > 0) {
-        lines.push('🍽️ *Comidas:*');
-        for (const p of productList) {
-          const docenaStr = p.priceDozen ? ` (Docena: *${formatCurrency(Number(p.priceDozen))}*)` : '';
-          lines.push(`• *${esc(p.name)}*: *${formatCurrency(Number(p.priceUnit))}*${docenaStr}`);
+      const byCat = new Map<string, typeof productList>();
+      for (const p of productList) {
+        const cat = p.category || 'general';
+        const arr = byCat.get(cat) ?? [];
+        arr.push(p);
+        byCat.set(cat, arr);
+      }
+
+      for (const [cat, prods] of byCat.entries()) {
+        const icon = getCategoryIcon(cat);
+        lines.push(`${icon} *${esc(cat.toUpperCase())}:*`);
+        for (const p of prods) {
+          const docena = p.priceDozen ? ` (Docena: *${formatCurrency(Number(p.priceDozen))}*)` : '';
+          lines.push(`• ${esc(p.name)}: *${formatCurrency(Number(p.priceUnit))}*${docena}`);
         }
+        lines.push('');
       }
 
       return { reply: lines.join('\n') };
@@ -408,6 +569,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     registrarVenta,
     controlDias,
     consultarEstadisticas,
+    menuEstadisticas,
     anularVenta,
     cambiarPrecio,
     crearProducto,

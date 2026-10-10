@@ -52,6 +52,7 @@ CREATE TABLE "rotiseria_sale_items" (
     "productId" TEXT,
     "promoId" TEXT,
     "name" TEXT NOT NULL,
+    "category" TEXT NOT NULL DEFAULT 'general',
     "quantity" DECIMAL(12,2) NOT NULL,
     "unitPrice" DECIMAL(12,2) NOT NULL,
     "subtotal" DECIMAL(12,2) NOT NULL,
@@ -75,13 +76,10 @@ CREATE INDEX "rotiseria_promos_businessId_isActive_idx" ON "rotiseria_promos"("b
 CREATE UNIQUE INDEX "rotiseria_promos_businessId_name_key" ON "rotiseria_promos"("businessId", "name");
 
 -- CreateIndex
-CREATE INDEX "rotiseria_sales_businessId_shiftDate_idx" ON "rotiseria_sales"("businessId", "shiftDate");
+CREATE INDEX "rotiseria_sales_businessId_shiftDate_isCancelled_idx" ON "rotiseria_sales"("businessId", "shiftDate", "isCancelled");
 
 -- CreateIndex
 CREATE INDEX "rotiseria_sales_businessId_createdAt_idx" ON "rotiseria_sales"("businessId", "createdAt");
-
--- CreateIndex
-CREATE INDEX "rotiseria_sales_businessId_isCancelled_idx" ON "rotiseria_sales"("businessId", "isCancelled");
 
 -- CreateIndex
 CREATE INDEX "rotiseria_sale_items_saleId_idx" ON "rotiseria_sale_items"("saleId");
@@ -90,7 +88,7 @@ CREATE INDEX "rotiseria_sale_items_saleId_idx" ON "rotiseria_sale_items"("saleId
 CREATE INDEX "rotiseria_sale_items_productId_idx" ON "rotiseria_sale_items"("productId");
 
 -- CreateIndex
-CREATE INDEX "rotiseria_sale_items_promoId_idx" ON "rotiseria_sale_items"("promoId");
+CREATE INDEX "rotiseria_sale_items_category_idx" ON "rotiseria_sale_items"("category");
 
 -- AddForeignKey
 ALTER TABLE "rotiseria_products" ADD CONSTRAINT "rotiseria_products_businessId_fkey" FOREIGN KEY ("businessId") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;

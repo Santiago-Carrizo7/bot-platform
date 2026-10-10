@@ -178,7 +178,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   }
 
   // Intento de interpretación directa rápida sin IA (patrones numéricos o comandos obvios).
-  const direct = deps.template.interpretDirectly?.(trimmed, active?.actionName);
+  const direct = deps.template.interpretDirectly?.(trimmed, active?.actionName, active?.data);
   if (direct) {
     const directAction = deps.template.actions.find((a) => a.name === direct.actionName);
     if (directAction) {
@@ -345,6 +345,12 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
     if (!mine) return md('Ese negocio no está disponible.');
     await deps.membershipRepo.touchLastUsed(membershipId, now);
     return md(`Ahora estás operando como *${mine.business.name}*.`);
+  }
+  if (deps.template.handleCallback) {
+    const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
+    const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+    const customReply = await deps.template.handleCallback(ctx, data, active, deps.conversations, deps.audit);
+    if (customReply) return customReply;
   }
   return md(MSG_UNKNOWN);
 }
@@ -545,6 +551,22 @@ async function proceedWithAction(
     }
     return executeAction(deps, tenant, userId, action, validation.data, now, access);
   }
+  if (validation.error.issues[0]?.message.startsWith('⚠️')) {
+    if (validation.error.issues[0].path.includes('fecha')) {
+      await deps.conversations.upsert({
+        businessId: tenant.business.id,
+        userId,
+        phase: 'COLLECTING',
+        actionName: action.name,
+        data,
+        expiresAt: new Date(now.getTime() + (deps.conversationTtlMs ?? 10 * 60_000)),
+        updatedAt: now,
+      });
+      return md(validation.error.issues[0].message);
+    }
+    await deps.conversations.clear(tenant.business.id, userId);
+    return md(validation.error.issues[0].message);
+  }
   const missing = missingFields(action.input, data);
   await deps.conversations.upsert({
     businessId: tenant.business.id,
@@ -592,7 +614,14 @@ async function enterConfirming(
     expiresAt: new Date(now.getTime() + (deps.conversationTtlMs ?? 10 * 60_000)),
     updatedAt: now,
   });
-  const summary = action.summarize ? action.summarize(data) : 'Revisá los datos.';
+  const ctx: ActionContext = { tenant, actorUserId: userId, now };
+  const summary = action.summarize ? await action.summarize(data as any, ctx) : 'Revisá los datos.';
+
+  const customButtons = action.confirmButtons ? action.confirmButtons(data as any) : null;
+  if (customButtons) {
+    const text = summary.includes('¿Confirmar') ? summary : `${summary}\n\n¿Confirmar?`;
+    return { ...md(text), inlineKeyboard: customButtons };
+  }
 
   const early = getEarlyMorningContext(now, tenant.business.timezone);
   if (early.isEarlyMorning) {

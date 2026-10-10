@@ -67,25 +67,14 @@ export function getShiftDateRange(shiftDate: Date): { start: Date; end: Date } {
   return { start, end };
 }
 
+import { formatRealDateWithDay } from '../format.js';
+
 /**
- * Etiqueta legible para la jornada ("Turno de hoy", "Turno de anoche", o fecha).
+ * Etiqueta legible para la jornada, siempre con fecha real y día de la semana.
+ * PROHIBIDO usar "ayer" o "hoy" a secas.
  */
 export function formatShiftLabel(
-  shiftDate: Date,
-  now: Date = new Date(),
-  timezone = 'America/Argentina/Buenos_Aires'
+  shiftDate: Date
 ): string {
-  const currentShift = getShiftDate(now, timezone);
-  const diffDays = Math.round((currentShift.getTime() - shiftDate.getTime()) / (1000 * 60 * 60 * 24));
-
-  const dayStr = `${String(shiftDate.getUTCDate()).padStart(2, '0')}/${String(shiftDate.getUTCMonth() + 1).padStart(2, '0')}`;
-
-  if (diffDays === 0) {
-    const comp = getLocalShiftComponents(now, timezone);
-    return comp.hour < 5 ? `Turno de anoche (${dayStr})` : `Turno de hoy (${dayStr})`;
-  }
-  if (diffDays === 1) {
-    return `Turno de ayer (${dayStr})`;
-  }
-  return `Turno del ${dayStr}/${shiftDate.getUTCFullYear()}`;
+  return `Turno del ${formatRealDateWithDay(shiftDate)}`;
 }

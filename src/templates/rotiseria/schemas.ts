@@ -5,10 +5,46 @@ const VentaItemSchema = z.object({
   cantidad: z.number().positive('La cantidad debe ser mayor a 0').default(1),
 });
 
-export const RegistrarVentaInput = z.object({
-  items: z.array(VentaItemSchema).min(1, 'La venta necesita al menos un producto o promo'),
-  nota: z.string().trim().optional(),
+const NoReconocidoSchema = z.object({
+  texto: z.string().trim().min(1),
+  cantidad: z.number().optional(),
 });
+
+export const RegistrarVentaInput = z
+  .object({
+    items: z.array(VentaItemSchema).default([]),
+    no_reconocidos: z.array(NoReconocidoSchema).optional(),
+    nota: z.string().trim().optional(),
+    fecha: z.string().trim().optional(), // 'YYYY-MM-DD'
+    _modifying: z.boolean().optional(),
+    _awaitingCustomDate: z.boolean().optional(),
+    _futureDate: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data._futureDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fecha'],
+        message: '⚠️ La fecha no puede ser futura. Ingresá una fecha igual o anterior a la jornada actual (DD/MM/AAAA):',
+      });
+      return;
+    }
+    if (data.items.length === 0) {
+      if (data.no_reconocidos && data.no_reconocidos.length > 0) {
+        const bullets = data.no_reconocidos.map((n) => `• ${n.texto}`).join('\n');
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `⚠️ No reconocí estos productos en la carta:\n${bullets}\n\nPor favor repetí el pedido usando los nombres del menú o consultá /menu.`,
+        });
+        return;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['items'],
+        message: 'La venta necesita al menos un producto o promo',
+      });
+    }
+  });
 export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
 
 export const AnularVentaInput = z.object({
@@ -19,14 +55,21 @@ export type AnularVentaInput = z.infer<typeof AnularVentaInput>;
 
 export const CambiarPrecioInput = z
   .object({
-    nombre: z.string().trim().min(1, 'Falta el nombre del producto o promo'),
+    product_id: z.string().trim().optional(),
+    nombre: z.string().trim().optional(),
     precio_unitario: z.number().positive('El precio debe ser mayor a 0').optional(),
     precio_docena: z.number().positive('El precio de la docena debe ser mayor a 0').optional(),
   })
-  .refine((v) => v.precio_unitario !== undefined || v.precio_docena !== undefined, {
-    message: 'Tenés que indicar al menos un precio nuevo (unitario o docena)',
-    path: ['precio_unitario'],
-  });
+  .refine(
+    (v) =>
+      (!v.nombre && !v.product_id) ||
+      v.precio_unitario !== undefined ||
+      v.precio_docena !== undefined,
+    {
+      message: 'Tenés que indicar al menos un precio nuevo (unitario o docena)',
+      path: ['precio_unitario'],
+    }
+  );
 export type CambiarPrecioInput = z.infer<typeof CambiarPrecioInput>;
 
 export const ControlDiasInput = z.object({
@@ -35,7 +78,7 @@ export const ControlDiasInput = z.object({
 export type ControlDiasInput = z.infer<typeof ControlDiasInput>;
 
 export const ConsultarEstadisticasInput = z.object({
-  periodo: z.enum(['semana', 'mes']).default('semana'),
+  periodo: z.string().trim().default('esta_semana'),
 });
 export type ConsultarEstadisticasInput = z.infer<typeof ConsultarEstadisticasInput>;
 
