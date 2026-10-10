@@ -484,7 +484,7 @@ async function handleCommand(
 
   const cmd = deps.template.commands.find((c) => c.command === name);
   if (!cmd) {
-    return md('Ese comando no existe. Tocá /ayuda para ver el menú.');
+    return md('Ese comando no existe. Tocá /menu para ver las opciones.');
   }
   if (cmd.action) {
     const action = deps.template.actions.find((a) => a.name === cmd.action);

@@ -65,7 +65,7 @@ export function createGastosTemplate(deps: GastosTemplateDeps): GastosTemplateBu
         '• *"Gasté 5000 en Saeta"*',
         '• *"Ayer gasté 12000 en el supermercado"*',
         '',
-        '📌 Tocá /ayuda para ver los comandos, o usá los botones de abajo.',
+        '📌 Tocá /menu para ver los comandos, o usá los botones de abajo.',
       ].join('\n'),
     systemPrompt: (businessName, referenceDate, hints) =>
       buildGastosSystemPrompt(businessName, referenceDate, hints),

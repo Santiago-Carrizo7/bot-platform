@@ -24,7 +24,7 @@ export interface CreateBotDeps {
 const BASE_COMMANDS = [
   { command: 'start', description: 'Comenzar' },
   { command: 'menu', description: 'Ver el menú' },
-  { command: 'ayuda', description: 'Ayuda' },
+  { command: 'invitar', description: 'Invitar a un empleado o socio' },
   { command: 'negocios', description: 'Cambiar de negocio' },
   { command: 'cancelar', description: 'Cancelar lo que estoy haciendo' },
 ];
