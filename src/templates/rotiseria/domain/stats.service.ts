@@ -1,5 +1,5 @@
 import type { SaleRepository, RotiseriaSaleWithItems } from '../persistence/sale.repo.js';
-import type { CategorySummary, StatsSummary } from '../types.js';
+import type { CategorySummary, DeliveryStatsSummary, PromosSummary, StatsSummary } from '../types.js';
 import { formatDateOnly, round2 } from '../format.js';
 import { getShiftDate } from './shift.js';
 
@@ -67,18 +67,38 @@ export class StatsService {
 
     let salesTotal = 0;
     let salesCount = 0;
+    let foodTotal = 0;
+    let deliveryTotal = 0;
+    let deliveryOrdersCount = 0;
     let cancelledCount = 0;
 
     const productCounts: Record<string, { quantity: number; subtotal: number; category: string }> = {};
     const categoryTotals: Record<string, { quantity: number; subtotal: number }> = {};
     const productsByCategory: Record<string, Record<string, { quantity: number; subtotal: number }>> = {};
+    const promoCounts: Record<string, { quantity: number; subtotal: number }> = {};
+    let totalPromoQty = 0;
+    let totalPromoAmount = 0;
 
     for (const sale of sales) {
       if (sale.isCancelled) {
         cancelledCount++;
       } else {
-        salesTotal = round2(salesTotal + Number(sale.total));
+        const saleTotal = Number(sale.total);
+        const saleDelivery =
+          sale.deliveryFee !== null && sale.deliveryFee !== undefined
+            ? Number(sale.deliveryFee)
+            : 0;
+
+        salesTotal = round2(salesTotal + saleTotal);
         salesCount++;
+
+        if (sale.deliveryFee !== null && sale.deliveryFee !== undefined) {
+          deliveryOrdersCount++;
+          deliveryTotal = round2(deliveryTotal + saleDelivery);
+          foodTotal = round2(foodTotal + (saleTotal - saleDelivery));
+        } else {
+          foodTotal = round2(foodTotal + saleTotal);
+        }
 
         for (const item of sale.items) {
           const qty = Number(item.quantity);
@@ -90,6 +110,16 @@ export class StatsService {
           }
           productCounts[item.name].quantity += qty;
           productCounts[item.name].subtotal = round2(productCounts[item.name].subtotal + sub);
+
+          if (item.promoId) {
+            if (!promoCounts[item.name]) {
+              promoCounts[item.name] = { quantity: 0, subtotal: 0 };
+            }
+            promoCounts[item.name].quantity += qty;
+            promoCounts[item.name].subtotal = round2(promoCounts[item.name].subtotal + sub);
+            totalPromoQty += qty;
+            totalPromoAmount = round2(totalPromoAmount + sub);
+          }
 
           if (!categoryTotals[cat]) {
             categoryTotals[cat] = { quantity: 0, subtotal: 0 };
@@ -109,7 +139,7 @@ export class StatsService {
       }
     }
 
-    const averageTicket = salesCount > 0 ? round2(salesTotal / salesCount) : 0;
+    const averageTicket = salesCount > 0 ? round2(foodTotal / salesCount) : 0;
 
     const top3Products = Object.entries(productCounts)
       .map(([name, data]) => ({ name, quantity: data.quantity, subtotal: data.subtotal }))
@@ -127,17 +157,34 @@ export class StatsService {
         .sort((a, b) => b.quantity - a.quantity || b.subtotal - a.subtotal);
     }
 
+    let promosSummary: PromosSummary | undefined;
+    if (totalPromoQty > 0) {
+      const promoList = Object.entries(promoCounts)
+        .map(([name, data]) => ({ name, quantity: data.quantity, subtotal: data.subtotal }))
+        .sort((a, b) => b.quantity - a.quantity || b.subtotal - a.subtotal);
+      promosSummary = {
+        promos: promoList,
+        totalQuantity: totalPromoQty,
+        totalAmount: totalPromoAmount,
+      };
+    }
+
     return {
       periodLabel,
       periodKey,
       salesTotal,
       salesCount,
+      foodTotal,
+      deliveryTotal,
+      deliveryOrdersCount,
       averageTicket,
       cancelledCount,
       top3Products,
       categories,
       productsByCategory: formattedProductsByCategory,
+      promosSummary,
     };
+
   }
 
   async getRecentShiftsSummary(
@@ -177,6 +224,22 @@ export class StatsService {
     }
 
     return result;
+  }
+
+  async getDeliveryStats(
+    businessId: string,
+    sinceDate?: Date
+  ): Promise<DeliveryStatsSummary> {
+    const zones = await this.repo.getDeliveryStats(businessId, sinceDate);
+    const totalOrders = zones.reduce((acc, z) => acc + z.count, 0);
+    const totalDeliveryFees = round2(zones.reduce((acc, z) => acc + z.totalDeliveryFee, 0));
+
+    return {
+      periodLabel: sinceDate ? 'Últimos 30 días' : 'Histórico acumulado',
+      zones,
+      totalOrders,
+      totalDeliveryFees,
+    };
   }
 }
 

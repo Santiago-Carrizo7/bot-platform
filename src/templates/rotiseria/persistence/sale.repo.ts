@@ -18,6 +18,8 @@ export class SaleRepository {
     shiftDate: Date,
     lines: ResolvedSaleLine[],
     note?: string,
+    deliveryZoneName?: string | null,
+    deliveryFee?: number | null,
     tx?: Prisma.TransactionClient
   ): Promise<RotiseriaSaleWithItems> {
     const run = async (c: Db) => {
@@ -29,8 +31,11 @@ export class SaleRepository {
           shiftDate,
           isCancelled: false,
           note: note?.trim() || null,
+          deliveryZoneName: deliveryZoneName?.trim() || null,
+          deliveryFee: deliveryFee !== undefined && deliveryFee !== null ? deliveryFee : null,
         },
       });
+
 
       await c.rotiseriaSaleItem.createMany({
         data: lines.map((l) => ({
@@ -177,5 +182,43 @@ export class SaleRepository {
       bySale.set(item.saleId, arr);
     }
     return sales.map((s) => ({ ...s, items: bySale.get(s.id) ?? [] }));
+  }
+
+  async getDeliveryStats(
+    businessId: string,
+    sinceDate?: Date
+  ): Promise<Array<{ zoneName: string; count: number; totalDeliveryFee: number }>> {
+    const whereClause: Prisma.RotiseriaSaleWhereInput = {
+      businessId,
+      isCancelled: false,
+      deliveryFee: { not: null },
+      ...(sinceDate ? { shiftDate: { gte: sinceDate } } : {}),
+    };
+
+    const sales = await this.db.rotiseriaSale.findMany({
+      where: whereClause,
+      select: {
+        deliveryZoneName: true,
+        deliveryFee: true,
+      },
+    });
+
+    const byZone = new Map<string, { count: number; totalDeliveryFee: number }>();
+    for (const sale of sales) {
+      const zoneName = sale.deliveryZoneName?.trim() || 'General / Sin especificar';
+      const fee = Number(sale.deliveryFee ?? 0);
+      const current = byZone.get(zoneName) ?? { count: 0, totalDeliveryFee: 0 };
+      current.count += 1;
+      current.totalDeliveryFee = Math.round((current.totalDeliveryFee + fee) * 100) / 100;
+      byZone.set(zoneName, current);
+    }
+
+    return Array.from(byZone.entries())
+      .map(([zoneName, data]) => ({
+        zoneName,
+        count: data.count,
+        totalDeliveryFee: data.totalDeliveryFee,
+      }))
+      .sort((a, b) => b.count - a.count || b.totalDeliveryFee - a.totalDeliveryFee);
   }
 }

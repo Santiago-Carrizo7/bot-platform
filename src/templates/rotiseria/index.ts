@@ -7,10 +7,12 @@ import type {
 } from '../../core/actions/registry.js';
 import { ProductRepository } from './persistence/product.repo.js';
 import { SaleRepository } from './persistence/sale.repo.js';
+import { DeliveryZoneRepository } from './persistence/delivery-zone.repo.js';
 import { ProductService } from './domain/product.service.js';
 import { SaleService } from './domain/sale.service.js';
 import { StatsService } from './domain/stats.service.js';
-import { buildRotiseriaActions } from './actions.js';
+import { DeliveryZoneService } from './domain/delivery-zone.service.js';
+import { buildRotiseriaActions, ROTISERIA_MENU_HELP_TEXT } from './actions.js';
 import { buildRotiseriaSystemPrompt } from './prompts.js';
 import {
   esc,
@@ -22,15 +24,87 @@ import {
   formatSaleSummary,
   formatTimeOnly,
   getCategoryIcon,
+  formatDeliveryStatsSummary,
 } from './format.js';
 import { calculatePricing } from './domain/pricing.js';
 import { getShiftDate } from './domain/shift.js';
 import { applyModification, parseModificationText } from './domain/modification.js';
 
+export function parseDeliveryZonesBatchText(
+  text: string
+): Array<{ nombre: string; precio: number; barrios: string[] }> {
+  const chunks = text.includes('\n')
+    ? text.split('\n')
+    : text.includes(';')
+    ? text.split(';')
+    : [text];
+  const lines = chunks.map((l) => l.trim()).filter(Boolean);
+  const result: Array<{ nombre: string; precio: number; barrios: string[] }> = [];
+
+  for (const line of lines) {
+    const m = line.match(
+      /^([^:\-\d]+?)\s*[:\-]\s*(?:[\$\s]*)(gratis|\d+(?:[.,]\d+)?)(?:\s*(?:[\(\-])\s*(?:barrios:?\s*)?([^\)\-]+)\)?)?/i
+    );
+    if (m) {
+      const nombre = m[1].trim();
+      const rawPrice = m[2].trim().toLowerCase();
+      const precio = rawPrice === 'gratis' ? 0 : parseFloat(rawPrice.replace(',', '.'));
+      const barrios = m[3]
+        ? m[3]
+            .split(',')
+            .map((b) => b.trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+      if (nombre && !isNaN(precio)) {
+        result.push({ nombre, precio, barrios });
+        continue;
+      }
+    }
+
+    // Patrón "Zona / Barrios a 2500" o "Zona a gratis"
+    const mA = line.match(
+      /^([^:\-\d]+?)\s+a\s+(?:[\$\s]*)(gratis|\d+(?:[.,]\d+)?)(?:\s*(?:[\(\-])\s*(?:barrios:?\s*)?([^\)\-]+)\)?)?/i
+    );
+    if (mA) {
+      const rawNombre = mA[1].trim();
+      const rawPrice = mA[2].trim().toLowerCase();
+      const precio = rawPrice === 'gratis' ? 0 : parseFloat(rawPrice.replace(',', '.'));
+      const barriosFromGroup = rawNombre
+        .split(/,|\by\b/i)
+        .map((b) => b.trim().toLowerCase())
+        .filter(Boolean);
+      const extraBarrios = mA[3]
+        ? mA[3]
+            .split(',')
+            .map((b) => b.trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+      const allBarrios = Array.from(new Set([...barriosFromGroup, ...extraBarrios]));
+      const mainName = rawNombre.split(/,|\by\b/i)[0].trim();
+      if (mainName && !isNaN(precio)) {
+        result.push({ nombre: mainName, precio, barrios: allBarrios });
+        continue;
+      }
+    }
+
+    const m2 = line.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+?)\s+(?:[\$\s]*)(\d+(?:[.,]\d+)?)$/);
+    if (m2) {
+      const nombre = m2[1].trim();
+      const precio = parseFloat(m2[2].replace(',', '.'));
+      if (nombre && !isNaN(precio)) {
+        result.push({ nombre, precio, barrios: [] });
+      }
+    }
+  }
+
+  return result;
+}
+
 export interface RotiseriaTemplateDeps {
   db: PrismaClient;
   products?: ProductService;
   sales?: SaleService;
+  deliveryZones?: DeliveryZoneService;
 }
 
 export interface RotiseriaTemplateBundle {
@@ -40,44 +114,54 @@ export interface RotiseriaTemplateBundle {
 
 const COMMANDS: CommandDef[] = [
   { command: 'venta', description: '📝 Registrar venta', action: 'registrar_venta' },
+  { command: 'promo', description: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
+  { command: 'comida', description: '➕ Crear comida', action: 'crear_producto' },
+  { command: 'precio', description: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
+  { command: 'envios', description: '🛵 Envíos a domicilio y tarifas', action: 'gestionar_envios' },
   { command: 'dias', description: '📅 Control de días recientes', action: 'control_dias' },
   { command: 'estadisticas', description: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
-  { command: 'stats', description: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
-  { command: 'anular', description: '↩️ Anular última venta', action: 'anular_venta' },
-  { command: 'precio', description: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
-  { command: 'menu', description: '📋 Ver carta y promociones vigentes', action: 'consultar_menu' },
   { command: 'ventas', description: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
-  { command: 'producto', description: '➕ Crear comida o empanada', action: 'crear_producto' },
-  { command: 'promo', description: '🎁 Crear promo', action: 'crear_promo' },
+  { command: 'anular', description: '↩️ Anular última venta', action: 'anular_venta' },
+  { command: 'carta', description: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
+  { command: 'stats', description: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
+  { command: 'menu', description: '✨ Funcionalidades disponibles', action: 'mostrar_menu', reply: ROTISERIA_MENU_HELP_TEXT },
+  { command: 'producto', description: '➕ Crear comida', action: 'crear_producto' },
 ];
 
 export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaTemplateBundle {
   const productRepo = new ProductRepository(deps.db);
   const saleRepo = new SaleRepository(deps.db);
+  const deliveryZoneRepo = new DeliveryZoneRepository(deps.db);
 
   const products = deps.products ?? new ProductService(productRepo);
   const stats = new StatsService(saleRepo);
   const sales = deps.sales ?? new SaleService(saleRepo, products, stats);
+  const deliveryZones = deps.deliveryZones ?? new DeliveryZoneService(deliveryZoneRepo);
 
   const template: TemplateDefinition = {
     id: 'rotiseria',
     label: 'Rotisería / Sándwiches y Empanadas',
     welcome: (businessName) =>
       [
-        `👋 ¡Hola! Soy el asistente de *${businessName}*.`,
+        '👋 ¡Hola! Qué lindo tenerte por acá.',
         '',
-        '📝 Para registrar ventas, mandame un audio o escribí directo:',
-        '• "Una docena de salteñas y dos sándwiches de milanesa"',
-        '• "3 empanadas de pollo y una coca"',
+        `Soy tu asistente para *${businessName}*, y estoy listo para darte una mano en la hora pico para que atiendas rápido y no te compliques con las cuentas.`,
         '',
-        'Tenés los accesos rápidos en los botones de abajo o tocá /menu para ver opciones.',
+        '🎙️ *¿Cómo funciona? Es muy fácil:*',
+        'Mandame un audio o escribime tal cual te piden los clientes por WhatsApp:',
+        '👉 _"1 docena de carne y una de pollo con envío a Tres Cerritos"_',
+        '',
+        'Yo me encargo de armarte el cálculo de las docenas, sumar el delivery y dejarte la cuenta lista para cobrar.',
+        '',
+        'Abajo te dejo los botones rápidos para que los uses cuando quieras 👇',
       ].join('\n'),
     systemPrompt: (businessName, referenceDate, hints) =>
       buildRotiseriaSystemPrompt(businessName, referenceDate, hints),
     resolveHints: async (tenant) => {
-      const [productList, promoList] = await Promise.all([
+      const [productList, promoList, zoneList] = await Promise.all([
         products.listProducts(tenant.business.id, { limit: 100 }),
         products.listPromos(tenant.business.id),
+        deliveryZones.listActive(tenant.business.id),
       ]);
 
       const lines: string[] = [];
@@ -94,11 +178,19 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           lines.push(`- ${p.name} (unidad ${formatCurrency(Number(p.priceUnit))}${docena})`);
         }
       }
+      if (zoneList.length > 0) {
+        lines.push('Zonas de envío:');
+        for (const z of zoneList) {
+          const fee = z.price === 0 ? 'gratis ($0)' : formatCurrency(z.price);
+          const barrios = z.barrios.length > 0 ? ` (barrios: ${z.barrios.join(', ')})` : '';
+          lines.push(`- Zona "${z.name}": flete ${fee}${barrios}`);
+        }
+      }
 
       if (lines.length === 0) return '';
-      return lines.join('\n').slice(0, 1500);
+      return lines.join('\n').slice(0, 1800);
     },
-    actions: buildRotiseriaActions({ products, sales }),
+    actions: buildRotiseriaActions({ products, sales, deliveryZones }),
     commands: COMMANDS,
     welcomeHint: async (tenant) => {
       const existing = await products.listProducts(tenant.business.id, { limit: 1 });
@@ -108,6 +200,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         '*"Crear empanada de carne a 1500, docena 15000"*.'
       );
     },
+
     interpretDirectly: (text, activeActionName, activeData) => {
       const trimmed = text.trim();
       if (activeActionName === 'registrar_venta') {
@@ -144,6 +237,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           const currentItems = activeData.items.map((it: any) => ({
             name: String(it.nombre ?? it.name),
             quantity: Number(it.cantidad ?? it.quantity),
+            unitPrice: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
           }));
           const patch = parseModificationText(trimmed, currentItems);
           if (patch) {
@@ -152,14 +246,190 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
               return {
                 actionName: 'registrar_venta',
                 params: {
-                  items: updated.map((it) => ({ nombre: it.name, cantidad: it.quantity })),
+                  ...activeData,
+                  items: updated.map((it) => ({
+                    nombre: it.name,
+                    cantidad: it.quantity,
+                    precio_unitario: (it as any).unitPrice,
+                  })),
                   _modifying: true,
                 },
               };
             }
           }
         }
+
+        // Ingreso manual de precio unitario para un ítem no catalogado / especial
+        if (activeData?._awaitingItemPriceFor !== undefined && activeData._awaitingItemPriceFor !== null) {
+          const targetIndex = typeof activeData._awaitingItemPriceIndex === 'number' ? activeData._awaitingItemPriceIndex : -1;
+          const targetName = String(activeData._awaitingItemPriceFor).toLowerCase().trim();
+          const lower = trimmed.toLowerCase();
+          let price: number | null = null;
+          if (lower.includes('gratis') || lower === '0') {
+            price = 0;
+          } else {
+            const clean = lower.replace(/\$/g, '').trim();
+            if (clean.endsWith('k')) {
+              const base = parseFloat(clean.slice(0, -1).replace(',', '.'));
+              if (!isNaN(base)) price = Math.round(base * 1000);
+            } else {
+              const numStr = clean.replace(/[^0-9.,]/g, '').replace(',', '.');
+              const parsed = parseFloat(numStr);
+              if (!isNaN(parsed) && parsed >= 0) price = parsed;
+            }
+          }
+
+          if (price !== null) {
+            const currentItems = Array.isArray(activeData.items)
+              ? activeData.items.map((it: any) => ({
+                  nombre: String(it.nombre ?? it.name),
+                  cantidad: Number(it.cantidad ?? it.quantity),
+                  precio_unitario: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
+                }))
+              : [];
+
+            let foundIdx = targetIndex >= 0 && targetIndex < currentItems.length ? targetIndex : -1;
+            if (foundIdx < 0) {
+              foundIdx = currentItems.findIndex(
+                (it) => it.nombre.toLowerCase().trim() === targetName
+              );
+            }
+
+            if (foundIdx >= 0) {
+              currentItems[foundIdx].precio_unitario = price;
+            }
+
+            return {
+              actionName: 'registrar_venta',
+              params: {
+                ...activeData,
+                items: currentItems,
+                _awaitingItemPriceIndex: null,
+                _awaitingItemPriceFor: null,
+              },
+            };
+          }
+        }
+
+        // Ingreso manual de flete cuando se esperaba monto para una zona o flete directo
+        if (activeData?._awaitingManualFee) {
+          const clean = trimmed.toLowerCase().replace(/[^0-9.,]/g, '').replace(',', '.');
+          let fee: number | null = null;
+          if (trimmed.toLowerCase().includes('gratis') || trimmed === '0') {
+            fee = 0;
+          } else if (clean) {
+            const parsed = parseFloat(clean);
+            if (!isNaN(parsed) && parsed >= 0) fee = parsed;
+          }
+
+          if (fee !== null) {
+            return {
+              actionName: 'registrar_venta',
+              params: {
+                flete_monto: fee,
+                zona_envio: String(activeData.zona_envio ?? activeData.zona_no_reconocida ?? 'Envío'),
+                zona_no_reconocida: undefined,
+                _awaitingManualFee: false,
+              },
+            };
+          }
+        }
+
+        // Ingreso de zona / flete / retiro en local
+        if (activeData?._awaitingDelivery) {
+          const lower = trimmed.toLowerCase();
+          if (
+            lower.includes('sin envio') ||
+            lower.includes('sin flete') ||
+            lower.includes('mostrador') ||
+            lower.includes('retira') ||
+            lower.includes('local') ||
+            lower.includes('sacar') ||
+            lower === '0' ||
+            lower === 'gratis'
+          ) {
+            if (lower === '0' || lower === 'gratis' || lower.includes('gratis')) {
+              return {
+                actionName: 'registrar_venta',
+                params: {
+                  flete_monto: 0,
+                  zona_envio: 'Envío',
+                  zona_no_reconocida: null,
+                  _awaitingDelivery: false,
+                },
+              };
+            }
+            return {
+              actionName: 'registrar_venta',
+              params: {
+                flete_monto: null,
+                zona_envio: null,
+                zona_no_reconocida: null,
+                _awaitingDelivery: false,
+              },
+            };
+          }
+
+          const cleanNum = lower.replace(/[^0-9.,]/g, '').replace(',', '.');
+          const parsedNum = parseFloat(cleanNum);
+          if (!isNaN(parsedNum) && parsedNum > 0 && !lower.match(/[a-záéíóúñ]/)) {
+            return {
+              actionName: 'registrar_venta',
+              params: {
+                flete_monto: parsedNum,
+                zona_envio: 'Envío',
+                zona_no_reconocida: null,
+                _awaitingDelivery: false,
+              },
+            };
+          }
+
+          return {
+            actionName: 'registrar_venta',
+            params: {
+              zona_envio: trimmed,
+              flete_monto: undefined,
+              zona_no_reconocida: null,
+              _awaitingDelivery: false,
+            },
+          };
+        }
       }
+
+      // Carga de zonas de envío en lote
+      if (activeActionName === 'configurar_envios_lote') {
+        const parsedZones = parseDeliveryZonesBatchText(trimmed);
+        if (parsedZones.length > 0) {
+          return {
+            actionName: 'configurar_envios_lote',
+            params: { zonas: parsedZones },
+          };
+        }
+      }
+
+      // Ingreso de nuevo precio para una zona de envío
+      if (activeActionName === 'gestionar_envios' && activeData?._awaitingZonePriceId) {
+        const lower = trimmed.toLowerCase();
+        let newPrice: number | null = null;
+        if (lower.includes('gratis') || lower === '0') {
+          newPrice = 0;
+        } else {
+          const cleanNum = lower.replace(/[^0-9.,]/g, '').replace(',', '.');
+          const parsed = parseFloat(cleanNum);
+          if (!isNaN(parsed) && parsed >= 0) newPrice = parsed;
+        }
+
+        if (newPrice !== null) {
+          return {
+            actionName: 'gestionar_envios',
+            params: {
+              zone_id: String(activeData._awaitingZonePriceId),
+              nuevo_precio: newPrice,
+            },
+          };
+        }
+      }
+
 
       // Ingreso de precio manual durante el flujo guiado de cambio de precio
       if (activeActionName === 'cambiar_precio' && activeData?._awaitingPriceForProductId) {
@@ -185,6 +455,62 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         }
       }
 
+      // Gestión de promociones interactiva
+      if (activeActionName === 'crear_editar_promo') {
+        if (activeData?._awaitingPromoPriceId) {
+          const cleanNum = trimmed.replace(/[^0-9.,]/g, '').replace(',', '.');
+          const val = parseFloat(cleanNum);
+          if (!isNaN(val) && val > 0) {
+            return {
+              actionName: 'crear_editar_promo',
+              params: {
+                promo_id: String(activeData._awaitingPromoPriceId),
+                precio: val,
+              },
+            };
+          }
+        }
+
+        if (activeData?._awaitingPromoDescId) {
+          return {
+            actionName: 'crear_editar_promo',
+            params: {
+              promo_id: String(activeData._awaitingPromoDescId),
+              descripcion: trimmed === '-' ? '' : trimmed,
+            },
+          };
+        }
+
+        if (activeData?._creatingPromo) {
+          const delimiter = trimmed.includes('|') ? '|' : trimmed.includes('/') ? '/' : null;
+          if (delimiter) {
+            const parts = trimmed.split(delimiter).map((p) => p.trim());
+            if (parts.length >= 2) {
+              const name = parts[0];
+              const price = parseFloat(parts[1].replace(/[^0-9.,]/g, '').replace(',', '.'));
+              const desc = parts[2] || undefined;
+              if (name && !isNaN(price) && price > 0) {
+                return {
+                  actionName: 'crear_editar_promo',
+                  params: {
+                    nombre: name,
+                    precio: price,
+                    descripcion: desc,
+                  },
+                };
+              }
+            }
+          }
+        }
+      }
+
+      if (trimmed.toLowerCase() === 'menu' || trimmed.toLowerCase() === '/menu') {
+        return { actionName: 'mostrar_menu', params: {} };
+      }
+      if (trimmed.toLowerCase() === 'carta' || trimmed.toLowerCase() === '/carta') {
+        return { actionName: 'consultar_carta', params: {} };
+      }
+
       return null;
     },
     replyMenu: [
@@ -197,24 +523,29 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     replyMenuLayout: [1, 2, 2],
     menu: [
       { label: '📝 Registrar venta', action: 'registrar_venta' },
+      { label: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
       { label: '📅 Control de días recientes', action: 'control_dias' },
       { label: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
       { label: '↩️ Anular última venta', action: 'anular_venta' },
       { label: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
-      { label: '📋 Ver carta y promociones vigentes', action: 'consultar_menu' },
+      { label: '🛵 Envíos', action: 'gestionar_envios' },
+      { label: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
       { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
-      { label: '➕ Crear comida o empanada', action: 'crear_producto' },
-      { label: '🎁 Crear promo', action: 'crear_promo' },
+      { label: '➕ Crear comida', action: 'crear_producto' },
     ],
     menuCommands: [
       { command: 'venta', description: '📝 Registrar venta' },
+      { command: 'promo', description: '🎁 Gestionar promociones' },
+      { command: 'comida', description: '➕ Crear comida' },
+      { command: 'precio', description: '🏷️ Modificar precios de la carta' },
+      { command: 'envios', description: '🛵 Envíos a domicilio y tarifas' },
       { command: 'dias', description: '📅 Control de días recientes' },
       { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
-      { command: 'anular', description: '↩️ Anular última venta' },
-      { command: 'precio', description: '🏷️ Modificar precios de la carta' },
-      { command: 'menu', description: '📋 Ver carta y promociones vigentes' },
       { command: 'ventas', description: '🧾 Últimas ventas registradas' },
+      { command: 'anular', description: '↩️ Anular última venta' },
+      { command: 'carta', description: '📋 Ver carta y promociones vigentes' },
     ],
+
     handleCallback: async (ctx, data, activeState, conversations, audit) => {
       // 1. Modificar pedido
       if (data === 'rotiseria:modificar') {
@@ -510,7 +841,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           '',
           `💰 Facturación neta: *${formatCurrency(st.salesTotal)}*`,
           `🧾 Cantidad de ventas: *${st.salesCount}* pedidos`,
-          `🏷️ Ticket promedio: *${formatCurrency(st.averageTicket)}*`,
+          
           st.cancelledCount > 0 ? `↩️ Pedidos anulados: *${st.cancelledCount}*` : '',
           '',
           '🏆 *Top 3 productos más vendidos:*',
@@ -535,10 +866,21 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           lines.push('• _Sin categorías en este período_');
         }
 
+        if (st.promosSummary && st.promosSummary.promos.length > 0) {
+          lines.push('', '🎁 *Promos vendidas:*');
+          for (const pr of st.promosSummary.promos) {
+            lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
+          }
+          lines.push(
+            `Total combos: *${formatQty(st.promosSummary.totalQuantity)}* u. (*${formatCurrency(st.promosSummary.totalAmount)}*)`
+          );
+        }
+
         const buttons: InlineButton[][] = [];
         if (st.categories.length > 0) {
           buttons.push([{ text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${period}` }]);
         }
+        buttons.push([{ text: '🛵 Ver ranking de envíos', callbackData: 'rotiseria:envios_stats' }]);
         buttons.push([{ text: '⬅️ Volver a períodos', callbackData: 'rotiseria:stats_menu' }]);
 
         return {
@@ -639,32 +981,53 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         };
       }
 
-      // 12. Anulación interactiva: listar últimas 5
-      if (data === 'rotiseria:anular_listar') {
-        const recent = await sales.listRecentSales(ctx.tenant.business.id, 10);
-        const active = recent.filter((s) => !s.isCancelled).slice(0, 5);
-        if (active.length === 0) {
-          return { text: 'No hay ventas activas recientes para anular.', parseMode: 'Markdown' };
+      // 12. Anulación interactiva: listar ventas (5 o 10)
+      if (data === 'rotiseria:anular_listar' || data.startsWith('rotiseria:anular_listar:')) {
+        const rawLimit = data.startsWith('rotiseria:anular_listar:')
+          ? parseInt(data.slice('rotiseria:anular_listar:'.length), 10)
+          : 10;
+        const limit = !isNaN(rawLimit) && rawLimit > 0 ? rawLimit : 10;
+        const recent = await sales.listRecentSales(ctx.tenant.business.id, limit);
+        if (recent.length === 0) {
+          return { text: 'No hay ventas recientes para anular.', parseMode: 'Markdown' };
         }
         const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
         const rows: InlineButton[][] = [];
-        for (const s of active) {
+        for (const s of recent) {
           const num = formatSaleNumber(s.id);
-          const label = `🛒 Venta #${num} (${formatCurrency(Number(s.total))} — ${formatTimeOnly(s.createdAt, tz)} hs)`;
-          rows.push([{ text: label, callbackData: `rotiseria:anular_ver:${s.id}` }]);
+          const time = formatTimeOnly(s.createdAt, tz);
+          const totalStr = formatCurrency(Number(s.total));
+          if (s.isCancelled) {
+            rows.push([{ text: `❌ #${num} — ${totalStr} (ANULADA - ${time} hs)`, callbackData: 'rotiseria:anular_ya_anulada' }]);
+          } else {
+            rows.push([{ text: `↩️ #${num} — ${totalStr} (${time} hs)`, callbackData: `rotiseria:anular_ver:${s.id}` }]);
+          }
         }
         rows.push([{ text: '❌ Cancelar', callbackData: 'rotiseria:anular_cancelar' }]);
 
+        const title = data.startsWith('rotiseria:anular_listar:')
+          ? `📋 *Seleccioná la venta que querés anular (últimas ${limit}):*`
+          : '📋 *Seleccioná la venta que querés anular:*';
+
         return {
-          text: '📋 *Seleccioná la venta que querés anular:*',
+          text: title,
           parseMode: 'Markdown',
           inlineKeyboard: rows,
         };
       }
 
+      if (data === 'rotiseria:anular_ya_anulada') {
+        return {
+          text: 'Esta venta ya se encuentra anulada y no puede volver a anularse.',
+          parseMode: 'Markdown',
+        };
+      }
+
       // 13. Anulación interactiva: ver venta elegida
-      if (data.startsWith('rotiseria:anular_ver:')) {
-        const id = data.slice('rotiseria:anular_ver:'.length);
+      if (data.startsWith('rotiseria:anular_ver:') || data.startsWith('rotiseria:anular_pedido:')) {
+        const id = data.startsWith('rotiseria:anular_ver:')
+          ? data.slice('rotiseria:anular_ver:'.length)
+          : data.slice('rotiseria:anular_pedido:'.length);
         const sale = await sales.findSaleById(id, ctx.tenant.business.id);
         if (!sale || sale.isCancelled) {
           return { text: 'La venta seleccionada no está disponible o ya fue anulada.', parseMode: 'Markdown' };
@@ -888,7 +1251,870 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         return { text: 'Operación cerrada.', parseMode: 'Markdown' };
       }
 
+      // 23. Desambiguación: resolver ítem sugerido
+      if (data.startsWith('rotiseria:resolver:')) {
+        const parts = data.slice('rotiseria:resolver:'.length).split(':');
+        const sugerenciaName = decodeURIComponent(parts[0]);
+        const cant = parseInt(parts[1] || '1', 10) || 1;
+
+        const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
+        const currentItems: Array<{ nombre: string; cantidad: number }> = Array.isArray(currentData.items)
+          ? currentData.items.map((it: any) => ({
+              nombre: String(it.nombre ?? it.name),
+              cantidad: Number(it.cantidad ?? it.quantity),
+            }))
+          : [];
+
+        const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+        const resolvedProduct = catalog.findProduct(sugerenciaName);
+        const resolvedPromo = !resolvedProduct ? catalog.findPromo(sugerenciaName) : null;
+        const resolvedExactName = resolvedProduct ? resolvedProduct.name : resolvedPromo ? resolvedPromo.name : sugerenciaName;
+
+        const existingIdx = currentItems.findIndex(
+          (it) => it.nombre.toLowerCase() === resolvedExactName.toLowerCase()
+        );
+        if (existingIdx >= 0) {
+          currentItems[existingIdx].cantidad += cant;
+        } else {
+          currentItems.push({ nombre: resolvedExactName, cantidad: cant });
+        }
+
+        const currentNoRec: any[] = Array.isArray(currentData.no_reconocidos) ? [...currentData.no_reconocidos] : [];
+        const recIdx = currentNoRec.findIndex((n) => {
+          const sug = typeof n === 'object' && n !== null ? n.sugerencia : null;
+          return sug && String(sug).toLowerCase() === sugerenciaName.toLowerCase();
+        });
+        if (recIdx >= 0) {
+          currentNoRec.splice(recIdx, 1);
+        }
+
+        const pricing = calculatePricing(
+          currentItems.map((it) => ({ name: it.nombre, quantity: it.cantidad })),
+          catalog
+        );
+
+        const updatedData: Record<string, unknown> = {
+          ...currentData,
+          items: currentItems,
+          no_reconocidos: currentNoRec,
+        };
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'CONFIRMING',
+            actionName: 'registrar_venta',
+            data: updatedData,
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+
+        const summaryText = formatSaleSummary({
+          items: currentItems,
+          nota: updatedData.nota as string | undefined,
+          fecha: updatedData.fecha as string | undefined,
+          breakdown: pricing.breakdown,
+          total: pricing.total,
+          isModifying: false,
+          now: ctx.now,
+          timezone: ctx.tenant.business.timezone,
+          noReconocidos: currentNoRec,
+        });
+
+        const actionReg = template.actions.find((a) => a.name === 'registrar_venta');
+        const keyboard = actionReg?.confirmButtons ? actionReg.confirmButtons(updatedData) : undefined;
+
+        return {
+          text: summaryText,
+          parseMode: 'Markdown',
+          inlineKeyboard: keyboard,
+        };
+      }
+
+      // 24. Desambiguación: ignorar ítem no reconocido
+      if (data.startsWith('rotiseria:ignorar:')) {
+        const idx = parseInt(data.slice('rotiseria:ignorar:'.length), 10);
+        const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
+        const currentItems: Array<{ nombre: string; cantidad: number }> = Array.isArray(currentData.items)
+          ? currentData.items.map((it: any) => ({
+              nombre: String(it.nombre ?? it.name),
+              cantidad: Number(it.cantidad ?? it.quantity),
+            }))
+          : [];
+        const currentNoRec: any[] = Array.isArray(currentData.no_reconocidos) ? [...currentData.no_reconocidos] : [];
+
+        if (idx >= 0 && idx < currentNoRec.length) {
+          currentNoRec.splice(idx, 1);
+        }
+
+        const hasSuggestionsLeft = currentNoRec.some((n) => typeof n === 'object' && n !== null && n.sugerencia);
+        if (currentItems.length === 0 && !hasSuggestionsLeft) {
+          if (conversations) {
+            await conversations.clear(ctx.tenant.business.id, ctx.actorUserId);
+          }
+          return {
+            text: '❌ Pedido cancelado al no contener productos de la carta.',
+            parseMode: 'Markdown',
+          };
+        }
+
+        let breakdown: string[] | undefined;
+        let total: number | undefined;
+        try {
+          const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+          if (currentItems.length > 0) {
+            const pricing = calculatePricing(
+              currentItems.map((it) => ({ name: it.nombre, quantity: it.cantidad })),
+              catalog
+            );
+            breakdown = pricing.breakdown;
+            total = pricing.total;
+          }
+        } catch {
+          // fallback
+        }
+
+        const updatedData: Record<string, unknown> = {
+          ...currentData,
+          items: currentItems,
+          no_reconocidos: currentNoRec,
+        };
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'CONFIRMING',
+            actionName: 'registrar_venta',
+            data: updatedData,
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+
+        const summaryText = formatSaleSummary({
+          items: currentItems,
+          nota: updatedData.nota as string | undefined,
+          fecha: updatedData.fecha as string | undefined,
+          breakdown,
+          total,
+          isModifying: false,
+          now: ctx.now,
+          timezone: ctx.tenant.business.timezone,
+          noReconocidos: currentNoRec,
+        });
+
+        const actionReg = template.actions.find((a) => a.name === 'registrar_venta');
+        const keyboard = actionReg?.confirmButtons ? actionReg.confirmButtons(updatedData) : undefined;
+
+        return {
+          text: summaryText,
+          parseMode: 'Markdown',
+          inlineKeyboard: keyboard,
+        };
+      }
+
+      // 25. Promos: nueva promo
+      if (data === 'rotiseria:promo:nueva') {
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'crear_editar_promo',
+            data: { _creatingPromo: true },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: '🎁 *Nueva Promoción*\n\nEscribí los datos en formato:\n`Nombre | Precio | Descripción (opcional)`\n\nPor ejemplo:\n`Promo 2 | 18000 | 1 Pizza Especial + 6 Empanadas`',
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 26. Promos: ver / editar ficha
+      if (data.startsWith('rotiseria:promo:editar:')) {
+        const id = data.slice('rotiseria:promo:editar:'.length);
+        const promo = await products.findPromoById(id, ctx.tenant.business.id);
+        if (!promo) {
+          return { text: 'Promo no encontrada.', parseMode: 'Markdown' };
+        }
+        const statusText = promo.isActive ? '🟢 Activa' : '⏸️ Pausada';
+        const descText = promo.description ? `_${esc(promo.description)}_` : '_(Sin descripción)_';
+        const card = [
+          `🎁 *Promo: ${esc(promo.name)}*`,
+          '',
+          `💰 Precio: *${formatCurrency(Number(promo.price))}*`,
+          `📝 Detalle: ${descText}`,
+          `📌 Estado: *${statusText}*`,
+        ].join('\n');
+
+        const buttons: InlineButton[][] = [
+          [
+            { text: '💵 Cambiar precio', callbackData: `rotiseria:promo:edit_price:${promo.id}` },
+            { text: '📝 Cambiar descripción', callbackData: `rotiseria:promo:edit_desc:${promo.id}` },
+          ],
+          [
+            promo.isActive
+              ? { text: '🚫 Pausar / Desactivar', callbackData: `rotiseria:promo:deactivate:${promo.id}` }
+              : { text: '▶️ Reactivar', callbackData: `rotiseria:promo:activate:${promo.id}` },
+          ],
+          [{ text: '⬅️ Volver a promos', callbackData: 'rotiseria:promo:listar' }],
+        ];
+
+        return {
+          text: card,
+          parseMode: 'Markdown',
+          inlineKeyboard: buttons,
+        };
+      }
+
+      // 27. Promos: pedir nuevo precio
+      if (data.startsWith('rotiseria:promo:edit_price:')) {
+        const id = data.slice('rotiseria:promo:edit_price:'.length);
+        const promo = await products.findPromoById(id, ctx.tenant.business.id);
+        if (!promo) return { text: 'Promo no encontrada.', parseMode: 'Markdown' };
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'crear_editar_promo',
+            data: { _awaitingPromoPriceId: promo.id, promoName: promo.name },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: `💵 Ingresá el nuevo precio para *${esc(promo.name)}* (actual: *${formatCurrency(Number(promo.price))}*):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 28. Promos: pedir nueva descripción
+      if (data.startsWith('rotiseria:promo:edit_desc:')) {
+        const id = data.slice('rotiseria:promo:edit_desc:'.length);
+        const promo = await products.findPromoById(id, ctx.tenant.business.id);
+        if (!promo) return { text: 'Promo no encontrada.', parseMode: 'Markdown' };
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'crear_editar_promo',
+            data: { _awaitingPromoDescId: promo.id, promoName: promo.name },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: `📝 Ingresá la nueva descripción para *${esc(promo.name)}* (o enviá \`-\` para quitarla):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 29. Promos: desactivar / pausar
+      if (data.startsWith('rotiseria:promo:deactivate:')) {
+        const id = data.slice('rotiseria:promo:deactivate:'.length);
+        const updated = await products.updatePromo(id, ctx.tenant.business.id, { isActive: false });
+        if (audit) {
+          await audit.log({
+            businessId: ctx.tenant.business.id,
+            actorUserId: ctx.actorUserId,
+            action: 'promo.deactivated',
+            entityType: 'rotiseria_promo',
+            entityId: id,
+            metadata: { name: updated.name },
+          });
+        }
+        const descText = updated.description ? `_${esc(updated.description)}_` : '_(Sin descripción)_';
+        const card = [
+          `⏸️ *Promo pausada: ${esc(updated.name)}*`,
+          '',
+          `💰 Precio: *${formatCurrency(Number(updated.price))}*`,
+          `📝 Detalle: ${descText}`,
+          `📌 Estado: *⏸️ Pausada*`,
+        ].join('\n');
+        const buttons: InlineButton[][] = [
+          [
+            { text: '💵 Cambiar precio', callbackData: `rotiseria:promo:edit_price:${updated.id}` },
+            { text: '📝 Cambiar descripción', callbackData: `rotiseria:promo:edit_desc:${updated.id}` },
+          ],
+          [{ text: '▶️ Reactivar', callbackData: `rotiseria:promo:activate:${updated.id}` }],
+          [{ text: '⬅️ Volver a promos', callbackData: 'rotiseria:promo:listar' }],
+        ];
+        return { text: card, parseMode: 'Markdown', inlineKeyboard: buttons };
+      }
+
+      // 30. Promos: reactivar
+      if (data.startsWith('rotiseria:promo:activate:')) {
+        const id = data.slice('rotiseria:promo:activate:'.length);
+        const updated = await products.updatePromo(id, ctx.tenant.business.id, { isActive: true });
+        if (audit) {
+          await audit.log({
+            businessId: ctx.tenant.business.id,
+            actorUserId: ctx.actorUserId,
+            action: 'promo.activated',
+            entityType: 'rotiseria_promo',
+            entityId: id,
+            metadata: { name: updated.name },
+          });
+        }
+        const descText = updated.description ? `_${esc(updated.description)}_` : '_(Sin descripción)_';
+        const card = [
+          `🟢 *Promo reactivada: ${esc(updated.name)}*`,
+          '',
+          `💰 Precio: *${formatCurrency(Number(updated.price))}*`,
+          `📝 Detalle: ${descText}`,
+          `📌 Estado: *🟢 Activa*`,
+        ].join('\n');
+        const buttons: InlineButton[][] = [
+          [
+            { text: '💵 Cambiar precio', callbackData: `rotiseria:promo:edit_price:${updated.id}` },
+            { text: '📝 Cambiar descripción', callbackData: `rotiseria:promo:edit_desc:${updated.id}` },
+          ],
+          [{ text: '🚫 Pausar / Desactivar', callbackData: `rotiseria:promo:deactivate:${updated.id}` }],
+          [{ text: '⬅️ Volver a promos', callbackData: 'rotiseria:promo:listar' }],
+        ];
+        return { text: card, parseMode: 'Markdown', inlineKeyboard: buttons };
+      }
+
+      // 31. Promos: listar
+      if (data === 'rotiseria:promo:listar') {
+        const promoList = await products.listPromos(ctx.tenant.business.id, { includeInactive: true });
+        const rows: InlineButton[][] = [
+          [{ text: '➕ Crear nueva promo', callbackData: 'rotiseria:promo:nueva' }],
+        ];
+        for (const pr of promoList) {
+          const statusIcon = pr.isActive ? '🟢' : '⏸️';
+          rows.push([
+            {
+              text: `${statusIcon} ${pr.name} (${formatCurrency(Number(pr.price))})`,
+              callbackData: `rotiseria:promo:editar:${pr.id}`,
+            },
+          ]);
+        }
+        rows.push([{ text: '❌ Cancelar', callbackData: 'rotiseria:promo:cancelar' }]);
+        return {
+          text: '🎁 *Gestión de Promociones*\n\nSeleccioná una promo para editar o creá una nueva:',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 32. Promos: cancelar
+      if (data === 'rotiseria:promo:cancelar') {
+        if (conversations) {
+          await conversations.clear(ctx.tenant.business.id, ctx.actorUserId);
+        }
+        return { text: 'Operación cancelada.', parseMode: 'Markdown' };
+      }
+
+      // 33. Historial: 10 ventas
+      if (data === 'rotiseria:historial:10') {
+        const recent = await sales.listRecentSales(ctx.tenant.business.id, 10);
+        const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+        const blocks = recent.map((sale) => {
+          const num = formatSaleNumber(sale.id);
+          const status = sale.isCancelled ? ' ❌ *[ANULADA]*' : '';
+          const items = sale.items.map((it) => `  • ${formatQty(Number(it.quantity))}x ${esc(it.name)}`).join('\n');
+          return `🛒 *Venta #${num}* (*${formatCurrency(Number(sale.total))}*) — _${formatRealDateWithDay(sale.shiftDate)}_ (${formatTimeOnly(sale.createdAt, tz)} hs)${status}\n${items}`;
+        });
+        return {
+          text: [`🧾 *Últimas ${recent.length} ventas:*`, '', ...blocks].join('\n'),
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [
+              { text: '📄 Ver últimas 5 ventas', callbackData: 'rotiseria:historial:5' },
+              { text: '❌ Cerrar', callbackData: 'rotiseria:historial:cerrar' },
+            ],
+          ],
+        };
+      }
+
+      // 34. Historial: 5 ventas
+      if (data === 'rotiseria:historial:5') {
+        const recent = await sales.listRecentSales(ctx.tenant.business.id, 5);
+        const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+        const blocks = recent.map((sale) => {
+          const num = formatSaleNumber(sale.id);
+          const status = sale.isCancelled ? ' ❌ *[ANULADA]*' : '';
+          const items = sale.items.map((it) => `  • ${formatQty(Number(it.quantity))}x ${esc(it.name)}`).join('\n');
+          return `🛒 *Venta #${num}* (*${formatCurrency(Number(sale.total))}*) — _${formatRealDateWithDay(sale.shiftDate)}_ (${formatTimeOnly(sale.createdAt, tz)} hs)${status}\n${items}`;
+        });
+        return {
+          text: [`🧾 *Últimas ${recent.length} ventas:*`, '', ...blocks].join('\n'),
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [
+              { text: '📄 Ver últimas 10 ventas', callbackData: 'rotiseria:historial:10' },
+              { text: '❌ Cerrar', callbackData: 'rotiseria:historial:cerrar' },
+            ],
+          ],
+        };
+      }
+
+      // 35. Historial: cerrar
+      if (data === 'rotiseria:historial:cerrar' || data === 'rotiseria:cerrar') {
+        return { text: 'Operación cerrada.', parseMode: 'Markdown' };
+      }
+
+      // 36. Asignar flete a zona no reconocida
+      if (data.startsWith('rotiseria:asignar_flete:')) {
+        const rawZona = decodeURIComponent(data.replace('rotiseria:asignar_flete:', ''));
+        if (conversations && activeState) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'registrar_venta',
+            data: {
+              ...activeState.data,
+              zona_envio: rawZona,
+              _awaitingManualFee: true,
+            },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: `🛵 *Asignar Flete a "${esc(rawZona)}"*\n\nEscribí el monto del envío (ej: *2000*, o *0* si es gratis):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 36b. Asignar precio manual a ítem no catalogado / especial
+      if (data.startsWith('rotiseria:precio_item:')) {
+        const itemIndex = parseInt(data.replace('rotiseria:precio_item:', ''), 10);
+        const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
+        const currentItems = Array.isArray(currentData.items) ? currentData.items : [];
+        const targetItem = currentItems[itemIndex];
+        const itemName = targetItem ? String((targetItem as any).nombre ?? (targetItem as any).name) : 'el ítem';
+
+        if (conversations && activeState) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'registrar_venta',
+            data: {
+              ...activeState.data,
+              _awaitingItemPriceIndex: itemIndex,
+              _awaitingItemPriceFor: itemName,
+            },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: `💵 ¿Qué precio unitario tiene *${esc(itemName)}*? Escribí el monto (ej: *2500*):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 37. Menú de flete interactivo
+      if (data === 'rotiseria:flete_menu') {
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        const rows: InlineButton[][] = [];
+
+        for (const z of zones) {
+          const feeStr = z.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(z.price);
+          rows.push([
+            {
+              text: `🛵 ${z.name} (${feeStr})`,
+              callbackData: `rotiseria:flete_set:${z.id}`,
+            },
+          ]);
+        }
+
+        rows.push([
+          { text: '✍️ Ingresar monto manual / barrio', callbackData: 'rotiseria:flete_manual' },
+          { text: '🚫 Sin envío (Retiro en local)', callbackData: 'rotiseria:flete_quitar' },
+        ]);
+        rows.push([{ text: '↩️ Volver', callbackData: 'rotiseria:flete_volver' }]);
+
+        return {
+          text: '🛵 *Envíos*\n\nElegí una zona de entrega, ingresá el monto manualmente o quitá el envío:',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 38. Flete manual / Modificar envío
+      if (data === 'rotiseria:flete_manual' || data === 'rotiseria:envio_modificar') {
+        if (conversations && activeState) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'registrar_venta',
+            data: {
+              ...activeState.data,
+              _awaitingDelivery: true,
+            },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: "Escribí o decime el barrio o el monto del flete (ej: 'Grand Bourg' o '2500'). Para sacarlo, escribí '0' o 'sin envío'.",
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 39. Fijar flete desde zona de catálogo
+      if (data.startsWith('rotiseria:flete_set:')) {
+        const zoneId = data.replace('rotiseria:flete_set:', '');
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        const selected = zones.find((z) => z.id === zoneId);
+
+        if (selected && conversations && activeState) {
+          const currentData = (activeState.data ?? {}) as Record<string, unknown>;
+          const updatedData: Record<string, unknown> = {
+            ...currentData,
+            zona_envio: selected.name,
+            flete_monto: selected.price,
+            zona_no_reconocida: null,
+            _awaitingDelivery: false,
+            _awaitingManualFee: false,
+          };
+
+
+          const items = Array.isArray(updatedData.items) ? updatedData.items : [];
+          let breakdown: string[] | undefined;
+          let total: number | undefined;
+          let foodTotal: number | undefined;
+
+          try {
+            const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+            const pricing = calculatePricing(
+              items.map((it: any) => ({ name: it.nombre ?? it.name, quantity: it.cantidad ?? it.quantity })),
+              catalog,
+              { fee: selected.price, zoneName: selected.name }
+            );
+            breakdown = pricing.breakdown;
+            total = pricing.total;
+            foodTotal = pricing.foodTotal;
+          } catch {
+            // fallback
+          }
+
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'CONFIRMING',
+            actionName: 'registrar_venta',
+            data: updatedData,
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+
+          const summary = formatSaleSummary({
+            items: items.map((it: any) => ({ nombre: it.nombre ?? it.name, cantidad: it.cantidad ?? it.quantity })),
+            nota: updatedData.nota as string | undefined,
+            fecha: updatedData.fecha as string | undefined,
+            breakdown,
+            total,
+            foodTotal,
+            deliveryFee: selected.price,
+            deliveryZoneName: selected.name,
+            now: ctx.now,
+            timezone: ctx.tenant.business.timezone,
+          });
+
+          return {
+            text: summary,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [
+                { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+                { text: '❌ Cancelar', callbackData: 'confirm:no' },
+              ],
+              [
+                { text: '🛵 Envíos', callbackData: 'rotiseria:flete_menu' },
+                { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+              ],
+              [{ text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' }],
+            ],
+          };
+        }
+      }
+
+      // 40. Quitar flete (Retiro en mostrador)
+      if (data === 'rotiseria:flete_quitar') {
+        if (conversations && activeState) {
+          const currentData = (activeState.data ?? {}) as Record<string, unknown>;
+          const updatedData: Record<string, unknown> = {
+            ...currentData,
+            zona_envio: null,
+            flete_monto: null,
+            zona_no_reconocida: null,
+            _awaitingDelivery: false,
+            _awaitingManualFee: false,
+          };
+
+
+          const items = Array.isArray(updatedData.items) ? updatedData.items : [];
+          let breakdown: string[] | undefined;
+          let total: number | undefined;
+
+          try {
+            const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+            const pricing = calculatePricing(
+              items.map((it: any) => ({ name: it.nombre ?? it.name, quantity: it.cantidad ?? it.quantity })),
+              catalog
+            );
+            breakdown = pricing.breakdown;
+            total = pricing.total;
+          } catch {
+            // fallback
+          }
+
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'CONFIRMING',
+            actionName: 'registrar_venta',
+            data: updatedData,
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+
+          const summary = formatSaleSummary({
+            items: items.map((it: any) => ({ nombre: it.nombre ?? it.name, cantidad: it.cantidad ?? it.quantity })),
+            nota: updatedData.nota as string | undefined,
+            fecha: updatedData.fecha as string | undefined,
+            breakdown,
+            total,
+            now: ctx.now,
+            timezone: ctx.tenant.business.timezone,
+          });
+
+          return {
+            text: summary,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [
+                { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+                { text: '❌ Cancelar', callbackData: 'confirm:no' },
+              ],
+              [
+                { text: '🛵 Envíos', callbackData: 'rotiseria:flete_menu' },
+                { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+              ],
+              [{ text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' }],
+            ],
+          };
+        }
+      }
+
+      // 41. Volver al resumen desde menú de flete
+      if (data === 'rotiseria:flete_volver') {
+        if (activeState) {
+          const currentData = (activeState.data ?? {}) as Record<string, unknown>;
+          const items = Array.isArray(currentData.items) ? currentData.items : [];
+          let breakdown: string[] | undefined;
+          let total: number | undefined;
+          let foodTotal: number | undefined;
+          let deliveryFee: number | null | undefined = currentData.flete_monto as number | undefined;
+          let deliveryZoneName: string | null | undefined = currentData.zona_envio as string | undefined;
+
+          try {
+            const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+            const pricing = calculatePricing(
+              items.map((it: any) => ({ name: it.nombre ?? it.name, quantity: it.cantidad ?? it.quantity })),
+              catalog,
+              deliveryFee !== undefined ? { fee: deliveryFee, zoneName: deliveryZoneName } : undefined
+            );
+            breakdown = pricing.breakdown;
+            total = pricing.total;
+            foodTotal = pricing.foodTotal;
+            deliveryFee = pricing.deliveryFee;
+            deliveryZoneName = pricing.deliveryZoneName;
+          } catch {
+            // fallback
+          }
+
+          const summary = formatSaleSummary({
+            items: items.map((it: any) => ({ nombre: it.nombre ?? it.name, cantidad: it.cantidad ?? it.quantity })),
+            nota: currentData.nota as string | undefined,
+            fecha: currentData.fecha as string | undefined,
+            breakdown,
+            total,
+            foodTotal,
+            deliveryFee,
+            deliveryZoneName,
+            now: ctx.now,
+            timezone: ctx.tenant.business.timezone,
+          });
+
+          return {
+            text: summary,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [
+                { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
+                { text: '❌ Cancelar', callbackData: 'confirm:no' },
+              ],
+              [
+                { text: '🛵 Envíos', callbackData: 'rotiseria:flete_menu' },
+                { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+              ],
+              [{ text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' }],
+            ],
+          };
+        }
+      }
+
+      // 42. Prompt para cargar zonas en lote / Guía rápida
+      if (data === 'rotiseria:envios_lote_prompt' || data === 'rotiseria:envios_lote_guia') {
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'configurar_envios_lote',
+            data: {},
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: [
+            '🎙️ *Carga rápida de zonas por voz o texto*',
+            '',
+            'Podés mandarme un solo audio o escribir un mensaje agrupando los barrios por precio, por ejemplo:',
+            '',
+            '👉 _"Centro y Macrocentro a 1500; Grand Bourg, San Carlos y Tribuno a 2500; San Lorenzo a 4000; Microcentro gratis"_',
+            '',
+            'Mandá tu audio o mensaje ahora:',
+          ].join('\n'),
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 43. Cambiar precio de una zona: desplegar zonas activas
+      if (data === 'rotiseria:envios_cambiar_precio') {
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        if (zones.length === 0) {
+          return {
+            text: 'Todavía no tenés zonas de envío configuradas para modificar.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [[{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]],
+          };
+        }
+        const rows: InlineButton[][] = [];
+        for (const z of zones) {
+          const feeStr = z.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(z.price);
+          rows.push([
+            {
+              text: `🏷️ ${z.name} (${feeStr})`,
+              callbackData: `rotiseria:envio_sel:${z.id}`,
+            },
+          ]);
+        }
+        rows.push([{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]);
+
+        return {
+          text: '🛵 *Seleccioná la zona a la que querés cambiarle el precio:*',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 44. Zona seleccionada para cambiar precio: preguntar nuevo precio
+      if (data.startsWith('rotiseria:envio_sel:')) {
+        const zoneId = data.slice('rotiseria:envio_sel:'.length);
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        const selected = zones.find((z) => z.id === zoneId);
+        if (!selected) {
+          return { text: 'Zona no encontrada o inactiva.', parseMode: 'Markdown' };
+        }
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'gestionar_envios',
+            data: {
+              _awaitingZonePriceId: selected.id,
+              zoneName: selected.name,
+              currentPrice: selected.price,
+            },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+
+        return {
+          text: `¿Qué nuevo precio tiene *${esc(selected.name)}*? (Escribí el monto o 0 para gratis):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 45. Estadísticas de fletes y zonas
+      if (data === 'rotiseria:envios_stats') {
+        const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+        const currentShift = getShiftDate(ctx.now, tz);
+        const sinceDate = new Date(currentShift);
+        sinceDate.setUTCDate(sinceDate.getUTCDate() - 30);
+
+        const deliveryStats = await sales.getDeliveryStats(ctx.tenant.business.id, sinceDate);
+        const statsText = formatDeliveryStatsSummary(deliveryStats);
+
+        return {
+          text: statsText,
+          parseMode: 'Markdown',
+          inlineKeyboard: [[{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]],
+        };
+      }
+
+      // 46. Volver al panel principal de envíos
+      if (data === 'rotiseria:envios_menu') {
+        if (conversations) {
+          await conversations.clear(ctx.tenant.business.id, ctx.actorUserId);
+        }
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        const lines: string[] = ['🛵 *Zonas y Tarifas de Envíos*', ''];
+
+        if (zones.length === 0) {
+          lines.push('Todavía no tenés zonas de envío configuradas.');
+          lines.push('Podés cargarlas rápidamente agrupando barrios por precio o mandando un audio.');
+        } else {
+          for (const z of zones) {
+            const feeStr = z.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(z.price);
+            lines.push(`• *${esc(z.name)}* — ${feeStr}`);
+            if (z.barrios.length > 0) {
+              const capitalizedBarrios = z.barrios
+                .map((b) => b.charAt(0).toUpperCase() + b.slice(1))
+                .join(', ');
+              lines.push(`  Barrios: ${esc(capitalizedBarrios)}`);
+            }
+          }
+        }
+
+        lines.push('');
+        lines.push('Seleccioná una opción para modificar o consultar:');
+
+        return {
+          text: lines.join('\n'),
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [{ text: '➕ Cargar por lote (audio/texto)', callbackData: 'rotiseria:envios_lote_guia' }],
+            [{ text: '🏷️ Cambiar precio de una zona', callbackData: 'rotiseria:envios_cambiar_precio' }],
+            [{ text: '📊 Zonas con más movimiento', callbackData: 'rotiseria:envios_stats' }],
+          ],
+        };
+      }
+
       return null;
+
     },
   };
 

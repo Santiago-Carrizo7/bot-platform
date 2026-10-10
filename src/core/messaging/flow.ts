@@ -443,7 +443,7 @@ async function handleCommand(
     }
     return md('No hay movimientos recientes para deshacer.');
   }
-  if (name === 'start' || name === 'menu' || name === 'ayuda') {
+  if (name === 'start' || name === 'ayuda' || (name === 'menu' && !deps.template.commands.some((c) => c.command === 'menu'))) {
     const hint = await deps.template.welcomeHint?.(tenant).catch(() => null);
     const hintText = hint ? `\n\n${hint}` : '';
     return {

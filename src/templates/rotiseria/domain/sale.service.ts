@@ -1,5 +1,5 @@
 import { AppError } from '../../../core/errors/errors.js';
-import type { DaySummary, PricingResult, SaleLineInput, StatsSummary } from '../types.js';
+import type { DaySummary, DeliveryStatsSummary, PricingResult, SaleLineInput, StatsSummary } from '../types.js';
 import { calculatePricing } from './pricing.js';
 import { getShiftDate, formatShiftLabel } from './shift.js';
 import { ProductService } from './product.service.js';
@@ -30,10 +30,11 @@ export class SaleService {
     note?: string,
     now: Date = new Date(),
     timezone = 'America/Argentina/Buenos_Aires',
-    customShiftDate?: Date
+    customShiftDate?: Date,
+    delivery?: { fee?: number | null; zoneName?: string | null }
   ): Promise<CreatedRotiseriaSale> {
     const catalog = await this.products.getCatalogLookup(businessId);
-    const pricing = calculatePricing(items, catalog);
+    const pricing = calculatePricing(items, catalog, delivery);
     const shiftDate = customShiftDate ?? getShiftDate(now, timezone);
 
     const sale = await this.repo.create(
@@ -42,7 +43,9 @@ export class SaleService {
       pricing.total,
       shiftDate,
       pricing.lines,
-      note
+      note,
+      pricing.deliveryZoneName,
+      pricing.deliveryFee
     );
 
     return { sale, pricing };
@@ -86,6 +89,9 @@ export class SaleService {
 
     let salesTotal = 0;
     let salesCount = 0;
+    let foodTotal = 0;
+    let deliveryTotal = 0;
+    let deliveryOrdersCount = 0;
     let cancelledTotal = 0;
     let cancelledCount = 0;
     const productCounts: Record<string, { quantity: number; subtotal: number }> = {};
@@ -95,8 +101,22 @@ export class SaleService {
         cancelledTotal = round2(cancelledTotal + Number(sale.total));
         cancelledCount++;
       } else {
-        salesTotal = round2(salesTotal + Number(sale.total));
+        const saleTotal = Number(sale.total);
+        const saleDelivery =
+          sale.deliveryFee !== null && sale.deliveryFee !== undefined
+            ? Number(sale.deliveryFee)
+            : 0;
+
+        salesTotal = round2(salesTotal + saleTotal);
         salesCount++;
+
+        if (sale.deliveryFee !== null && sale.deliveryFee !== undefined) {
+          deliveryOrdersCount++;
+          deliveryTotal = round2(deliveryTotal + saleDelivery);
+          foodTotal = round2(foodTotal + (saleTotal - saleDelivery));
+        } else {
+          foodTotal = round2(foodTotal + saleTotal);
+        }
 
         for (const item of sale.items) {
           if (!productCounts[item.name]) {
@@ -117,6 +137,9 @@ export class SaleService {
       shiftDateStr: formatShiftLabel(shiftDate),
       salesTotal,
       salesCount,
+      foodTotal,
+      deliveryTotal,
+      deliveryOrdersCount,
       cancelledTotal,
       cancelledCount,
       topProducts,
@@ -155,5 +178,12 @@ export class SaleService {
     timezone = 'America/Argentina/Buenos_Aires'
   ) {
     return this.stats.getRecentShiftsSummary(businessId, now, daysCount, timezone);
+  }
+
+  async getDeliveryStats(
+    businessId: string,
+    sinceDate?: Date
+  ): Promise<DeliveryStatsSummary> {
+    return this.stats.getDeliveryStats(businessId, sinceDate);
   }
 }
