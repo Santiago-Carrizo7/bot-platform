@@ -276,132 +276,431 @@ export function parseCalculatorDirectly(trimmed: string): {
   return null;
 }
 
+/**
+ * Parsea una corrección de un ítem en lenguaje natural para un lote pendiente:
+ * - "el 2 es 3300", "el 2 era 3300", "2 3300", "2 es 3300", "ítem 2 3300", "2 = 3300"
+ * - "cambiar 3000 por 3300", "3000 no, 3300"
+ * - "borrar 2", "eliminar 2", "sacar 2"
+ */
+export function parseBatchItemCorrection<T extends { monto: number }>(
+  raw: string,
+  items: T[]
+): T[] | null {
+  const trimmed = raw.trim();
+
+  // 1. Borrar ítem: "borrar 2", "eliminar 2", "sacar 2", "quitar el 2"
+  const delMatch = trimmed.match(/^(?:borrar|eliminar|sacar|quitar)\s+(?:el\s+|[ií]tem\s+)?(\d+)$/i);
+  if (delMatch) {
+    const idx = parseInt(delMatch[1], 10) - 1;
+    if (idx >= 0 && idx < items.length) {
+      const copy = [...items];
+      copy.splice(idx, 1);
+      return copy.length > 0 ? copy : null;
+    }
+  }
+
+  // 2. Modificar por número de orden: "el 2 es 3300", "el 2 era 3300", "2 3300", "2 es 3300", "ítem 2 = 3300", "cambiar el 2 a 3300"
+  const editMatch = trimmed.match(
+    /^(?:cambiar\s+)?(?:el\s+|[ií]tem\s+)?(\d+)\s*(?:es|era|=|a|por|de|\s)\s*\$?([\d.,]+)$/i
+  );
+  if (editMatch) {
+    const idx = parseInt(editMatch[1], 10) - 1;
+    const parsed = parseAmountAndNote(editMatch[2]);
+    if (idx >= 0 && idx < items.length && parsed && parsed.amount > 0) {
+      const copy = [...items];
+      copy[idx] = { ...copy[idx], monto: parsed.amount };
+      return copy;
+    }
+  }
+
+  // 3. Modificar por reemplazo de valor: "cambiar 3000 por 3300", "cambiar 3000 a 3300", "3000 no, 3300"
+  const replaceMatch = trimmed.match(
+    /(?:cambiar\s+)?\$?([\d.,]+)\s*(?:por|a|no,\s*)\s*\$?([\d.,]+)/i
+  );
+  if (replaceMatch) {
+    const oldVal = parseAmountAndNote(replaceMatch[1]);
+    const newVal = parseAmountAndNote(replaceMatch[2]);
+    if (oldVal && newVal && newVal.amount > 0) {
+      const idx = items.findIndex((it) => it.monto === oldVal.amount);
+      if (idx !== -1) {
+        const copy = [...items];
+        copy[idx] = { ...copy[idx], monto: newVal.amount };
+        return copy;
+      }
+    }
+  }
+
+  return null;
+}
+
 export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[] {
   const { cash } = deps;
 
-  const registrarVenta: ActionDef<RegistrarVenta> = {
+  const registrarVenta: ActionDef<any> = {
     name: 'registrar_venta',
     description:
-      'Registra una o más ventas de dinero (entrada de caja). Datos: monto (número positivo) o ventas (lista de {monto, nota}), nota opcional, fecha opcional.',
-    kind: 'write',
+      'Registra cobros y ventas de dinero en el mostrador. Permite ingresar importes de forma ágil y continua.',
+    kind: 'read',
     input: RegistrarVentaInput,
-    intro:
-      'Para registrar ventas decime el monto o los importes, por ejemplo: *"Vendí 5000"*, *"Venta 3200"* o *"Vendí 2500 y 4000"*.',
-    fieldPrompts: {
-      monto: '¿Cuánto fue el importe de la venta?',
-    },
-    summarize: (i) => {
-      if (i.ventas && i.ventas.length > 0) {
-        const total = i.ventas.reduce((acc, v) => acc + v.monto, 0);
-        const lines = i.ventas.map((v) => `• *${formatCurrency(v.monto)}*${v.nota ? ` (${esc(v.nota)})` : ''}`).join('\n');
-        return `Entendí las ventas:\n${lines}\n\nTotal: *${formatCurrency(total)}*\n\n¿Confirmar?`;
-      }
-      const amount = i.monto ?? 0;
-      return `¿Confirmás registrar la venta de *${formatCurrency(amount)}*${i.nota ? ` (${esc(i.nota)})` : ''}?`;
-    },
-    handler: async (ctx, input) => {
-      const date = input.fecha ? new Date(input.fecha) : ctx.now;
-      if (input.ventas && input.ventas.length > 0) {
-        let total = 0;
-        for (const v of input.ventas) {
-          total += v.monto;
-          await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
-            monto: v.monto,
-            nota: v.nota,
-            fecha: date,
-          });
-        }
+    isContinuous: true,
+    handler: async (ctx, initialData) => {
+      const data = (initialData ?? {}) as Record<string, unknown>;
+      if (data.monto) {
+        const amount = Number(data.monto);
+        const note = data.nota ? String(data.nota) : undefined;
+        const movement = await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
+          monto: amount,
+          nota: note,
+          fecha: ctx.now,
+        });
         return {
-          reply: `✅ Registradas *${input.ventas.length}* ventas por un total de *${formatCurrency(total)}*.`,
-          inlineKeyboard: [[{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }]],
+          reply: [
+            `🟢 Venta registrada: *${formatCurrency(amount)}*${note ? ` (${esc(note)})` : ''}`,
+            `_Total acumulado: ${formatCurrency(amount)} (1)_`,
+            '',
+            'Podés seguir enviando números para sumar a esta tanda o tocar Finalizar.',
+          ].join('\n'),
+          inlineKeyboard: [
+            [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+          ],
           audit: {
-            action: 'sales.batch_recorded',
-            metadata: { count: input.ventas.length, total },
+            action: 'sale.recorded',
+            entityType: 'money_movement',
+            entityId: movement.id,
+            metadata: { amount, note },
+          },
+        };
+      }
+
+      return {
+        reply: [
+          '🟢 *Registro de ventas*',
+          'Escribí los números que vayas cobrando y los registro al momento (ej: *2500* o *3000 y 4500*).',
+          '',
+          '💡 _Tip: Para audios, te sugerimos que duren menos de 1 minuto para que la transcripción sea instantánea._',
+          '',
+          'Podés finalizar o deshacer con los botones abajo cuando quieras.',
+        ].join('\n'),
+        inlineKeyboard: [
+          [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
+        ],
+      };
+    },
+    handleContinuousStep: async (ctx, text, data) => {
+      const lower = text.trim().toLowerCase();
+      if (lower === '/fin' || lower === 'fin' || lower === 'finalizar') {
+        const count = Number(data.count ?? 0);
+        const total = Number(data.total ?? 0);
+        return {
+          reply: {
+            text: [
+              '🏁 *Registro de ventas finalizado*',
+              '',
+              `• Ventas registradas: *${count}*`,
+              `• Total acumulado: *${formatCurrency(total)}*`,
+            ].join('\n'),
+            parseMode: 'Markdown',
+          },
+          finished: true,
+        };
+      }
+
+      if (lower === '/deshacer' || lower === 'deshacer') {
+        const undone = await cash.undoLast(ctx.tenant.business.id, ctx.actorUserId);
+        if (!undone) {
+          return {
+            reply: { text: 'No hay ventas recientes para anular.', parseMode: 'Markdown' },
+          };
+        }
+        const undoneAmount = Number(undone.amount);
+        const count = Math.max(0, Number(data.count ?? 1) - 1);
+        const total = Math.max(0, Number(data.total ?? undoneAmount) - undoneAmount);
+        return {
+          reply: {
+            text: `↩️ Se anuló la última venta de *${formatCurrency(undoneAmount)}*.\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            parseMode: 'Markdown',
+            inlineKeyboard: count > 0
+              ? [
+                  [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+                ]
+              : [
+                  [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+                ],
+          },
+          updatedData: { ...data, count, total },
+        };
+      }
+
+      // 1. Detectar si envió audio o texto con lista/ráfaga de números (ej. "3200 2800 2500" o "12000, 3000 y 8000")
+      const multiple = parseAmountsList(text);
+      if (multiple && multiple.length > 1) {
+        return {
+          reply: { text: 'Entendido. Preparando confirmación...' },
+          switchToConfirming: {
+            actionName: 'registrar_lote',
+            data: {
+              items: multiple.map((m) => ({
+                tipo: 'VENTA',
+                monto: m.amount,
+                nota: m.note,
+              })),
+            },
+          },
+        };
+      }
+
+      // 2. Venta individual (ej. "2500", "2500 puchos")
+      const parsed = parseAmountAndNote(text);
+      if (!parsed) {
+        return {
+          reply: {
+            text: '⚠️ Mandá el importe (ej. *2500* o *3200 y 1500*), o tocá *🏁 Finalizar*.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
+            ],
           },
         };
       }
 
       const movement = await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
-        monto: input.monto!,
-        nota: input.nota,
-        fecha: date,
+        monto: parsed.amount,
+        nota: parsed.note,
+        fecha: ctx.now,
       });
 
+      const count = Number(data.count ?? 0) + 1;
+      const total = Number(data.total ?? 0) + parsed.amount;
+
       return {
-        reply: `🟢 Venta registrada: *${formatCurrency(input.monto!)}*${input.nota ? ` (${esc(input.nota)})` : ''}.`,
-        inlineKeyboard: [[{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }]],
+        reply: {
+          text: `🟢 Venta registrada: *${formatCurrency(parsed.amount)}*${parsed.note ? ` (${esc(parsed.note)})` : ''}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+          ],
+        },
+        updatedData: { ...data, count, total, lastMovementId: movement.id },
         audit: {
           action: 'sale.recorded',
           entityType: 'money_movement',
           entityId: movement.id,
-          metadata: { amount: input.monto, note: input.nota },
+          metadata: { amount: parsed.amount, note: parsed.note },
         },
       };
     },
   };
 
-  const registrarGasto: ActionDef<RegistrarGasto> = {
+  const registrarGasto: ActionDef<any> = {
     name: 'registrar_gasto',
     description:
-      'Registra uno o más gastos o compras a proveedores (salida de dinero). Datos: monto (número positivo) o gastos (lista de {monto, concepto, categoria}), concepto, categoria opcional, fecha opcional.',
-    kind: 'write',
+      'Registra salidas de dinero, pagos a proveedores y gastos de servicios de forma ágil y continua.',
+    kind: 'read',
     input: RegistrarGastoInput,
-    intro:
-      'Para registrar gastos decime qué pagaste y el monto. Por ejemplo: *"Gasté 3500 en Coca"*, *"Pagué 12000 al proveedor"* o *"Gasté 3000 en coca y 5000 en pan"*.',
-    fieldPrompts: {
-      monto: '¿Cuánto pagaste o gastaste?',
-      concepto: '¿En qué concepto o a quién le pagaste?',
-    },
-    summarize: (i) => {
-      if (i.gastos && i.gastos.length > 0) {
-        const total = i.gastos.reduce((acc, g) => acc + g.monto, 0);
-        const lines = i.gastos
-          .map((g) => `• *${formatCurrency(g.monto)}* (${esc(g.concepto)})`)
-          .join('\n');
-        return `Entendí los gastos:\n${lines}\n\nTotal: *${formatCurrency(total)}*\n\n¿Confirmar?`;
-      }
-      const monto = i.monto ?? 0;
-      const concepto = i.concepto ?? 'Gasto';
-      return `¿Confirmás registrar el gasto de *${formatCurrency(monto)}* en *${esc(concepto)}*${i.categoria ? ` [${esc(i.categoria)}]` : ''}?`;
-    },
-    handler: async (ctx, input) => {
-      const date = input.fecha ? new Date(input.fecha) : ctx.now;
-      if (input.gastos && input.gastos.length > 0) {
-        let total = 0;
-        for (const g of input.gastos) {
-          total += g.monto;
-          await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
-            monto: g.monto,
-            concepto: g.concepto,
-            categoria: g.categoria,
-            fecha: date,
-          });
-        }
+    isContinuous: true,
+    handler: async (ctx, initialData) => {
+      const data = (initialData ?? {}) as Record<string, unknown>;
+      if (data.monto && data.concepto) {
+        const amount = Number(data.monto);
+        const concept = String(data.concepto);
+        const category = data.categoria ? String(data.categoria) : undefined;
+        const movement = await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
+          monto: amount,
+          concepto: concept,
+          categoria: category,
+          fecha: ctx.now,
+        });
         return {
-          reply: `✅ Registrados *${input.gastos.length}* gastos por un total de *${formatCurrency(total)}*.`,
-          inlineKeyboard: [[{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }]],
+          reply: [
+            `🔴 Gasto registrado: *${formatCurrency(amount)}*`,
+            `Concepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]`,
+            `_Total acumulado: ${formatCurrency(amount)} (1)_`,
+            '',
+            'Podés seguir enviando gastos para sumar a esta tanda o tocar Finalizar.',
+          ].join('\n'),
+          inlineKeyboard: [
+            [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+          ],
           audit: {
-            action: 'expenses.batch_recorded',
-            metadata: { count: input.gastos.length, total },
+            action: 'expense.recorded',
+            entityType: 'money_movement',
+            entityId: movement.id,
+            metadata: { amount, concept, category },
+          },
+        };
+      }
+
+      return {
+        reply: [
+          '🔴 *Registro de gastos*',
+          'Mandá el monto y el concepto (ej: *3500 coca* o *12000 luz*).',
+          '',
+          '💡 _Tip: Para audios, te sugerimos que duren menos de 1 minuto para que la transcripción sea instantánea._',
+          '',
+          'Podés finalizar o deshacer con los botones abajo cuando quieras.',
+        ].join('\n'),
+        inlineKeyboard: [
+          [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
+        ],
+      };
+    },
+    handleContinuousStep: async (ctx, text, data) => {
+      const lower = text.trim().toLowerCase();
+      if (lower === '/fin' || lower === 'fin' || lower === 'finalizar') {
+        const count = Number(data.count ?? 0);
+        const total = Number(data.total ?? 0);
+        return {
+          reply: {
+            text: [
+              '🏁 *Registro de gastos finalizado*',
+              '',
+              `• Gastos registrados: *${count}*`,
+              `• Total acumulado: *${formatCurrency(total)}*`,
+            ].join('\n'),
+            parseMode: 'Markdown',
+          },
+          finished: true,
+        };
+      }
+
+      if (lower === '/deshacer' || lower === 'deshacer') {
+        const undone = await cash.undoLast(ctx.tenant.business.id, ctx.actorUserId);
+        if (!undone) {
+          return {
+            reply: { text: 'No hay gastos recientes para anular.', parseMode: 'Markdown' },
+          };
+        }
+        const undoneAmount = Number(undone.amount);
+        const count = Math.max(0, Number(data.count ?? 1) - 1);
+        const total = Math.max(0, Number(data.total ?? undoneAmount) - undoneAmount);
+        return {
+          reply: {
+            text: `↩️ Se anuló el último gasto de *${formatCurrency(undoneAmount)}*.\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            parseMode: 'Markdown',
+            inlineKeyboard: count > 0
+              ? [
+                  [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+                ]
+              : [
+                  [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+                ],
+          },
+          updatedData: { ...data, count, total },
+        };
+      }
+
+      // 1. Si había un importe pendiente sin concepto
+      if (data._pendingExpenseAmount) {
+        const amount = Number(data._pendingExpenseAmount);
+        const concept = text.trim();
+        const movement = await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
+          monto: amount,
+          concepto: concept,
+          fecha: ctx.now,
+        });
+        const count = Number(data.count ?? 0) + 1;
+        const total = Number(data.total ?? 0) + amount;
+        const nextData: Record<string, unknown> = { ...data, count, total, lastMovementId: movement.id };
+        delete nextData._pendingExpenseAmount;
+
+        return {
+          reply: {
+            text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+            ],
+          },
+          updatedData: nextData,
+        };
+      }
+
+      // 2. Ráfaga o audio con múltiples gastos (ej: "gasté 3000 en coca y 5000 en pan")
+      const multiple = parseExpensesList(text);
+      if (multiple && multiple.length > 1) {
+        return {
+          reply: { text: 'Entendido. Preparando confirmación...' },
+          switchToConfirming: {
+            actionName: 'registrar_lote',
+            data: {
+              items: multiple.map((m) => ({
+                tipo: 'GASTO',
+                monto: m.amount,
+                concepto: m.concepto,
+              })),
+            },
+          },
+        };
+      }
+
+      // 3. Importe único sin concepto: ej "5000"
+      const bareNum = parseAmountAndNote(text);
+      if (bareNum && !bareNum.note) {
+        return {
+          reply: {
+            text: `⚠️ ¿En qué gastaste los *${formatCurrency(bareNum.amount)}*? Escribí el concepto (ej: *pan*, *luz*, *proveedor*) para categorizarlo bien.`,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
+            ],
+          },
+          updatedData: { ...data, _pendingExpenseAmount: bareNum.amount },
+        };
+      }
+
+      // 4. Importe con concepto directo: ej "3500 coca", "coca 3500", "3000 en pan"
+      let amount: number | undefined;
+      let concept: string | undefined;
+
+      if (bareNum && bareNum.note) {
+        amount = bareNum.amount;
+        concept = bareNum.note.replace(/^(?:en|de|a|por)\s+/i, '').trim();
+      } else {
+        const inv = text.match(/^(.*?)\s+(?:por|a|en)?\s*\$?([\d.,]+)$/i);
+        if (inv) {
+          const num = parseAmountAndNote(inv[2]);
+          if (num && num.amount > 0) {
+            amount = num.amount;
+            concept = inv[1].replace(/^(?:en|de|a|por)\s+/i, '').trim();
+          }
+        }
+      }
+
+      if (!amount || !concept) {
+        return {
+          reply: {
+            text: '⚠️ Mandá el monto y el concepto (ej. *3500 coca* o *12000 luz*), o tocá *🏁 Finalizar*.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
+            ],
           },
         };
       }
 
       const movement = await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
-        monto: input.monto!,
-        concepto: input.concepto!,
-        categoria: input.categoria,
-        fecha: date,
+        monto: amount,
+        concepto: concept,
+        fecha: ctx.now,
       });
 
+      const count = Number(data.count ?? 0) + 1;
+      const total = Number(data.total ?? 0) + amount;
+
       return {
-        reply: `🔴 Gasto registrado: *${formatCurrency(input.monto!)}*\nConcepto: *${esc(input.concepto!)}*\nCategoría: *${esc(movement.category ?? 'Otros')}*.`,
-        inlineKeyboard: [[{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }]],
+        reply: {
+          text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: *${esc(concept)}* [${esc(movement.category ?? 'Otros')}]\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+          ],
+        },
+        updatedData: { ...data, count, total, lastMovementId: movement.id },
         audit: {
           action: 'expense.recorded',
           entityType: 'money_movement',
           entityId: movement.id,
-          metadata: { amount: input.monto, concept: input.concepto, category: movement.category },
+          metadata: { amount, concept },
         },
       };
     },
@@ -706,35 +1005,54 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
   const registrarLote: ActionDef<RegistrarLote> = {
     name: 'registrar_lote',
-    description: 'Registra un lote de ventas y/o gastos (proveniente de fotos de libretas o carga masiva).',
+    description: 'Registra un lote de ventas y/o gastos (proveniente de fotos de libretas o audios multi-monto).',
     kind: 'write',
     input: RegistrarLoteInput,
+    confirmButtons: () => [
+      [{ text: '✅ Confirmar registro', callbackData: 'confirm:yes' }],
+      [
+        { text: '✏️ Corregir un monto', callbackData: 'kiosco:correct_prompt' },
+        { text: '❌ Cancelar', callbackData: 'confirm:no' },
+      ],
+    ],
     summarize: (data) => {
       const items = (data as RegistrarLote).items || [];
       const ventas = items.filter((i) => i.tipo === 'VENTA');
       const gastos = items.filter((i) => i.tipo === 'GASTO');
+      const isOnlyVentas = gastos.length === 0;
+      const isOnlyGastos = ventas.length === 0;
       const totalVentas = ventas.reduce((acc, i) => acc + i.monto, 0);
       const totalGastos = gastos.reduce((acc, i) => acc + i.monto, 0);
-      const lines: string[] = ['📋 *Movimientos detectados en la libreta:*', ''];
 
-      const preview = items.slice(0, 15);
-      for (const item of preview) {
+      const header = isOnlyVentas
+        ? '🎤 *Ventas detectadas en el audio:*'
+        : isOnlyGastos
+          ? '🎤 *Gastos detectados en el audio:*'
+          : '🎤 *Movimientos detectados:*';
+
+      const lines: string[] = [header, ''];
+      items.forEach((item, idx) => {
         const icon = item.tipo === 'VENTA' ? '🟢' : '🔴';
         const label = item.tipo === 'VENTA'
-          ? (item.nota ? `${item.nota}: ` : 'Venta: ')
-          : (item.concepto ? `${item.concepto}: ` : 'Gasto: ');
-        lines.push(`${icon} ${esc(label)}*${formatCurrency(item.monto)}*`);
-      }
-      if (items.length > 15) {
-        lines.push(`_... y ${items.length - 15} movimientos más_`);
-      }
+          ? (item.nota ? ` (${esc(item.nota)})` : '')
+          : (item.concepto ? ` - ${esc(item.concepto)}` : '');
+        lines.push(`${idx + 1}. ${icon} *${formatCurrency(item.monto)}*${label}`);
+      });
+
       lines.push('');
-      if (ventas.length > 0) {
-        lines.push(`• *Total ventas (${ventas.length}):* ${formatCurrency(totalVentas)}`);
+      if (isOnlyVentas) {
+        lines.push(`• *Total:* *${formatCurrency(totalVentas)}* (${items.length} ${items.length === 1 ? 'venta' : 'ventas'})`);
+      } else if (isOnlyGastos) {
+        lines.push(`• *Total:* *${formatCurrency(totalGastos)}* (${items.length} ${items.length === 1 ? 'gasto' : 'gastos'})`);
+      } else {
+        lines.push(`• *Total ventas:* ${formatCurrency(totalVentas)} (${ventas.length})`);
+        lines.push(`• *Total gastos:* ${formatCurrency(totalGastos)} (${gastos.length})`);
       }
-      if (gastos.length > 0) {
-        lines.push(`• *Total gastos (${gastos.length}):* ${formatCurrency(totalGastos)}`);
-      }
+
+      lines.push('');
+      lines.push('¿Confirmás o querés corregir alguna?');
+      lines.push('_(Podés mandar un audio o texto diciendo la opción que querés cambiar por el monto, ej: "el 2 es 3300" o "borrar 2")_');
+
       return lines.join('\n');
     },
     handler: async (ctx, input) => {
@@ -743,18 +1061,20 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       let totalGastos = 0;
       let countVentas = 0;
       let countGastos = 0;
+      let lastMovementId = '';
 
       for (const item of input.items) {
         if (item.tipo === 'VENTA') {
-          await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
+          const mov = await cash.recordSale(ctx.tenant.business.id, ctx.actorUserId, {
             monto: item.monto,
             nota: item.nota,
             fecha: date,
           });
           totalVentas += item.monto;
           countVentas += 1;
+          lastMovementId = mov.id;
         } else {
-          await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
+          const mov = await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
             monto: item.monto,
             concepto: item.concepto ?? 'Gasto',
             categoria: item.categoria,
@@ -762,22 +1082,42 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           });
           totalGastos += item.monto;
           countGastos += 1;
+          lastMovementId = mov.id;
         }
       }
 
+      const isOnlyGastos = countVentas === 0;
+      const isOnlyVentas = countGastos === 0;
+
       const isYesterday = Math.abs(ctx.now.getTime() - date.getTime()) > 12 * 60 * 60 * 1000;
       const targetLabel = isYesterday ? ' (caja de ayer)' : '';
-      const resLines = [`✅ *Lote registrado con éxito${targetLabel}:*`, ''];
-      if (countVentas > 0) {
-        resLines.push(`🟢 *${countVentas} ventas:* ${formatCurrency(totalVentas)}`);
+
+      const resLines: string[] = [];
+      if (isOnlyVentas) {
+        resLines.push(`✅ *${countVentas} ventas registradas con éxito${targetLabel} (${formatCurrency(totalVentas)}).*`);
+      } else if (isOnlyGastos) {
+        resLines.push(`✅ *${countGastos} gastos registrados con éxito${targetLabel} (${formatCurrency(totalGastos)}).*`);
+      } else {
+        resLines.push(`✅ *Lote registrado con éxito${targetLabel}:*`);
+        resLines.push(`• ${countVentas} ventas: ${formatCurrency(totalVentas)}`);
+        resLines.push(`• ${countGastos} gastos: ${formatCurrency(totalGastos)}`);
       }
-      if (countGastos > 0) {
-        resLines.push(`🔴 *${countGastos} gastos:* ${formatCurrency(totalGastos)}`);
-      }
+      resLines.push('');
+      resLines.push('Podés seguir enviando números para sumar a esta tanda o tocar Finalizar cuando termines.');
 
       return {
         reply: resLines.join('\n'),
-        inlineKeyboard: [[{ text: '↩️ Deshacer último', callbackData: 'undo:last' }]],
+        inlineKeyboard: [
+          [{ text: '↩️ Deshacer última acción', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
+        ],
+        continueInAction: {
+          name: isOnlyGastos ? 'registrar_gasto' : 'registrar_venta',
+          data: {
+            count: isOnlyGastos ? countGastos : countVentas,
+            total: isOnlyGastos ? totalGastos : totalVentas,
+            lastMovementId,
+          },
+        },
         audit: {
           action: 'kiosco.lote_registrado',
           metadata: {

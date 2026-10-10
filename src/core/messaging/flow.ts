@@ -142,6 +142,18 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
       await deps.conversations.clear(tenant.business.id, resolution.user.id);
       return md('Cancelado, no se guardó nada.');
     }
+
+    const directConfirm = deps.template.interpretDirectly?.(trimmed, active.actionName, active.data);
+    if (directConfirm && directConfirm.actionName === active.actionName) {
+      const directAction = deps.template.actions.find((a) => a.name === directConfirm.actionName);
+      if (directAction) {
+        const merged = mergeData(active.data, directConfirm.params);
+        return proceedWithAction(deps, tenant, resolution.user.id, directAction, merged, now, access, {
+          freshStart: false,
+        });
+      }
+    }
+
     return md('¿Confirmás la operación? Respondé *Sí* o *No* (o tocá los botones para elegir el día de la caja).');
   }
 
@@ -168,6 +180,22 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
         return res.reply;
       }
       const res = await currentAction.handleContinuousStep(ctx, trimmed, active.data);
+      if (res.audit) {
+        await deps.audit.log({
+          businessId: tenant.business.id,
+          actorUserId: resolution.user.id,
+          action: res.audit.action ?? `action.${active.actionName}`,
+          entityType: res.audit.entityType ?? null,
+          entityId: res.audit.entityId ?? null,
+          metadata: res.audit.metadata ?? {},
+        });
+      }
+      if (res.switchToConfirming) {
+        const nextAction = deps.template.actions.find((a) => a.name === res.switchToConfirming!.actionName);
+        if (nextAction) {
+          return enterConfirming(deps, tenant, resolution.user.id, nextAction, res.switchToConfirming.data, now);
+        }
+      }
       if (res.finished) {
         await deps.conversations.clear(tenant.business.id, resolution.user.id);
       } else if (res.updatedData) {
@@ -492,6 +520,16 @@ async function startAction(
     if (!access.canWrite) return md(MSG_READONLY_WRITE);
     const ctx: ActionContext = { tenant, actorUserId: userId, now };
     const result = await action.handler(ctx, initialData);
+    if (result.audit) {
+      await deps.audit.log({
+        businessId: tenant.business.id,
+        actorUserId: userId,
+        action: result.audit.action ?? `action.${action.name}`,
+        entityType: result.audit.entityType ?? null,
+        entityId: result.audit.entityId ?? null,
+        metadata: result.audit.metadata ?? {},
+      });
+    }
     await deps.conversations.upsert({
       businessId: tenant.business.id,
       userId,
@@ -618,8 +656,9 @@ async function enterConfirming(
   const summary = action.summarize ? await action.summarize(data as any, ctx) : 'Revisá los datos.';
 
   const customButtons = action.confirmButtons ? action.confirmButtons(data as any) : null;
+  const hasConfirmQuestion = /¿confirm/i.test(summary);
   if (customButtons) {
-    const text = summary.includes('¿Confirmar') ? summary : `${summary}\n\n¿Confirmar?`;
+    const text = hasConfirmQuestion ? summary : `${summary}\n\n¿Confirmar?`;
     return { ...md(text), inlineKeyboard: customButtons };
   }
 
@@ -637,7 +676,8 @@ async function enterConfirming(
     };
   }
 
-  return { ...md(`${summary}\n\n¿Confirmar?`), inlineKeyboard: confirmKeyboard() };
+  const text = hasConfirmQuestion ? summary : `${summary}\n\n¿Confirmar?`;
+  return { ...md(text), inlineKeyboard: confirmKeyboard() };
 }
 
 async function confirmPending(
@@ -704,7 +744,19 @@ async function executeAction(
       metadata: result.audit?.metadata ?? {},
     });
   }
-  await deps.conversations.clear(tenant.business.id, userId);
+  if (result.continueInAction) {
+    await deps.conversations.upsert({
+      businessId: tenant.business.id,
+      userId,
+      phase: 'COLLECTING',
+      actionName: result.continueInAction.name,
+      data: result.continueInAction.data ?? {},
+      expiresAt: new Date(now.getTime() + (deps.conversationTtlMs ?? 60 * 60_000)),
+      updatedAt: now,
+    });
+  } else {
+    await deps.conversations.clear(tenant.business.id, userId);
+  }
   const suffix = access.subscriptionReminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : '';
   return {
     ...md(`${result.reply}${suffix}`),

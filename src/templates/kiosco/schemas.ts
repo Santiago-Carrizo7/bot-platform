@@ -1,51 +1,36 @@
 import { z } from 'zod';
 
-export const RegistrarVentaInput = z
-  .object({
-    monto: z.number().positive('El monto debe ser mayor a 0').optional(),
-    nota: z.string().trim().optional(),
-    fecha: z.string().trim().optional(),
-    ventas: z
-      .array(
-        z.object({
-          monto: z.number().positive('El monto debe ser mayor a 0'),
-          nota: z.string().trim().optional(),
-        })
-      )
-      .optional(),
-  })
-  .refine((data) => data.monto !== undefined || (data.ventas && data.ventas.length > 0), {
-    message: 'Indicá el monto de la venta',
-    path: ['monto'],
-  });
+export const RegistrarVentaInput = z.object({
+  monto: z.number().positive('El monto debe ser mayor a 0').optional(),
+  nota: z.string().trim().optional(),
+  fecha: z.string().trim().optional(),
+  ventas: z
+    .array(
+      z.object({
+        monto: z.number().positive('El monto debe ser mayor a 0'),
+        nota: z.string().trim().optional(),
+      })
+    )
+    .optional(),
+});
 
 export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
 
-export const RegistrarGastoInput = z
-  .object({
-    monto: z.number().positive('El monto debe ser mayor a 0').optional(),
-    concepto: z.string().trim().optional(),
-    categoria: z.string().trim().optional(),
-    fecha: z.string().trim().optional(),
-    gastos: z
-      .array(
-        z.object({
-          monto: z.number().positive('El monto debe ser mayor a 0'),
-          concepto: z.string().trim().min(1, 'Falta la descripción del gasto'),
-          categoria: z.string().trim().optional(),
-        })
-      )
-      .optional(),
-  })
-  .refine(
-    (data) =>
-      (data.monto !== undefined && data.concepto !== undefined && data.concepto.length > 0) ||
-      (data.gastos && data.gastos.length > 0),
-    {
-      message: 'Indicá el monto y concepto del gasto',
-      path: ['monto'],
-    }
-  );
+export const RegistrarGastoInput = z.object({
+  monto: z.number().positive('El monto debe ser mayor a 0').optional(),
+  concepto: z.string().trim().optional(),
+  categoria: z.string().trim().optional(),
+  fecha: z.string().trim().optional(),
+  gastos: z
+    .array(
+      z.object({
+        monto: z.number().positive('El monto debe ser mayor a 0'),
+        concepto: z.string().trim().min(1, 'Falta la descripción del gasto'),
+        categoria: z.string().trim().optional(),
+      })
+    )
+    .optional(),
+});
 
 export type RegistrarGastoInput = z.infer<typeof RegistrarGastoInput>;
 
@@ -84,6 +69,8 @@ export const RegistrarLoteInput = z.object({
       })
     )
     .min(1, 'Debe haber al menos un movimiento en el lote'),
+  _editingItemIndex: z.number().int().optional(),
+  _awaitingCorrection: z.boolean().optional(),
 });
 
 export type RegistrarLoteInput = z.infer<typeof RegistrarLoteInput>;

@@ -24,18 +24,18 @@ REGLAS DE INTERPRETACIÓN:
 
 - VENTAS (dinero que entra):
   * "Vendí 5000", "Venta 3200", "Acabo de vender 7500" -> registrar_venta con monto.
-  * "Vendí 2500, 4000 y 3500", "Vendí 5000 y 3200", "2000 y 3800" -> registrar_venta con ventas: [{ monto: 2500 }, { monto: 4000 }, { monto: 3500 }].
+  * Audios o ráfagas con múltiples ventas: "Vendí 2500, 4000 y 3500", "12000, 3000 y 8000", "2000 y 3800" -> registrar_lote con items: [{ tipo: "VENTA", monto: 2500 }, { tipo: "VENTA", monto: 4000 }, { tipo: "VENTA", monto: 3500 }].
   * "Vendí dos alfajores por 3000" -> registrar_venta con monto: 3000, nota: "dos alfajores". NO inventes productos ni manejes stock.
 
 - GASTOS Y COMPRAS A PROVEEDORES (dinero que sale):
   * "Gasté 3500 en Coca" -> registrar_gasto con monto: 3500, concepto: "Coca", categoria: "Mercadería".
-  * "Gasté 3000 en coca y 5000 en pan" -> registrar_gasto con gastos: [{ monto: 3000, concepto: "coca", categoria: "Mercadería" }, { monto: 5000, concepto: "pan", categoria: "Mercadería" }].
-  * "Pagué 12000 al proveedor y 4500 de luz" -> registrar_gasto con gastos: [{ monto: 12000, concepto: "proveedor", categoria: "Proveedores" }, { monto: 4500, concepto: "luz", categoria: "Servicios" }].
+  * Audios o ráfagas con múltiples gastos: "Gasté 3000 en coca y 5000 en pan" -> registrar_lote con items: [{ tipo: "GASTO", monto: 3000, concepto: "coca" }, { tipo: "GASTO", monto: 5000, concepto: "pan" }].
+  * "Pagué 12000 al proveedor y 4500 de luz" -> registrar_lote con items: [{ tipo: "GASTO", monto: 12000, concepto: "proveedor" }, { tipo: "GASTO", monto: 4500, concepto: "luz" }].
   * "Pagué 12000 al proveedor" o "Le pagué 25000 al proveedor" -> registrar_gasto con monto, concepto y categoria: "Proveedores".
   * "Fui al mayorista y gasté 45000" -> registrar_gasto con monto: 45000, concepto: "Mayorista", categoria: "Proveedores".
   * "Pagué 15000 de luz" -> registrar_gasto con monto: 15000, concepto: "Luz", categoria: "Servicios".
   * "Gasté 5000 en el supermercado" -> registrar_gasto con monto: 5000, concepto: "Supermercado", categoria: "Supermercado".
-  * Categorías válidas: Proveedores, Mercadería, Servicios, Alquiler, Impuestos, Transporte, Supermercado, Otros.
+  * Categorías sugeridas: Proveedores, Mercadería, Servicios, Alquiler, Impuestos, Transporte, Supermercado, Otros.
 
 - CONSULTAS Y ESTADÍSTICAS:
   * "¿Cuánto vendí hoy?", "Resumen de hoy", "Caja de hoy", "¿Cuánto gané?" -> consultar_resumen con periodo: "hoy".
