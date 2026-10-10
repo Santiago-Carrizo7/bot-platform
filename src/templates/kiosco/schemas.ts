@@ -21,12 +21,31 @@ export const RegistrarVentaInput = z
 
 export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
 
-export const RegistrarGastoInput = z.object({
-  monto: z.number().positive('El monto debe ser mayor a 0'),
-  concepto: z.string().trim().min(1, 'Falta la descripción del gasto'),
-  categoria: z.string().trim().optional(),
-  fecha: z.string().trim().optional(),
-});
+export const RegistrarGastoInput = z
+  .object({
+    monto: z.number().positive('El monto debe ser mayor a 0').optional(),
+    concepto: z.string().trim().optional(),
+    categoria: z.string().trim().optional(),
+    fecha: z.string().trim().optional(),
+    gastos: z
+      .array(
+        z.object({
+          monto: z.number().positive('El monto debe ser mayor a 0'),
+          concepto: z.string().trim().min(1, 'Falta la descripción del gasto'),
+          categoria: z.string().trim().optional(),
+        })
+      )
+      .optional(),
+  })
+  .refine(
+    (data) =>
+      (data.monto !== undefined && data.concepto !== undefined && data.concepto.length > 0) ||
+      (data.gastos && data.gastos.length > 0),
+    {
+      message: 'Indicá el monto y concepto del gasto',
+      path: ['monto'],
+    }
+  );
 
 export type RegistrarGastoInput = z.infer<typeof RegistrarGastoInput>;
 
@@ -34,7 +53,7 @@ export const CalcularPrecioInput = z.object({
   costo_total: z.number().positive().optional(),
   cantidad: z.number().positive().optional(),
   costo_unitario: z.number().positive().optional(),
-  porcentaje: z.number().min(0, 'El porcentaje no puede ser negativo'),
+  porcentaje: z.number().min(0, 'El porcentaje no puede ser negativo').optional(),
   tipo: z.enum(['margen', 'recargo']).optional(),
 });
 
