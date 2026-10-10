@@ -36,6 +36,7 @@ export interface NoReconocidoItem {
 export interface SaleLineInput {
   name: string;
   quantity: number;
+  unitPrice?: number;
 }
 
 export interface ResolvedSaleLine {
@@ -48,18 +49,57 @@ export interface ResolvedSaleLine {
   subtotal: number;
 }
 
+export interface CreateDeliveryZoneData {
+  businessId: string;
+  name: string;
+  price: number;
+  barrios?: string[];
+}
+
+export interface UpdateDeliveryZoneData {
+  name?: string;
+  price?: number;
+  barrios?: string[];
+  isActive?: boolean;
+}
+
+export interface DeliveryZoneItem {
+  id: string;
+  name: string;
+  price: number;
+  barrios: string[];
+  isActive: boolean;
+}
+
+export interface DeliveryZoneMatchResult {
+  zone: DeliveryZoneItem;
+  matchedBy: 'name' | 'barrio';
+  matchedTerm: string;
+}
+
 export interface PricingResult {
   lines: ResolvedSaleLine[];
+  foodTotal: number;
+  deliveryFee: number | null;
+  deliveryZoneName: string | null;
   total: number;
   breakdown: string[];
+  uncataloguedItems?: Array<{ name: string; quantity: number; unitPrice?: number }>;
 }
 
 export interface DraftSaleData {
   items: SaleLineInput[];
   nota?: string;
   customShiftDate?: string; // YYYY-MM-DD
+  zonaEnvio?: string | null;
+  fleteMonto?: number | null;
+  zonaNoReconocida?: string | null;
   _modifying?: boolean;
   _awaitingCustomDate?: boolean;
+  _awaitingManualFee?: boolean;
+  _awaitingDelivery?: boolean;
+  _awaitingItemPriceIndex?: number | null;
+  _awaitingItemPriceFor?: string | null;
 }
 
 export interface DaySummary {
@@ -67,6 +107,9 @@ export interface DaySummary {
   shiftDateStr: string;
   salesTotal: number;
   salesCount: number;
+  foodTotal: number;
+  deliveryTotal: number;
+  deliveryOrdersCount: number;
   cancelledTotal: number;
   cancelledCount: number;
   topProducts: Array<{ name: string; quantity: number; subtotal: number }>;
@@ -95,6 +138,9 @@ export interface StatsSummary {
   periodKey: string;
   salesTotal: number;
   salesCount: number;
+  foodTotal: number;
+  deliveryTotal: number;
+  deliveryOrdersCount: number;
   averageTicket: number;
   cancelledCount: number;
   top3Products: Array<{ name: string; quantity: number; subtotal: number }>;
@@ -102,3 +148,17 @@ export interface StatsSummary {
   productsByCategory: Record<string, Array<{ name: string; quantity: number; subtotal: number }>>;
   promosSummary?: PromosSummary;
 }
+
+export interface DeliveryZoneStat {
+  zoneName: string;
+  count: number;
+  totalDeliveryFee: number;
+}
+
+export interface DeliveryStatsSummary {
+  periodLabel: string;
+  zones: DeliveryZoneStat[];
+  totalOrders: number;
+  totalDeliveryFees: number;
+}
+

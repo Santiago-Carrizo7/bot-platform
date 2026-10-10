@@ -85,6 +85,10 @@ export interface FormatSaleSummaryParams {
   fecha?: string;
   breakdown?: string[];
   total?: number;
+  foodTotal?: number;
+  deliveryFee?: number | null;
+  deliveryZoneName?: string | null;
+  zonaNoReconocida?: string | null;
   isModifying?: boolean;
   now?: Date;
   timezone?: string;
@@ -110,6 +114,10 @@ export function formatSaleSummary(params: FormatSaleSummaryParams): string {
     }
   }
 
+  if (params.zonaNoReconocida && params.zonaNoReconocida.trim() !== '') {
+    parts.push(`⚠️ Zona de envío no reconocida: "*${esc(params.zonaNoReconocida)}*" (flete no asignado)`);
+  }
+
   if (params.noReconocidos && params.noReconocidos.length > 0) {
     parts.push('');
     for (const item of params.noReconocidos) {
@@ -129,7 +137,7 @@ export function formatSaleSummary(params: FormatSaleSummaryParams): string {
     }
   }
 
-  if (params.total !== undefined && params.total > 0) {
+  if (params.total !== undefined) {
     parts.push('', `💰 *Total:* *${formatCurrency(params.total)}*`);
   }
 
@@ -150,12 +158,16 @@ export interface FormatSaleReceiptParams {
   saleId: string;
   count?: number;
   total: number;
+  foodTotal?: number;
+  deliveryFee?: number | null;
+  deliveryZoneName?: string | null;
   shiftDate: Date;
   createdAt: Date;
   breakdown: string[];
   timezone?: string;
   note?: string;
 }
+
 
 export function formatSaleReceipt(params: FormatSaleReceiptParams): string {
   const num = formatSaleNumber(params.saleId, params.count);
@@ -173,5 +185,39 @@ export function formatSaleReceipt(params: FormatSaleReceiptParams): string {
   if (params.note) {
     lines.push(`📝 Nota: ${esc(params.note)}`);
   }
+  return lines.join('\n');
+}
+
+export function formatDeliveryStatsSummary(stats: {
+  periodLabel: string;
+  zones: Array<{ zoneName: string; count: number; totalDeliveryFee: number }>;
+  totalOrders: number;
+  totalDeliveryFees: number;
+}): string {
+  const medals = ['🥇', '🥈', '🥉'];
+  const lines: string[] = [
+    `🛵 *Ranking de Envíos y Zonas* (${esc(stats.periodLabel)})`,
+    '',
+    '🏆 *Zonas con más pedidos:*',
+  ];
+
+  if (stats.zones.length === 0) {
+    lines.push('• _Sin envíos registrados en este período_');
+  } else {
+    stats.zones.forEach((z, idx) => {
+      const medal = idx < 3 ? `${medals[idx]} ` : '';
+      const num = `${idx + 1}.`;
+      const enviosWord = z.count === 1 ? 'envío' : 'envíos';
+      lines.push(
+        `${num} ${medal}*${esc(z.zoneName)}:* ${z.count} ${enviosWord} — ${formatCurrency(z.totalDeliveryFee)}`
+      );
+    });
+  }
+
+  const totalOrdersWord = stats.totalOrders === 1 ? 'envío' : 'envíos';
+  lines.push('');
+  lines.push(`📦 *Total pedidos enviados:* ${stats.totalOrders} ${totalOrdersWord}`);
+  lines.push(`💰 *Total dinero fletes:* ${formatCurrency(stats.totalDeliveryFees)}`);
+
   return lines.join('\n');
 }

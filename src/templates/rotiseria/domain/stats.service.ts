@@ -1,5 +1,5 @@
 import type { SaleRepository, RotiseriaSaleWithItems } from '../persistence/sale.repo.js';
-import type { CategorySummary, PromosSummary, StatsSummary } from '../types.js';
+import type { CategorySummary, DeliveryStatsSummary, PromosSummary, StatsSummary } from '../types.js';
 import { formatDateOnly, round2 } from '../format.js';
 import { getShiftDate } from './shift.js';
 
@@ -67,6 +67,9 @@ export class StatsService {
 
     let salesTotal = 0;
     let salesCount = 0;
+    let foodTotal = 0;
+    let deliveryTotal = 0;
+    let deliveryOrdersCount = 0;
     let cancelledCount = 0;
 
     const productCounts: Record<string, { quantity: number; subtotal: number; category: string }> = {};
@@ -80,8 +83,22 @@ export class StatsService {
       if (sale.isCancelled) {
         cancelledCount++;
       } else {
-        salesTotal = round2(salesTotal + Number(sale.total));
+        const saleTotal = Number(sale.total);
+        const saleDelivery =
+          sale.deliveryFee !== null && sale.deliveryFee !== undefined
+            ? Number(sale.deliveryFee)
+            : 0;
+
+        salesTotal = round2(salesTotal + saleTotal);
         salesCount++;
+
+        if (sale.deliveryFee !== null && sale.deliveryFee !== undefined) {
+          deliveryOrdersCount++;
+          deliveryTotal = round2(deliveryTotal + saleDelivery);
+          foodTotal = round2(foodTotal + (saleTotal - saleDelivery));
+        } else {
+          foodTotal = round2(foodTotal + saleTotal);
+        }
 
         for (const item of sale.items) {
           const qty = Number(item.quantity);
@@ -122,7 +139,7 @@ export class StatsService {
       }
     }
 
-    const averageTicket = salesCount > 0 ? round2(salesTotal / salesCount) : 0;
+    const averageTicket = salesCount > 0 ? round2(foodTotal / salesCount) : 0;
 
     const top3Products = Object.entries(productCounts)
       .map(([name, data]) => ({ name, quantity: data.quantity, subtotal: data.subtotal }))
@@ -157,6 +174,9 @@ export class StatsService {
       periodKey,
       salesTotal,
       salesCount,
+      foodTotal,
+      deliveryTotal,
+      deliveryOrdersCount,
       averageTicket,
       cancelledCount,
       top3Products,
@@ -164,6 +184,7 @@ export class StatsService {
       productsByCategory: formattedProductsByCategory,
       promosSummary,
     };
+
   }
 
   async getRecentShiftsSummary(
@@ -203,6 +224,22 @@ export class StatsService {
     }
 
     return result;
+  }
+
+  async getDeliveryStats(
+    businessId: string,
+    sinceDate?: Date
+  ): Promise<DeliveryStatsSummary> {
+    const zones = await this.repo.getDeliveryStats(businessId, sinceDate);
+    const totalOrders = zones.reduce((acc, z) => acc + z.count, 0);
+    const totalDeliveryFees = round2(zones.reduce((acc, z) => acc + z.totalDeliveryFee, 0));
+
+    return {
+      periodLabel: sinceDate ? 'Últimos 30 días' : 'Histórico acumulado',
+      zones,
+      totalOrders,
+      totalDeliveryFees,
+    };
   }
 }
 

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { RotiseriaProduct, RotiseriaPromo, RotiseriaSale, RotiseriaSaleItem } from '@prisma/client';
+import type {
+  RotiseriaProduct,
+  RotiseriaPromo,
+  RotiseriaSale,
+  RotiseriaSaleItem,
+  RotiseriaDeliveryZone,
+} from '@prisma/client';
 import { handleCallback, handleText, type FlowDeps, type ResolutionInfo } from '../src/core/messaging/flow.js';
 import type { ActionDef } from '../src/core/actions/registry.js';
 import type { ActionInterpreter } from '../src/core/ai/interpreter.js';
@@ -7,12 +13,14 @@ import { AuditService } from '../src/core/audit/audit.service.js';
 import { ProductService } from '../src/templates/rotiseria/domain/product.service.js';
 import { SaleService } from '../src/templates/rotiseria/domain/sale.service.js';
 import { StatsService } from '../src/templates/rotiseria/domain/stats.service.js';
+import { DeliveryZoneService } from '../src/templates/rotiseria/domain/delivery-zone.service.js';
 import { getShiftDate, formatShiftLabel } from '../src/templates/rotiseria/domain/shift.js';
 import { formatRealDateWithDay } from '../src/templates/rotiseria/format.js';
 import { applyModification, parseModificationText } from '../src/templates/rotiseria/domain/modification.js';
 import { createRotiseriaTemplate } from '../src/templates/rotiseria/index.js';
 import type { ProductRepository } from '../src/templates/rotiseria/persistence/product.repo.js';
 import type { SaleRepository, RotiseriaSaleWithItems } from '../src/templates/rotiseria/persistence/sale.repo.js';
+import type { DeliveryZoneRepository } from '../src/templates/rotiseria/persistence/delivery-zone.repo.js';
 import {
   FakeAiUsageRepo,
   FakeAuditRepo,
@@ -34,11 +42,13 @@ interface RotiseriaStore {
   products: RotiseriaProduct[];
   promos: RotiseriaPromo[];
   sales: RotiseriaSaleWithItems[];
+  deliveryZones: RotiseriaDeliveryZone[];
 }
 
 function newStore(): RotiseriaStore {
-  return { products: [], promos: [], sales: [] };
+  return { products: [], promos: [], sales: [], deliveryZones: [] };
 }
+
 
 class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
   constructor(private readonly s: RotiseriaStore) {}
@@ -156,6 +166,120 @@ class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
   }
 }
 
+class FakeRotiseriaDeliveryZoneRepo implements Partial<DeliveryZoneRepository> {
+  constructor(private readonly s: RotiseriaStore) {}
+
+  async createZone(data: { businessId: string; name: string; price: number; barrios?: string[] }) {
+    const z: RotiseriaDeliveryZone = {
+      id: nid('zone'),
+      businessId: data.businessId,
+      name: data.name.trim(),
+      price: data.price as unknown as RotiseriaDeliveryZone['price'],
+      barrios: data.barrios?.map((b) => b.trim().toLowerCase()).filter(Boolean) ?? [],
+      isActive: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    this.s.deliveryZones.push(z);
+    return z;
+  }
+
+  async upsertBatch(businessId: string, zones: Array<{ name?: string; nombre?: string; price?: number; precio?: number; barrios: string[] }>) {
+    const results: RotiseriaDeliveryZone[] = [];
+    for (const item of zones) {
+      const name = (item.name ?? item.nombre ?? '').trim();
+      const price = item.price ?? item.precio ?? 0;
+      let existing = this.s.deliveryZones.find(
+        (z) => z.businessId === businessId && z.name.toLowerCase() === name.toLowerCase()
+      );
+      if (existing) {
+        existing.price = price as unknown as RotiseriaDeliveryZone['price'];
+        existing.barrios = item.barrios.map((b) => b.trim().toLowerCase()).filter(Boolean);
+        existing.isActive = true;
+      } else {
+        existing = {
+          id: nid('zone'),
+          businessId,
+          name,
+          price: price as unknown as RotiseriaDeliveryZone['price'],
+          barrios: item.barrios.map((b) => b.trim().toLowerCase()).filter(Boolean),
+          isActive: true,
+          createdAt: NOW,
+          updatedAt: NOW,
+        };
+        this.s.deliveryZones.push(existing);
+      }
+      results.push(existing);
+    }
+    return results;
+  }
+
+  async listActive(businessId: string) {
+    return this.s.deliveryZones.filter((z) => z.businessId === businessId && z.isActive);
+  }
+
+  async findByName(businessId: string, name: string) {
+    return (
+      this.s.deliveryZones.find(
+        (z) => z.businessId === businessId && z.name.toLowerCase() === name.trim().toLowerCase() && z.isActive
+      ) ?? null
+    );
+  }
+
+  async findMatching(businessId: string, query: string) {
+    const norm = query.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    if (!norm) return null;
+    const active = await this.listActive(businessId);
+
+    const exactName = active.find(
+      (z) => z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim() === norm
+    );
+    if (exactName) return exactName;
+
+    const exactBarrio = active.find((z) =>
+      z.barrios.some((b) => b.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim() === norm)
+    );
+    if (exactBarrio) return exactBarrio;
+
+    const subName = active.find((z) => {
+      const zNorm = z.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      return norm.includes(zNorm) || zNorm.includes(norm);
+    });
+    if (subName) return subName;
+
+    const subBarrio = active.find((z) =>
+      z.barrios.some((b) => {
+        const bNorm = b.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        return norm.includes(bNorm) || bNorm.includes(norm);
+      })
+    );
+    if (subBarrio) return subBarrio;
+
+    return null;
+  }
+
+  async findById(id: string, businessId: string) {
+    return this.s.deliveryZones.find((x) => x.id === id && x.businessId === businessId) ?? null;
+  }
+
+  async updateZone(id: string, businessId: string, data: { name?: string; price?: number; barrios?: string[]; isActive?: boolean }) {
+    const z = this.s.deliveryZones.find((x) => x.id === id && x.businessId === businessId);
+    if (!z) throw new Error('no encontrado');
+    if (data.name !== undefined) z.name = data.name.trim();
+    if (data.price !== undefined) z.price = data.price as unknown as RotiseriaDeliveryZone['price'];
+    if (data.barrios !== undefined) z.barrios = data.barrios.map((b) => b.trim().toLowerCase()).filter(Boolean);
+    if (data.isActive !== undefined) z.isActive = data.isActive;
+    return z;
+  }
+
+  async deactivate(id: string, businessId: string) {
+    const z = this.s.deliveryZones.find((x) => x.id === id && x.businessId === businessId);
+    if (!z) throw new Error('no encontrado');
+    z.isActive = false;
+    return z;
+  }
+}
+
 class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
   constructor(private readonly s: RotiseriaStore) {}
 
@@ -165,7 +289,9 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
     total: number,
     shiftDate: Date,
     lines: Array<{ productId?: string | null; promoId?: string | null; name: string; category?: string; quantity: number; unitPrice: number; subtotal: number }>,
-    note?: string
+    note?: string,
+    deliveryZoneName?: string | null,
+    deliveryFee?: number | null
   ): Promise<RotiseriaSaleWithItems> {
     const saleId = nid('sale');
     const items: RotiseriaSaleItem[] = lines.map((l) => ({
@@ -191,6 +317,8 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
       cancelledByUserId: null,
       cancelReason: null,
       note: note?.trim() || null,
+      deliveryZoneName: deliveryZoneName?.trim() || null,
+      deliveryFee: deliveryFee !== undefined && deliveryFee !== null ? (deliveryFee as unknown as RotiseriaSale['deliveryFee']) : null,
       createdAt: NOW,
       updatedAt: NOW,
       items,
@@ -198,6 +326,7 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
     this.s.sales.push(sale);
     return sale;
   }
+
 
   async findById(id: string, businessId: string) {
     return this.s.sales.find((s) => s.id === id && s.businessId === businessId) ?? null;
@@ -242,16 +371,48 @@ class FakeRotiseriaSaleRepo implements Partial<SaleRepository> {
   async findAll(businessId: string) {
     return this.s.sales.filter((s) => s.businessId === businessId);
   }
+
+  async getDeliveryStats(businessId: string, sinceDate?: Date) {
+    const active = this.s.sales.filter(
+      (s) =>
+        s.businessId === businessId &&
+        !s.isCancelled &&
+        s.deliveryFee !== null &&
+        s.deliveryFee !== undefined &&
+        (!sinceDate || s.shiftDate >= sinceDate)
+    );
+
+    const byZone = new Map<string, { count: number; totalDeliveryFee: number }>();
+    for (const sale of active) {
+      const zoneName = sale.deliveryZoneName?.trim() || 'General / Sin especificar';
+      const fee = Number(sale.deliveryFee ?? 0);
+      const current = byZone.get(zoneName) ?? { count: 0, totalDeliveryFee: 0 };
+      current.count += 1;
+      current.totalDeliveryFee = Math.round((current.totalDeliveryFee + fee) * 100) / 100;
+      byZone.set(zoneName, current);
+    }
+
+    return Array.from(byZone.entries())
+      .map(([zoneName, data]) => ({
+        zoneName,
+        count: data.count,
+        totalDeliveryFee: data.totalDeliveryFee,
+      }))
+      .sort((a, b) => b.count - a.count || b.totalDeliveryFee - a.totalDeliveryFee);
+  }
 }
 
 function setupServices(store = newStore()) {
   const productRepo = new FakeRotiseriaProductRepo(store) as unknown as ProductRepository;
   const saleRepo = new FakeRotiseriaSaleRepo(store) as unknown as SaleRepository;
+  const deliveryZoneRepo = new FakeRotiseriaDeliveryZoneRepo(store) as unknown as DeliveryZoneRepository;
   const products = new ProductService(productRepo);
   const stats = new StatsService(saleRepo);
   const sales = new SaleService(saleRepo, products, stats);
-  return { products, sales, stats, store };
+  const deliveryZones = new DeliveryZoneService(deliveryZoneRepo);
+  return { products, sales, stats, deliveryZones, store };
 }
+
 
 describe('rotiseria: cálculo de docenas y promos', () => {
   it('12 empanadas de una misma variedad se cobran al precio de docena', async () => {
@@ -549,59 +710,61 @@ describe('rotiseria: catálogo base idempotente', () => {
   });
 });
 
+function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
+  const store = newStore();
+  const { products, sales, deliveryZones } = setupServices(store);
+  const bundle = createRotiseriaTemplate({
+    db: {} as any,
+    products,
+    sales,
+    deliveryZones,
+  });
+  const template = bundle.template;
+
+  const businesses = new FakeBusinessRepo();
+  const membershipRepo = new FakeMembershipRepo(businesses);
+  const conversations = new FakeConversationRepo();
+  const auditRepo = new FakeAuditRepo();
+  const business = businesses.seed(makeBusiness({ id: BIZ, templateId: 'rotiseria' }));
+  const user = { id: ACTOR, telegramId: 'tg-rotiseria', createdAt: NOW, updatedAt: NOW };
+  const membership = {
+    id: 'mem-rotiseria',
+    businessId: BIZ,
+    userId: ACTOR,
+    role: 'EMPLOYEE' as const,
+    lastUsedAt: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  membershipRepo.store.set(membership.id, membership);
+
+  const interpreter = {
+    interpret: vi.fn(async (_sys: string, all: ActionDef<unknown>[]) => {
+      const next = queue.shift();
+      if (!next) throw new Error('sin respuestas de IA');
+      const action = all.find((a) => a.name === next.action);
+      if (!action) throw new Error(`acción desconocida: ${next.action}`);
+      return { action, params: next.params };
+    }),
+  } as unknown as ActionInterpreter;
+
+  const deps: FlowDeps = {
+    template,
+    interpreter,
+    conversations,
+    businesses,
+    membershipRepo,
+    audit: new AuditService(auditRepo),
+    aiUsage: new FakeAiUsageRepo(),
+    aiProviderName: 'Mock',
+    aiModel: 'mock-1',
+  };
+  const tenant: TenantContext = { business, membership, user, botTemplateId: 'rotiseria' };
+  const resolution: ResolutionInfo = { user, tenant, justJoined: false, memberships: [], needsInvitation: false };
+  return { deps, resolution, auditRepo, store, products, sales, deliveryZones, conversations, template };
+}
+
 describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
-  function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
-    const store = newStore();
-    const { products, sales } = setupServices(store);
-    const bundle = createRotiseriaTemplate({
-      db: {} as any,
-      products,
-      sales,
-    });
-    const template = bundle.template;
-
-    const businesses = new FakeBusinessRepo();
-    const membershipRepo = new FakeMembershipRepo(businesses);
-    const conversations = new FakeConversationRepo();
-    const auditRepo = new FakeAuditRepo();
-    const business = businesses.seed(makeBusiness({ id: BIZ, templateId: 'rotiseria' }));
-    const user = { id: ACTOR, telegramId: 'tg-rotiseria', createdAt: NOW, updatedAt: NOW };
-    const membership = {
-      id: 'mem-rotiseria',
-      businessId: BIZ,
-      userId: ACTOR,
-      role: 'EMPLOYEE' as const,
-      lastUsedAt: null,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    membershipRepo.store.set(membership.id, membership);
-
-    const interpreter = {
-      interpret: vi.fn(async (_sys: string, all: ActionDef<unknown>[]) => {
-        const next = queue.shift();
-        if (!next) throw new Error('sin respuestas de IA');
-        const action = all.find((a) => a.name === next.action);
-        if (!action) throw new Error(`acción desconocida: ${next.action}`);
-        return { action, params: next.params };
-      }),
-    } as unknown as ActionInterpreter;
-
-    const deps: FlowDeps = {
-      template,
-      interpreter,
-      conversations,
-      businesses,
-      membershipRepo,
-      audit: new AuditService(auditRepo),
-      aiUsage: new FakeAiUsageRepo(),
-      aiProviderName: 'Mock',
-      aiModel: 'mock-1',
-    };
-    const tenant: TenantContext = { business, membership, user, botTemplateId: 'rotiseria' };
-    const resolution: ResolutionInfo = { user, tenant, justJoined: false, memberships: [], needsInvitation: false };
-    return { deps, resolution, auditRepo, store, products, sales, conversations, template };
-  }
 
   it('freestyle "1 docena de carne y una muzza" → summarize pide confirmación con 4 botones → yes crea venta y audita', async () => {
     const f = setupFlow([
@@ -628,17 +791,20 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     expect(ask.text).toContain('¿Confirmar venta?');
     expect(ask.text).toContain('Empanada de Carne');
     expect(ask.text).toContain('Pizza Muzzarella');
-    // Verifica los 4 botones inline exactos del spec
     expect(ask.inlineKeyboard).toEqual([
       [
         { text: '✅ Confirmar venta', callbackData: 'confirm:yes' },
         { text: '❌ Cancelar', callbackData: 'confirm:no' },
       ],
       [
+        { text: '🛵 Envíos', callbackData: 'rotiseria:flete_menu' },
         { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+      ],
+      [
         { text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' },
       ],
     ]);
+
 
     const confirmed = await handleCallback(f.deps, {
       resolution: f.resolution,
@@ -843,7 +1009,10 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     expect(ask.text).toContain('¿Qué venta deseás anular?');
     expect(ask.inlineKeyboard).toEqual([
       [{ text: '↩️ Anular última venta', callbackData: 'rotiseria:anular_ultima' }],
-      [{ text: '📋 Elegir de las últimas 5 ventas', callbackData: 'rotiseria:anular_listar' }],
+      [
+        { text: '📋 Últimas 5 ventas', callbackData: 'rotiseria:anular_listar:5' },
+        { text: '📋 Últimas 10 ventas', callbackData: 'rotiseria:anular_listar:10' },
+      ],
       [{ text: '❌ Cancelar', callbackData: 'rotiseria:anular_cancelar' }],
     ]);
 
@@ -1167,11 +1336,11 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
 
     // 1. Mensaje de bienvenida
     const welcomeMsg = t.welcome('Rotisería Don Pepe', 'Luciano');
-    expect(welcomeMsg).toContain('👋 ¡Hola! Soy el asistente de *Rotisería Don Pepe*.');
-    expect(welcomeMsg).toContain('📝 Para registrar ventas, mandame un audio o escribí directo:');
-    expect(welcomeMsg).toContain('• "Una docena de salteñas y dos sándwiches de milanesa"');
-    expect(welcomeMsg).toContain('• "3 empanadas de pollo y una coca"');
-    expect(welcomeMsg).toContain('Tenés los accesos rápidos en los botones de abajo o tocá /menu para ver opciones.');
+    expect(welcomeMsg).toContain('👋 ¡Hola! Qué lindo tenerte por acá.');
+    expect(welcomeMsg).toContain('Soy tu asistente para *Rotisería Don Pepe*');
+    expect(welcomeMsg).toContain('🎙️ *¿Cómo funciona? Es muy fácil:*');
+    expect(welcomeMsg).toContain('👉 _"1 docena de carne y una de pollo con envío a Tres Cerritos"_');
+    expect(welcomeMsg).toContain('Abajo te dejo los botones rápidos para que los uses cuando quieras 👇');
 
     // 2. replyMenu (5 botones, layout [1, 2, 2], acción 'registrar_venta')
     expect(t.replyMenuLayout).toEqual([1, 2, 2]);
@@ -1183,12 +1352,13 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
     ]);
 
-    // 3. menuCommands (9 comandos exactos para el botón azul de Telegram)
+    // 3. menuCommands (comandos del menú azul de Telegram)
     expect(t.menuCommands).toEqual([
       { command: 'venta', description: '📝 Registrar venta' },
       { command: 'promo', description: '🎁 Gestionar promociones' },
-      { command: 'comida', description: '➕ Crear comida o empanada' },
+      { command: 'comida', description: '➕ Crear comida' },
       { command: 'precio', description: '🏷️ Modificar precios de la carta' },
+      { command: 'envios', description: '🛵 Envíos a domicilio y tarifas' },
       { command: 'dias', description: '📅 Control de días recientes' },
       { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
       { command: 'ventas', description: '🧾 Últimas ventas registradas' },
@@ -1204,11 +1374,13 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       'menu_estadisticas',
       'anular_venta',
       'cambiar_precio',
-      'consultar_menu',
+      'gestionar_envios',
+      'consultar_carta',
       'consultar_ventas',
       'crear_producto',
     ]);
   });
+
 
   it('desambiguación interactiva: sugerencia con resolver suma producto y recalcula docenas', async () => {
     const f = setupFlow([
@@ -1498,3 +1670,748 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     expect(closed.text).toContain('Operación cerrada');
   });
 });
+
+describe('rotiseria: zonas de envío y flete (delivery)', () => {
+  it('Caso 1: cotización con zona de catálogo suma flete y detalla desglose', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+          zona_envio: 'Tres Cerritos',
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+    await f.deliveryZones.createZone({ businessId: BIZ, name: 'Tres Cerritos', price: 2500, barrios: ['tres cerritos', 'chachapoyas'] });
+
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne con envío a Tres Cerritos',
+      now: NOW,
+    });
+
+    expect(ask.text).toContain('Detalle del pedido');
+    expect(ask.text).toContain('1x Docena (12 Empanada de Carne) — *$ 15.000*');
+    expect(ask.text).toContain('🛵 Envío (Tres Cerritos): *$ 2.500*');
+    expect(ask.text).toContain('Total:* *$ 17.500*');
+
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('Total cobrado: *$ 17.500*');
+    expect(confirmed.text).toContain('🛵 Envío (Tres Cerritos): *$ 2.500*');
+    expect(f.store.sales[0].deliveryZoneName).toBe('Tres Cerritos');
+    expect(Number(f.store.sales[0].deliveryFee)).toBe(2500);
+  });
+
+  it('Caso 2: envío bonificado ($0 / gratis) registra deliveryFee: 0 y no null', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+          zona_envio: 'Microcentro',
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+    await f.deliveryZones.createZone({ businessId: BIZ, name: 'Microcentro', price: 0, barrios: ['centro', 'plaza 9 de julio'] });
+
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne al centro',
+      now: NOW,
+    });
+
+    expect(ask.text).toContain('🛵 Envío (Microcentro): ¡GRATIS! ($0)');
+    expect(ask.text).toContain('Total:* *$ 15.000*');
+
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('Total cobrado: *$ 15.000*');
+    expect(confirmed.text).toContain('🛵 Envío (Microcentro): ¡GRATIS! ($0)');
+    expect(f.store.sales[0].deliveryZoneName).toBe('Microcentro');
+    expect(Number(f.store.sales[0].deliveryFee)).toBe(0);
+  });
+
+  it('Caso 3: barrio desconocido solicita asignación de flete y recalcula al recibir monto', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+          zona_no_reconocida: 'Barrio Aeropuerto',
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne para mandar a Barrio Aeropuerto',
+      now: NOW,
+    });
+
+    expect(ask.text).toContain('Zona de envío no reconocida: "*Barrio Aeropuerto*" (flete no asignado)');
+    expect(ask.text).toContain('Total:* *$ 15.000*');
+    const flatButtons = ask.inlineKeyboard?.flat() ?? [];
+    const btnAsignar = flatButtons.find((b) => b.callbackData?.startsWith('rotiseria:asignar_flete:'));
+    expect(btnAsignar).toBeDefined();
+    expect(btnAsignar?.text).toContain("Asignar flete a 'Barrio Aeropuerto'");
+
+    // 1. Toca botón de asignar flete
+    const promptFee = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: btnAsignar!.callbackData!,
+      now: NOW,
+    });
+    expect(promptFee.text).toContain('Asignar Flete a "Barrio Aeropuerto"');
+
+    // 2. Envía monto manual 2000
+    const askUpdated = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '2000',
+      now: NOW,
+    });
+
+    expect(askUpdated.text).toContain('🛵 Envío (Barrio Aeropuerto): *$ 2.000*');
+    expect(askUpdated.text).toContain('Total:* *$ 17.000*');
+
+    // 3. Confirma venta
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('Total cobrado: *$ 17.000*');
+    expect(Number(f.store.sales[0].deliveryFee)).toBe(2000);
+    expect(f.store.sales[0].deliveryZoneName).toBe('Barrio Aeropuerto');
+  });
+
+  it('Caso 4: configuración de envíos en lote (configurar_envios_lote) persiste zonas y barrios en minúsculas', async () => {
+    const { deliveryZones, store } = setupServices();
+
+    const zonesData = [
+      {
+        nombre: 'Centro',
+        precio: 1500,
+        barrios: ['Microcentro', 'Plaza 9 de Julio'],
+      },
+      {
+        nombre: 'Zona Norte',
+        precio: 2500,
+        barrios: ['Tres Cerritos', 'Parque Belgrano'],
+      },
+      {
+        nombre: 'Zona Sur',
+        precio: 0,
+        barrios: ['San Carlos', 'Limache'],
+      },
+    ];
+
+    const result = await deliveryZones.upsertBatch(BIZ, zonesData);
+    expect(result).toHaveLength(3);
+    expect(store.deliveryZones).toHaveLength(3);
+
+    const sur = await deliveryZones.findMatching(BIZ, 'limache');
+    expect(sur).toBeDefined();
+    expect(sur?.name).toBe('Zona Sur');
+    expect(sur?.price).toBe(0);
+
+    const norte = await deliveryZones.findMatching(BIZ, 'TRES CERRITOS');
+    expect(norte).toBeDefined();
+    expect(norte?.name).toBe('Zona Norte');
+    expect(norte?.price).toBe(2500);
+
+    // Matching con acentos / diacríticos
+    const centro = await deliveryZones.findMatching(BIZ, 'Plaza 9 de Júlio');
+    expect(centro).toBeDefined();
+    expect(centro?.name).toBe('Centro');
+  });
+
+  it('Caso 5: segregación contable de comida vs flete en estadísticas y resumen de turno', async () => {
+    const { products, sales, deliveryZones } = setupServices();
+
+    await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+    await deliveryZones.createZone({ businessId: BIZ, name: 'Tres Cerritos', price: 2500, barrios: [] });
+    await deliveryZones.createZone({ businessId: BIZ, name: 'Centro', price: 0, barrios: [] });
+
+    // Venta 1: 1 docena ($15.000) + flete $2.500 = $17.500 (Delivery)
+    await sales.createSale(
+      BIZ,
+      ACTOR,
+      [{ name: 'Empanada de Carne', quantity: 12 }],
+      undefined,
+      NOW,
+      'America/Argentina/Buenos_Aires',
+      undefined,
+      { fee: 2500, zoneName: 'Tres Cerritos' }
+    );
+
+    // Venta 2: 1 docena ($15.000) + flete $0 = $15.000 (Delivery bonificado)
+    await sales.createSale(
+      BIZ,
+      ACTOR,
+      [{ name: 'Empanada de Carne', quantity: 12 }],
+      undefined,
+      NOW,
+      'America/Argentina/Buenos_Aires',
+      undefined,
+      { fee: 0, zoneName: 'Centro' }
+    );
+
+    // Venta 3: 1 docena ($15.000) sin flete (Mostrador)
+    await sales.createSale(
+      BIZ,
+      ACTOR,
+      [{ name: 'Empanada de Carne', quantity: 12 }],
+      undefined,
+      NOW,
+      'America/Argentina/Buenos_Aires',
+      undefined,
+      undefined
+    );
+
+    // DaySummary
+    const day = await sales.getDaySummary(BIZ, undefined, NOW);
+    expect(day.salesCount).toBe(3);
+    expect(day.salesTotal).toBe(47500); // 17500 + 15000 + 15000
+    expect(day.foodTotal).toBe(45000); // 15000 + 15000 + 15000 (cero contaminación de flete)
+    expect(day.deliveryTotal).toBe(2500);
+    expect(day.deliveryOrdersCount).toBe(2); // Venta 1 y Venta 2 tuvieron flete/delivery
+
+    // StatsSummary
+    const stats = await sales.getStatsSummary(BIZ, 'esta_semana', NOW);
+    expect(stats.salesTotal).toBe(47500);
+    expect(stats.foodTotal).toBe(45000);
+    expect(stats.deliveryTotal).toBe(2500);
+    expect(stats.deliveryOrdersCount).toBe(2);
+    // AverageTicket computado sobre foodTotal (45000 / 3 = 15000)
+    expect(stats.averageTicket).toBe(15000);
+  });
+
+  it('Caso 6: quitar flete vía callback restablece a retiro en mostrador', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+          zona_envio: 'Tres Cerritos',
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+    await f.deliveryZones.createZone({ businessId: BIZ, name: 'Tres Cerritos', price: 2500, barrios: [] });
+
+    // 1. Inicia pedido con flete
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne a Tres Cerritos',
+      now: NOW,
+    });
+    expect(ask.text).toContain('Total:* *$ 17.500*');
+
+    // 2. Ejecuta callback rotiseria:flete_quitar
+    const removed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:flete_quitar',
+      now: NOW,
+    });
+
+    expect(removed.text).not.toContain('🛵 Envío');
+    expect(removed.text).toContain('Total:* *$ 15.000*');
+
+    // 3. Confirma la venta
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('Total cobrado: *$ 15.000*');
+    expect(f.store.sales[0].deliveryFee).toBeNull();
+    expect(f.store.sales[0].deliveryZoneName).toBeNull();
+  });
+});
+
+describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => {
+  it('Caso 1: pedido con producto no catalogado se cotiza a $0 sin error y se confirma', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Flan Casero', cantidad: 1 }],
+        },
+      },
+    ]);
+
+    const ask = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'un flan casero',
+      now: NOW,
+    });
+
+    expect(ask.text).toContain('Flan Casero');
+    expect(ask.text).toContain('$0 (⚠️ Ítem especial / sin precio en carta)');
+    expect(ask.text).toContain('Total:* *$ 0*');
+    const flatButtons = ask.inlineKeyboard?.flat() ?? [];
+    const btnAsignar = flatButtons.find((b) => b.callbackData === 'rotiseria:precio_item:0');
+    expect(btnAsignar).toBeDefined();
+    expect(btnAsignar?.text).toContain("Asignar precio a 'Flan Casero'");
+
+    // Confirma la venta directamente sin asignarle precio
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('Total cobrado: *$ 0*');
+    expect(f.store.sales).toHaveLength(1);
+    expect(f.store.sales[0].items).toHaveLength(1);
+    const item = f.store.sales[0].items[0];
+    expect(item.name).toBe('Flan Casero');
+    expect(item.productId).toBeNull();
+    expect(item.promoId).toBeNull();
+    expect(item.category).toBe('especial');
+    expect(Number(item.unitPrice)).toBe(0);
+    expect(Number(item.subtotal)).toBe(0);
+  });
+
+  it('Caso 2: modificación interactiva agregando producto libre y asignando precio numérico', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_venta',
+        params: {
+          items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+        },
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+    // 1. Pedido inicial: 12 empanadas de carne ($15.000)
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1 docena de carne',
+      now: NOW,
+    });
+
+    // 2. Toca modificar
+    await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:modificar',
+      now: NOW,
+    });
+
+    // 3. Modifica agregando producto no catalogado "sumale 2 flanes"
+    const modAsk = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'sumale 2 flanes',
+      now: NOW,
+    });
+
+    expect(modAsk.text.toLowerCase()).toContain('flanes');
+    expect(modAsk.text).toContain('$0 (⚠️ Ítem especial / sin precio en carta)');
+    expect(modAsk.text).toContain('Total:* *$ 15.000*');
+    const flatButtons = modAsk.inlineKeyboard?.flat() ?? [];
+    const btnPrecio = flatButtons.find((b) => b.callbackData === 'rotiseria:precio_item:1');
+    expect(btnPrecio).toBeDefined();
+
+    // 4. Toca botón de asignar precio al flan (índice 1)
+    const promptPrecio = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:precio_item:1',
+      now: NOW,
+    });
+    expect(promptPrecio.text.toLowerCase()).toContain('flanes');
+
+    // 5. Envía precio 1200
+    const updatedAsk = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '1200',
+      now: NOW,
+    });
+
+    expect(updatedAsk.text.toLowerCase()).toContain('flanes');
+    expect(updatedAsk.text).toContain('Total:* *$ 17.400*');
+
+    // 6. Confirma la venta
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+
+    expect(confirmed.text).toContain('Total cobrado: *$ 17.400*');
+    expect(f.store.sales[0].items).toHaveLength(2);
+    const flanItem = f.store.sales[0].items.find((it) => it.name.toLowerCase() === 'flanes');
+    expect(flanItem).toBeDefined();
+    expect(flanItem?.productId).toBeNull();
+    expect(flanItem?.category).toBe('especial');
+    expect(Number(flanItem?.unitPrice)).toBe(1200);
+    expect(Number(flanItem?.subtotal)).toBe(2400);
+  });
+
+  it('Caso 3: flujo de anulación con lote de 10 ventas y exclusión de ventas ya anuladas', async () => {
+    const f = setupFlow([
+      {
+        action: 'anular_venta',
+        params: {},
+      },
+    ]);
+
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada', priceUnit: 1500 });
+
+    // Crear 10 ventas consecutivas
+    for (let i = 1; i <= 10; i++) {
+      await f.sales.createSale(BIZ, ACTOR, [{ name: 'Empanada', quantity: i }], `Venta ${i}`, NOW);
+    }
+
+    // 1. Pedir anular
+    const askMenu = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/anular',
+      now: NOW,
+    });
+
+    expect(askMenu.text).toContain('¿Qué venta deseás anular?');
+    const flatMenu = askMenu.inlineKeyboard?.flat() ?? [];
+    expect(flatMenu.some((b) => b.callbackData === 'rotiseria:anular_listar:5')).toBe(true);
+    expect(flatMenu.some((b) => b.callbackData === 'rotiseria:anular_listar:10')).toBe(true);
+
+    // 2. Pedir lote de 10 ventas
+    const list10 = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:anular_listar:10',
+      now: NOW,
+    });
+
+    expect(list10.text).toContain('últimas 10');
+    const saleButtons = (list10.inlineKeyboard ?? [])
+      .flat()
+      .filter((b) => b.callbackData?.startsWith('rotiseria:anular_ver:') || b.callbackData?.startsWith('rotiseria:anular_pedido:'));
+    expect(saleButtons).toHaveLength(10);
+
+    // 3. Seleccionar la primera opción (la venta más reciente, venta #10)
+    const targetCb = saleButtons[0].callbackData!;
+    const confirmAsk = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: targetCb,
+      now: NOW,
+    });
+    expect(confirmAsk.text).toContain('¿Confirmás la anulación de esta venta?');
+
+    // 4. Confirmar anulación
+    const confirmCb = confirmAsk.inlineKeyboard?.[0]?.[0]?.callbackData!;
+    const cancelledRes = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: confirmCb,
+      now: NOW,
+    });
+    expect(cancelledRes.text).toContain('anulada correctamente');
+
+    // La última venta en la DB queda marcada como isCancelled: true
+    const lastSale = f.store.sales[f.store.sales.length - 1];
+    expect(lastSale.isCancelled).toBe(true);
+
+    // 5. Al volver a listar las 10 ventas, la venta anulada se muestra marcada como ANULADA
+    const listAgain = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'rotiseria:anular_listar:10',
+      now: NOW,
+    });
+    const flatAgain = listAgain.inlineKeyboard?.flat() ?? [];
+    const btnAnulada = flatAgain.find((b) => b.callbackData === 'rotiseria:anular_ya_anulada');
+    expect(btnAnulada).toBeDefined();
+    expect(btnAnulada?.text).toContain('ANULADA');
+  });
+
+  it('separación de /menu y /carta, y comandos /envios y /comida', async () => {
+    const f = setupFlow([]);
+    await f.products.createProduct({ businessId: BIZ, name: 'Empanada Salteña', priceUnit: 1500 });
+    await f.deliveryZones.createZone({ businessId: BIZ, name: 'Centro', price: 1000, barrios: ['centro'] });
+
+    // 1. /carta muestra la carta de comidas y precios
+    const resCarta = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/carta',
+      now: NOW,
+    });
+    expect(resCarta.text).toContain('Carta y Precios:');
+    expect(resCarta.text).toContain('Empanada Salteña');
+
+    // 2. /menu muestra las funcionalidades disponibles amigables
+    const resMenu = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/menu',
+      now: NOW,
+    });
+    expect(resMenu.text).toContain('✨ *¿Qué podemos hacer juntos?*');
+    expect(resMenu.text).toContain('🥟 *Ventas y pedidos:*');
+    expect(resMenu.text).toContain('🛵 *Envíos a domicilio:*');
+    expect(resMenu.text).toContain('📋 *Tu carta:*');
+    expect(resMenu.text).toContain('📊 *Cuentas y números:*');
+
+    // 3. /envios muestra el listado de tarifas de entrega
+    const resEnvios = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '/envios',
+      now: NOW,
+    });
+    expect(resEnvios.text).toContain('🛵 *Zonas y Tarifas de Envíos*');
+    expect(resEnvios.text).toContain('Centro');
+
+    // 4. freestyle "menu" también se interpreta directamente
+    const freeMenu = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'menu',
+      now: NOW,
+    });
+    expect(freeMenu.text).toContain('✨ *¿Qué podemos hacer juntos?*');
+  });
+
+  describe('módulo de envíos, UX de fletes y métricas de reparto', () => {
+    it('mutación de flete en una venta borrador: actualiza el total en un paso sin requerir confirmación por texto "Sí/No"', async () => {
+      const f = setupFlow([
+        {
+          match: /docena/i,
+          action: 'registrar_venta',
+          params: { items: [{ nombre: 'Empanada de Carne', cantidad: 12 }] },
+        },
+      ]);
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Empanada de Carne',
+        priceUnit: 1500,
+        priceDozen: 15000,
+      });
+      await f.deliveryZones.createZone({
+        businessId: BIZ,
+        name: 'Grand Bourg',
+        price: 2500,
+        barrios: ['grand bourg'],
+      });
+
+      // 1. Inicia borrador de venta
+      const r1 = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne',
+        now: NOW,
+      });
+      expect(r1.text).toContain('¿Confirmar venta?');
+      expect(r1.text).toContain('$ 15.000');
+
+      // 2. Usuario toca [ 🛵 Envíos ] -> [ ✍️ Ingresar monto manual / barrio ]
+      const menuEnvios = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:flete_menu',
+        now: NOW,
+      });
+      expect(menuEnvios.text).toContain('🛵 *Envíos*');
+
+      const pedirFlete = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:flete_manual',
+        now: NOW,
+      });
+      expect(pedirFlete.text).toContain("Escribí o decime el barrio o el monto del flete");
+
+      // 3. Usuario escribe el barrio 'Grand Bourg'
+      // Debe actualizar zona_envio y flete_monto directamente sin confirmación intermedia
+      const fleteIngresado = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: 'Grand Bourg',
+        now: NOW,
+      });
+
+      // Se debe re-renderizar inmediatamente el resumen de la comanda con 4 botones inline habituales
+      expect(fleteIngresado.text).toContain('📋 *Detalle del pedido:*');
+      expect(fleteIngresado.text).toContain('🛵 Envío (Grand Bourg): *$ 2.500*');
+      expect(fleteIngresado.text).toContain('$ 17.500'); // 15000 + 2500
+      expect(fleteIngresado.text).not.toContain('¿Confirmar? Sí/No');
+
+      const flatBtns = fleteIngresado.inlineKeyboard?.flat() ?? [];
+      expect(flatBtns.some((b) => b.callbackData === 'confirm:yes')).toBe(true);
+      expect(flatBtns.some((b) => b.callbackData === 'confirm:no')).toBe(true);
+      expect(flatBtns.some((b) => b.callbackData === 'rotiseria:flete_menu')).toBe(true);
+
+      // 4. Modificar flete a monto manual '3000'
+      await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:flete_manual',
+        now: NOW,
+      });
+      const fleteManual = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '3000',
+        now: NOW,
+      });
+      expect(fleteManual.text).toContain('🛵 Envío (Envío): *$ 3.000*');
+      expect(fleteManual.text).toContain('$ 18.000'); // 15000 + 3000
+
+      // 5. Quitar flete escribiendo 'sin envio'
+      await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:flete_manual',
+        now: NOW,
+      });
+      const sinEnvio = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: 'sin envio',
+        now: NOW,
+      });
+      expect(sinEnvio.text).not.toContain('🛵 Envío');
+      expect(sinEnvio.text).toContain('$ 15.000');
+    });
+
+    it('modificación de precio de zona individual a través de servicio y persistencia en DB', async () => {
+      const f = setupFlow([]);
+      const zone = await f.deliveryZones.createZone({
+        businessId: BIZ,
+        name: 'Zona Sur',
+        price: 2500,
+        barrios: ['san carlos', 'tribuno', 'intersindical'],
+      });
+
+      // Actualizar a través del servicio
+      const updated = await f.deliveryZones.updateZonePrice(zone.id, BIZ, 3000);
+      expect(updated.price).toBe(3000);
+
+      // Verificar persistencia en consulta de zona
+      const found = await f.deliveryZones.findById(zone.id, BIZ);
+      expect(found).not.toBeNull();
+      expect(found?.price).toBe(3000);
+
+      // Flujo interactivo: seleccionar zona y mandar número
+      const pedirNuevoPrecio = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: `rotiseria:envio_sel:${zone.id}`,
+        now: NOW,
+      });
+      expect(pedirNuevoPrecio.text).toContain('¿Qué nuevo precio tiene *Zona Sur*?');
+
+      const respuestaPrecio = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '3500',
+        now: NOW,
+      });
+      expect(respuestaPrecio.text).toContain('Precio de la zona *Zona Sur* actualizado a *$ 3.500*');
+
+      const foundAfterFlow = await f.deliveryZones.findById(zone.id, BIZ);
+      expect(foundAfterFlow?.price).toBe(3500);
+    });
+
+    it('agregación de estadísticas de delivery: reporte correcto de ranking por pedidos y recaudación de fletes excluyendo ventas anuladas', async () => {
+      const f = setupFlow([]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Pizza Muzza', priceUnit: 8000 });
+
+      // Crear ventas activas con fletes
+      // 18 pedidos en Zona Sur a 2500
+      for (let i = 0; i < 18; i++) {
+        await f.sales.createSale(
+          BIZ,
+          ACTOR,
+          [{ name: 'Pizza Muzza', quantity: 1 }],
+          undefined,
+          NOW,
+          'America/Argentina/Buenos_Aires',
+          undefined,
+          { fee: 2500, zoneName: 'Zona Sur' }
+        );
+      }
+
+      // 12 pedidos en Centro a 1500
+      for (let i = 0; i < 12; i++) {
+        await f.sales.createSale(
+          BIZ,
+          ACTOR,
+          [{ name: 'Pizza Muzza', quantity: 1 }],
+          undefined,
+          NOW,
+          'America/Argentina/Buenos_Aires',
+          undefined,
+          { fee: 1500, zoneName: 'Centro' }
+        );
+      }
+
+      // 5 pedidos en San Lorenzo a 4000
+      for (let i = 0; i < 5; i++) {
+        await f.sales.createSale(
+          BIZ,
+          ACTOR,
+          [{ name: 'Pizza Muzza', quantity: 1 }],
+          undefined,
+          NOW,
+          'America/Argentina/Buenos_Aires',
+          undefined,
+          { fee: 4000, zoneName: 'San Lorenzo' }
+        );
+      }
+
+      // Crear 2 pedidos anulados en San Lorenzo (NO deben computar)
+      const anulada1 = await f.sales.createSale(
+        BIZ,
+        ACTOR,
+        [{ name: 'Pizza Muzza', quantity: 1 }],
+        undefined,
+        NOW,
+        'America/Argentina/Buenos_Aires',
+        undefined,
+        { fee: 4000, zoneName: 'San Lorenzo' }
+      );
+      await f.sales.cancelSale(BIZ, ACTOR, anulada1.sale.id, 'Prueba anulación', NOW);
+
+      // Crear venta sin flete (mostrador - NO debe computar en ranking de fletes)
+      await f.sales.createSale(
+        BIZ,
+        ACTOR,
+        [{ name: 'Pizza Muzza', quantity: 1 }],
+        undefined,
+        NOW,
+        'America/Argentina/Buenos_Aires',
+        undefined,
+        undefined
+      );
+
+      // Consultar reporte de delivery stats
+      const stats = await f.sales.getDeliveryStats(BIZ);
+      expect(stats.totalOrders).toBe(35); // 18 + 12 + 5
+      expect(stats.totalDeliveryFees).toBe(83000); // (18*2500) + (12*1500) + (5*4000) = 45000 + 18000 + 20000 = 83000
+      expect(stats.zones).toHaveLength(3);
+      expect(stats.zones[0]).toEqual({ zoneName: 'Zona Sur', count: 18, totalDeliveryFee: 45000 });
+      expect(stats.zones[1]).toEqual({ zoneName: 'Centro', count: 12, totalDeliveryFee: 18000 });
+      expect(stats.zones[2]).toEqual({ zoneName: 'San Lorenzo', count: 5, totalDeliveryFee: 20000 });
+
+      // Verificación de visualización formateada vía callback
+      const statsCallback = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:envios_stats',
+        now: NOW,
+      });
+      expect(statsCallback.text).toContain('🛵 *Ranking de Envíos y Zonas*');
+      expect(statsCallback.text).toContain('1. 🥇 *Zona Sur:* 18 envíos — $ 45.000');
+      expect(statsCallback.text).toContain('2. 🥈 *Centro:* 12 envíos — $ 18.000');
+      expect(statsCallback.text).toContain('3. 🥉 *San Lorenzo:* 5 envíos — $ 20.000');
+      expect(statsCallback.text).toContain('📦 *Total pedidos enviados:* 35 envíos');
+      expect(statsCallback.text).toContain('💰 *Total dinero fletes:* $ 83.000');
+
+      // Botón volver a envíos presente
+      const flatBtns = statsCallback.inlineKeyboard?.flat() ?? [];
+      expect(flatBtns.some((b) => b.callbackData === 'rotiseria:envios_menu')).toBe(true);
+    });
+  });
+});
+
+

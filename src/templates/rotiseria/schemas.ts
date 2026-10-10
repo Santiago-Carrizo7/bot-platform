@@ -3,6 +3,7 @@ import { z } from 'zod';
 const VentaItemSchema = z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre del producto o promo'),
   cantidad: z.number().positive('La cantidad debe ser mayor a 0').default(1),
+  precio_unitario: z.number().min(0).nullable().optional(),
 });
 
 const NoReconocidoSchema = z.object({
@@ -15,12 +16,21 @@ export const RegistrarVentaInput = z
   .object({
     items: z.array(VentaItemSchema).default([]),
     no_reconocidos: z.array(NoReconocidoSchema).optional(),
+    zona_envio: z.string().trim().nullable().optional(),
+    flete_monto: z.number().min(0).nullable().optional(),
+    zona_no_reconocida: z.string().trim().nullable().optional(),
     nota: z.string().trim().optional(),
     fecha: z.string().trim().optional(), // 'YYYY-MM-DD'
     _modifying: z.boolean().optional(),
     _awaitingCustomDate: z.boolean().optional(),
+    _awaitingManualFee: z.boolean().optional(),
+    _awaitingDelivery: z.boolean().optional(),
+    _awaitingItemPriceIndex: z.number().int().min(0).nullable().optional(),
+    _awaitingItemPriceFor: z.string().trim().nullable().optional(),
+    _uncataloguedZeroItems: z.array(z.any()).optional(),
     _futureDate: z.boolean().optional(),
   })
+
   .superRefine((data, ctx) => {
     if (data._futureDate) {
       ctx.addIssue({
@@ -123,3 +133,22 @@ export type HistorialVentasInput = z.infer<typeof HistorialVentasInput>;
 
 export const EmptyInput = z.object({}).strict();
 export type EmptyInput = z.infer<typeof EmptyInput>;
+
+export const ZonaEnvioLoteItemSchema = z.object({
+  nombre: z.string().trim().min(1, 'El nombre de la zona es obligatorio'),
+  precio: z.number().min(0, 'El precio no puede ser negativo'),
+  barrios: z.array(z.string().trim().toLowerCase()).default([]),
+});
+export type ZonaEnvioLoteItemSchema = z.infer<typeof ZonaEnvioLoteItemSchema>;
+
+export const ConfigurarEnviosLoteInput = z.object({
+  zonas: z.array(ZonaEnvioLoteItemSchema).min(1, 'Debe incluir al menos una zona de envío'),
+});
+export type ConfigurarEnviosLoteInput = z.infer<typeof ConfigurarEnviosLoteInput>;
+
+export const GestionarEnviosInput = z.object({
+  zone_id: z.string().trim().optional(),
+  nuevo_precio: z.number().min(0).optional(),
+});
+export type GestionarEnviosInput = z.infer<typeof GestionarEnviosInput>;
+

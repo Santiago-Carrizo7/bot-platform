@@ -1,9 +1,11 @@
 import type { ActionDef, ActionContext, InlineButton } from '../../core/actions/registry.js';
 import type { ProductService } from './domain/product.service.js';
 import type { SaleService } from './domain/sale.service.js';
+import type { DeliveryZoneService } from './domain/delivery-zone.service.js';
 import {
   AnularVentaInput,
   CambiarPrecioInput,
+  ConfigurarEnviosLoteInput,
   ConsultarEstadisticasInput,
   ConsultarMenuInput,
   ControlDiasInput,
@@ -11,10 +13,12 @@ import {
   CrearProductoInput,
   CrearPromoInput,
   EmptyInput,
+  GestionarEnviosInput,
   HistorialVentasInput,
   RegistrarVentaInput,
   type AnularVentaInput as AnularVenta,
   type CambiarPrecioInput as CambiarPrecio,
+  type ConfigurarEnviosLoteInput as ConfigurarEnviosLote,
   type ConsultarEstadisticasInput as ConsultarEstadisticas,
   type ConsultarMenuInput as ConsultarMenu,
   type ControlDiasInput as ControlDias,
@@ -22,6 +26,7 @@ import {
   type CrearProductoInput as CrearProducto,
   type CrearPromoInput as CrearPromo,
   type EmptyInput as Empty,
+  type GestionarEnviosInput as GestionarEnvios,
   type HistorialVentasInput as HistorialVentas,
   type RegistrarVentaInput as RegistrarVenta,
 } from './schemas.js';
@@ -44,19 +49,20 @@ import { AppError } from '../../core/errors/errors.js';
 export interface RotiseriaActionDeps {
   products: ProductService;
   sales: SaleService;
+  deliveryZones: DeliveryZoneService;
 }
 
 export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unknown>[] {
-  const { products, sales } = deps;
+  const { products, sales, deliveryZones } = deps;
 
   const registrarVenta: ActionDef<RegistrarVenta> = {
     name: 'registrar_venta',
     description:
-      'Registra una venta de rotisería con empanadas, pizzas, sándwiches o promos. Datos: items (lista de {nombre, cantidad}), nota (opcional), fecha (opcional, YYYY-MM-DD). El total y docenas los calcula automáticamente el sistema.',
+      'Registra una venta de rotisería con empanadas, pizzas, sándwiches o promos. Datos: items (lista de {nombre, cantidad}), zona_envio (opcional), flete_monto (opcional), nota (opcional), fecha (opcional, YYYY-MM-DD). El total y docenas los calcula automáticamente el sistema.',
     kind: 'write',
     input: RegistrarVentaInput,
     intro:
-      'Para registrar una venta decime qué y cuánto. Ejemplo: *"1 docena de carne y una muzza"* o *"8 empanadas de carne y 4 de pollo"*.',
+      'Para registrar una venta decime qué y cuánto. Ejemplo: *"1 docena de carne y una muzza"* o *"8 empanadas de carne y 4 de pollo con envío a tal lado"*.',
     fieldPrompts: {
       items: '¿Qué se vendió? Decime productos y cantidades, por ejemplo: *"1 docena de carne y 1 pizza"*',
       nombre: '¿Qué producto o promo?',
@@ -85,6 +91,43 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         }
       }
 
+      // Si hay zona de envío no reconocida, ofrecer botón para asignarle flete manual
+      if (
+        input.zona_no_reconocida &&
+        typeof input.zona_no_reconocida === 'string' &&
+        input.zona_no_reconocida.trim() !== ''
+      ) {
+        const zonaLabel = input.zona_no_reconocida.trim();
+        rows.push([
+          {
+            text: `⚠️ Asignar flete a '${zonaLabel.slice(0, 20)}'`,
+            callbackData: `rotiseria:asignar_flete:${encodeURIComponent(zonaLabel)}`,
+          },
+        ]);
+      }
+
+      // Si hay ítems no catalogados con precio $0, ofrecer botón para asignar precio por índice
+      if (
+        Array.isArray(input._uncataloguedZeroItems) &&
+        input._uncataloguedZeroItems.length > 0 &&
+        Array.isArray(input.items)
+      ) {
+        for (const uncat of input._uncataloguedZeroItems) {
+          const idx = input.items.findIndex(
+            (it: any) =>
+              String(it.nombre ?? it.name).toLowerCase().trim() === uncat.name.toLowerCase().trim()
+          );
+          if (idx >= 0) {
+            rows.push([
+              {
+                text: `💵 Asignar precio a '${uncat.name.slice(0, 20)}'`,
+                callbackData: `rotiseria:precio_item:${idx}`,
+              },
+            ]);
+          }
+        }
+      }
+
       const hasItems = Array.isArray(input.items) && input.items.length > 0;
       if (hasItems) {
         rows.push([
@@ -98,7 +141,10 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       }
 
       rows.push([
+        { text: '🛵 Envíos', callbackData: 'rotiseria:flete_menu' },
         { text: '✏️ Modificar pedido', callbackData: 'rotiseria:modificar' },
+      ]);
+      rows.push([
         { text: '📅 Cambiar fecha', callbackData: 'rotiseria:fecha' },
       ]);
 
@@ -108,18 +154,53 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       const items = Array.isArray(i.items) ? i.items : [];
       let breakdown: string[] | undefined;
       let total: number | undefined;
+      let foodTotal: number | undefined;
+      let deliveryFee: number | null | undefined = i.flete_monto;
+      let deliveryZoneName: string | null | undefined = i.zona_envio;
+      let zonaNoReconocida: string | null | undefined = i.zona_no_reconocida;
 
-      if (ctx && items.length > 0) {
-        try {
-          const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
-          const pricing = calculatePricing(
-            items.map((it: any) => ({ name: it.nombre, quantity: it.cantidad })),
-            catalog
-          );
-          breakdown = pricing.breakdown;
-          total = pricing.total;
-        } catch {
-          // Si el catálogo falla o producto no existe, fallback a lista limpia
+      if (ctx) {
+        // Resolver zona de envío si se indicó nombre pero no monto
+        if (deliveryFee === undefined && deliveryZoneName) {
+          const matched = await deliveryZones.findMatching(ctx.tenant.business.id, deliveryZoneName);
+          if (matched) {
+            deliveryFee = matched.price;
+            deliveryZoneName = matched.name;
+          } else {
+            zonaNoReconocida = deliveryZoneName;
+            deliveryZoneName = null;
+          }
+        }
+
+        if (items.length > 0) {
+          try {
+            const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+            const pricing = calculatePricing(
+              items.map((it: any) => ({
+                name: it.nombre ?? it.name,
+                quantity: it.cantidad ?? it.quantity,
+                unitPrice: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
+              })),
+              catalog,
+              deliveryFee !== undefined && deliveryFee !== null
+                ? { fee: deliveryFee, zoneName: deliveryZoneName }
+                : undefined
+            );
+            breakdown = pricing.breakdown;
+            total = pricing.total;
+            foodTotal = pricing.foodTotal;
+            deliveryFee = pricing.deliveryFee;
+            deliveryZoneName = pricing.deliveryZoneName;
+            if (pricing.uncataloguedItems && pricing.uncataloguedItems.length > 0) {
+              i._uncataloguedZeroItems = pricing.uncataloguedItems.filter(
+                (u) => u.unitPrice === undefined || u.unitPrice === null || u.unitPrice === 0
+              );
+            } else {
+              i._uncataloguedZeroItems = [];
+            }
+          } catch {
+            // Si el catálogo falla o producto no existe, fallback a lista limpia
+          }
         }
       }
 
@@ -141,6 +222,10 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         fecha: i.fecha,
         breakdown,
         total,
+        foodTotal,
+        deliveryFee,
+        deliveryZoneName,
+        zonaNoReconocida,
         isModifying: Boolean(i._modifying),
         now: ctx?.now,
         timezone: ctx?.tenant.business.timezone,
@@ -154,14 +239,35 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         if (!isNaN(d.getTime())) customDate = d;
       }
 
+      let deliveryInput: { fee?: number | null; zoneName?: string | null } | undefined;
+      if (input.flete_monto !== undefined && input.flete_monto !== null) {
+        deliveryInput = {
+          fee: input.flete_monto,
+          zoneName: input.zona_envio ?? 'Envío',
+        };
+      } else if (input.zona_envio) {
+        const matched = await deliveryZones.findMatching(ctx.tenant.business.id, input.zona_envio);
+        if (matched) {
+          deliveryInput = {
+            fee: matched.price,
+            zoneName: matched.name,
+          };
+        }
+      }
+
       const result = await sales.createSale(
         ctx.tenant.business.id,
         ctx.actorUserId,
-        input.items.map((it) => ({ name: it.nombre, quantity: it.cantidad })),
+        input.items.map((it) => ({
+          name: it.nombre,
+          quantity: it.cantidad,
+          unitPrice: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
+        })),
         input.nota,
         ctx.now,
         ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires',
-        customDate
+        customDate,
+        deliveryInput
       );
 
       const receipt = formatSaleReceipt({
@@ -172,6 +278,9 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         breakdown: result.pricing.breakdown,
         timezone: ctx.tenant.business.timezone,
         note: result.sale.note ?? undefined,
+        foodTotal: result.pricing.foodTotal,
+        deliveryFee: result.pricing.deliveryFee,
+        deliveryZoneName: result.pricing.deliveryZoneName,
       });
 
       return {
@@ -184,11 +293,14 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
             total: Number(result.sale.total),
             items: result.pricing.lines.length,
             shiftDate: result.sale.shiftDate,
+            deliveryFee: result.pricing.deliveryFee,
+            deliveryZoneName: result.pricing.deliveryZoneName,
           },
         },
       };
     },
   };
+
 
   const anularVenta: ActionDef<AnularVenta> = {
     name: 'anular_venta',
@@ -228,7 +340,10 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         reply: '↩️ ¿Qué venta deseás anular?',
         inlineKeyboard: [
           [{ text: '↩️ Anular última venta', callbackData: 'rotiseria:anular_ultima' }],
-          [{ text: '📋 Elegir de las últimas 5 ventas', callbackData: 'rotiseria:anular_listar' }],
+          [
+            { text: '📋 Últimas 5 ventas', callbackData: 'rotiseria:anular_listar:5' },
+            { text: '📋 Últimas 10 ventas', callbackData: 'rotiseria:anular_listar:10' },
+          ],
           [{ text: '❌ Cancelar', callbackData: 'rotiseria:anular_cancelar' }],
         ],
       };
@@ -388,37 +503,37 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     input: ConsultarEstadisticasInput,
     handler: async (ctx, input) => {
       const stats = await sales.getStatsSummary(ctx.tenant.business.id, input.periodo, ctx.now);
+  
+  const lines: string[] = [
+    `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
+    '', 
+    `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
+    `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
+    // Si la condición se cumple, inyecta la línea; si no, expande un array vacío y no agrega nada
+    ...(stats.cancelledCount > 0 ? [`↩️ Pedidos anulados: *${stats.cancelledCount}*`] : []), 
+  ]; // Ya no necesitas ningún .filter() al final
 
-      const lines = [
-        `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
-        '',
-        `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
-        `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
-        `🏷️ Ticket promedio: *${formatCurrency(stats.averageTicket)}*`,
-        stats.cancelledCount > 0 ? `↩️ Pedidos anulados: *${stats.cancelledCount}*` : '',
-      ].filter(Boolean);
+  if (stats.top3Products.length > 0) {
+    lines.push('', '', '🏆 *Top 3 productos más vendidos:*');
+    for (const p of stats.top3Products) {
+      lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
+    }
+  }
 
-      if (stats.top3Products.length > 0) {
-        lines.push('', '🏆 *Top 3 productos más vendidos:*');
-        for (const p of stats.top3Products) {
-          lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
-        }
-      }
+  if (stats.categories.length > 0) {
+    lines.push('', '', '📊 *Desglose por categorías:*');
+    for (const c of stats.categories) {
+      lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
+    }
+  }
 
-      if (stats.categories.length > 0) {
-        lines.push('', '📊 *Desglose por categorías:*');
-        for (const c of stats.categories) {
-          lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
-        }
-      }
-
-      if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
-        lines.push('', '🎁 *Promos vendidas:*');
-        for (const pr of stats.promosSummary.promos) {
-          lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
-        }
-        lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
-      }
+  if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
+    lines.push('', '🎁 *Promos vendidas:*');
+    for (const pr of stats.promosSummary.promos) {
+      lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
+    }
+    lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
+  }
 
       const buttons = [
         [
@@ -628,55 +743,78 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     },
   };
 
+  const consultarCartaHandler = async (
+    ctx: ActionContext,
+    input: { categoria?: string }
+  ) => {
+    const [productList, promoList] = await Promise.all([
+      products.listProducts(ctx.tenant.business.id, { category: input.categoria, limit: 100 }),
+      products.listPromos(ctx.tenant.business.id),
+    ]);
+
+    if (productList.length === 0 && promoList.length === 0) {
+      return {
+        reply:
+          'Todavía no tenés comidas ni promos cargadas.\nPodés crear una escribiendo *"Crear empanada de carne a 1500, docena 15000"*.',
+      };
+    }
+
+    const lines: string[] = ['📋 *Carta y Precios:*', ''];
+
+    if (promoList.length > 0 && !input.categoria) {
+      lines.push('🎁 *Promociones:*');
+      for (const pr of promoList) {
+        const desc = pr.description ? ` _(${esc(pr.description)})_` : '';
+        lines.push(`• *${esc(pr.name)}*: *${formatCurrency(Number(pr.price))}*${desc}`);
+      }
+      lines.push('');
+    }
+
+    const byCat = new Map<string, typeof productList>();
+    for (const p of productList) {
+      const cat = p.category || 'general';
+      const arr = byCat.get(cat) ?? [];
+      arr.push(p);
+      byCat.set(cat, arr);
+    }
+
+    for (const [cat, prods] of byCat.entries()) {
+      const icon = getCategoryIcon(cat);
+      lines.push(`${icon} *${esc(cat.toUpperCase())}:*`);
+      for (const p of prods) {
+        const docena = p.priceDozen ? ` (Docena: *${formatCurrency(Number(p.priceDozen))}*)` : '';
+        lines.push(`• ${esc(p.name)}: *${formatCurrency(Number(p.priceUnit))}*${docena}`);
+      }
+      lines.push('');
+    }
+
+    return { reply: lines.join('\n') };
+  };
+
+  const consultarCarta: ActionDef<ConsultarMenu> = {
+    name: 'consultar_carta',
+    description: 'Muestra el listado de platos, empanadas, pizzas y promociones vigentes de la carta. Dato opcional: categoria.',
+    kind: 'read',
+    input: ConsultarMenuInput,
+    handler: consultarCartaHandler,
+  };
+
   const consultarMenu: ActionDef<ConsultarMenu> = {
     name: 'consultar_menu',
     description: 'Muestra la lista de comidas, empanadas, pizzas y promos con sus precios vigentes. Dato opcional: categoria.',
     kind: 'read',
     input: ConsultarMenuInput,
-    handler: async (ctx, input) => {
-      const [productList, promoList] = await Promise.all([
-        products.listProducts(ctx.tenant.business.id, { category: input.categoria, limit: 100 }),
-        products.listPromos(ctx.tenant.business.id),
-      ]);
+    handler: consultarCartaHandler,
+  };
 
-      if (productList.length === 0 && promoList.length === 0) {
-        return {
-          reply:
-            'Todavía no tenés comidas ni promos cargadas.\nPodés crear una escribiendo *"Crear empanada de carne a 1500, docena 15000"*.',
-        };
-      }
-
-      const lines: string[] = ['📋 *Menú y Precios:*', ''];
-
-      if (promoList.length > 0 && !input.categoria) {
-        lines.push('🎁 *Promociones:*');
-        for (const pr of promoList) {
-          const desc = pr.description ? ` _(${esc(pr.description)})_` : '';
-          lines.push(`• *${esc(pr.name)}*: *${formatCurrency(Number(pr.price))}*${desc}`);
-        }
-        lines.push('');
-      }
-
-      const byCat = new Map<string, typeof productList>();
-      for (const p of productList) {
-        const cat = p.category || 'general';
-        const arr = byCat.get(cat) ?? [];
-        arr.push(p);
-        byCat.set(cat, arr);
-      }
-
-      for (const [cat, prods] of byCat.entries()) {
-        const icon = getCategoryIcon(cat);
-        lines.push(`${icon} *${esc(cat.toUpperCase())}:*`);
-        for (const p of prods) {
-          const docena = p.priceDozen ? ` (Docena: *${formatCurrency(Number(p.priceDozen))}*)` : '';
-          lines.push(`• ${esc(p.name)}: *${formatCurrency(Number(p.priceUnit))}*${docena}`);
-        }
-        lines.push('');
-      }
-
-      return { reply: lines.join('\n') };
-    },
+  const mostrarMenu: ActionDef<Empty> = {
+    name: 'mostrar_menu',
+    description: 'Muestra las funcionalidades disponibles y guía rápida de uso del bot.',
+    kind: 'read',
+    input: EmptyInput,
+    handler: async () => ({
+      reply: ROTISERIA_MENU_HELP_TEXT,
+    }),
   };
 
   const consultarVentas: ActionDef<HistorialVentas> = {
@@ -715,6 +853,104 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     },
   };
 
+  const gestionarEnvios: ActionDef<GestionarEnvios> = {
+    name: 'gestionar_envios',
+    description: '🛵 Envíos a domicilio y tarifas.',
+    kind: 'read',
+    input: GestionarEnviosInput,
+    handler: async (ctx, input) => {
+      const businessId = ctx.tenant.business.id;
+
+      if (input.zone_id && input.nuevo_precio !== undefined) {
+        const updated = await deliveryZones.updateZonePrice(
+          input.zone_id,
+          businessId,
+          input.nuevo_precio
+        );
+        const feeStr = updated.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(updated.price);
+        return {
+          reply: `✅ Precio de la zona *${esc(updated.name)}* actualizado a *${feeStr}*.`,
+          audit: {
+            action: 'delivery_zone.price_updated',
+            entityType: 'rotiseria_delivery_zone',
+            entityId: updated.id,
+            metadata: { name: updated.name, price: updated.price },
+          },
+          inlineKeyboard: [
+            [{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }],
+          ],
+        };
+      }
+
+      const zones = await deliveryZones.listActive(businessId);
+      const lines: string[] = ['🛵 *Zonas y Tarifas de Envíos*', ''];
+
+      if (zones.length === 0) {
+        lines.push('Todavía no tenés zonas de envío configuradas.');
+        lines.push('Podés cargarlas rápidamente agrupando barrios por precio o mandando un audio.');
+      } else {
+        for (const z of zones) {
+          const feeStr = z.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(z.price);
+          lines.push(`• *${esc(z.name)}* — ${feeStr}`);
+          if (z.barrios.length > 0) {
+            const capitalizedBarrios = z.barrios
+              .map((b) => b.charAt(0).toUpperCase() + b.slice(1))
+              .join(', ');
+            lines.push(`  Barrios: ${esc(capitalizedBarrios)}`);
+          }
+        }
+      }
+
+      lines.push('');
+      lines.push('Seleccioná una opción para modificar o consultar:');
+
+      return {
+        reply: lines.join('\n'),
+        inlineKeyboard: [
+          [{ text: '➕ Cargar por lote (audio/texto)', callbackData: 'rotiseria:envios_lote_guia' }],
+          [{ text: '🏷️ Cambiar precio de una zona', callbackData: 'rotiseria:envios_cambiar_precio' }],
+          [{ text: '📊 Zonas con más movimiento', callbackData: 'rotiseria:envios_stats' }],
+        ],
+      };
+    },
+  };
+
+  const configurarEnviosLote: ActionDef<ConfigurarEnviosLote> = {
+    name: 'configurar_envios_lote',
+    description: 'Configura o actualiza en lote las zonas de envío, precios y barrios asociados.',
+    kind: 'write',
+    input: ConfigurarEnviosLoteInput,
+    handler: async (ctx, input) => {
+      const updated = await deliveryZones.upsertBatch(
+        ctx.tenant.business.id,
+        input.zonas.map((z) => ({
+          name: z.nombre,
+          price: z.precio,
+          barrios: z.barrios,
+        }))
+      );
+
+      const lines = [
+        `✅ *Se configuraron ${updated.length} zonas de envío:*`,
+        '',
+      ];
+      for (const z of updated) {
+        const feeStr = z.price === 0 ? '¡GRATIS! ($0)' : formatCurrency(z.price);
+        const barriosInfo = z.barrios.length > 0 ? ` (${z.barrios.length} barrios)` : '';
+        lines.push(`• *${esc(z.name)}*: ${feeStr}${barriosInfo}`);
+      }
+
+      return {
+        reply: lines.join('\n'),
+        audit: {
+          action: 'delivery_zone.batch_configured',
+          entityType: 'rotiseria_delivery_zone',
+          metadata: { count: updated.length },
+        },
+      };
+    },
+  };
+
   return [
     registrarVenta,
     controlDias,
@@ -725,9 +961,40 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     crearProducto,
     crearPromo,
     crearEditarPromo,
+    consultarCarta,
     consultarMenu,
+    mostrarMenu,
     consultarVentas,
+    gestionarEnvios,
+    configurarEnviosLote,
   ] as unknown as ActionDef<unknown>[];
 }
 
+export const ROTISERIA_MENU_HELP_TEXT = [
+  '✨ *¿Qué podemos hacer juntos?*',
+  '',
+  'Acá tenés a mano todo lo que podés pedirme en el día a día para que no tengas que hacer cuentas en la cabeza:',
+  '',
+  '🥟 *Ventas y pedidos:*',
+  '• Mandame un audio o mensaje con el pedido del cliente y te saco el total al toque (calculando docenas y promos solo).',
+  '• /ventas — Para mirar los últimos pedidos que fuimos cobrando.',
+  '• /anular — Por si hubo una equivocación y necesitás cancelar una venta.',
+  '',
+  '🛵 *Envíos a domicilio:*',
+  '• /envios — Para configurar o ver los precios por barrio o zona de delivery.',
+  '',
+  '📋 *Tu carta:*',
+  '• /carta — Para ver las comidas y promos con sus precios actuales.',
+  '• /precio — Para actualizar los precios rápido.',
+  '• /comida — Para sumar un plato o producto nuevo.',
+  '• /promo — Para armar combos especiales.',
+  '',
+  '📊 *Cuentas y números:*',
+  '• /dias — Para ver cómo viene el turno o el cierre de anoche.',
+  '• /stats — Para ver cuánto se vendió en la semana y qué fue lo que más salió.',
+  '',
+  '👇 *Tip:* Para lo más importante del día a día, tenés los botones rápidos acá abajo en la pantalla sin tener que escribir nada.',
+].join('\n');
+
 export type { ActionContext };
+
