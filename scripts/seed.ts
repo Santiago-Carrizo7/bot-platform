@@ -16,6 +16,8 @@ import {
 import { AuditService } from '../src/core/audit/audit.service.js';
 import { InvitationService } from '../src/core/identity/invitation.service.js';
 import { createGastosTemplate } from '../src/templates/gastos/index.js';
+import { createKioscoTemplate } from '../src/templates/kiosco/index.js';
+import { createRotiseriaTemplate } from '../src/templates/rotiseria/index.js';
 import { MembershipService } from '../src/core/identity/membership.service.js';
 import { PrismaMembershipRepository } from '../src/infrastructure/persistence/core.repositories.js';
 import { UserService } from '../src/core/identity/user.service.js';
@@ -32,7 +34,7 @@ async function main() {
     process.exit(1);
   }
   const templateId = arg('template') ?? 'gastos';
-  if (templateId !== 'gastos' && templateId !== 'kiosco') {
+  if (templateId !== 'gastos' && templateId !== 'kiosco' && templateId !== 'rotiseria') {
     console.error(`Template '${templateId}' no implementado todavía.`);
     process.exit(1);
   }
@@ -46,10 +48,12 @@ async function main() {
   if (templateId === 'gastos') {
     const gastos = createGastosTemplate({ db: prisma, memberships, apiSecret: config.API_SECRET });
     await gastos.seedBusiness(business.id);
-  } else {
-    const { createKioscoTemplate } = await import('../src/templates/kiosco/index.js');
+  } else if (templateId === 'kiosco') {
     const kiosco = createKioscoTemplate({ db: prisma });
     await kiosco.seedBusiness(business.id);
+  } else if (templateId === 'rotiseria') {
+    const rotiseria = createRotiseriaTemplate({ db: prisma });
+    await rotiseria.seedBusiness(business.id);
   }
 
   // Invitación de OWNER (o membership directa si se pasa el telegram id).

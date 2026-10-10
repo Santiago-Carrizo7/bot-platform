@@ -1,5 +1,6 @@
 import type { z } from 'zod';
-import type { MembershipRole, TenantContext } from '../tenant/entities.js';
+import type { ConversationState, MembershipRole, TenantContext } from '../tenant/entities.js';
+import type { IConversationRepository } from '../persistence/repositories.js';
 
 /** 'read' no necesita confirmación; 'write' siempre la requiere. */
 export type ActionKind = 'read' | 'write';
@@ -16,12 +17,14 @@ export interface InlineButton {
   callbackData: string;
 }
 
+export interface BotReply {
+  text: string;
+  parseMode?: 'Markdown';
+  inlineKeyboard?: InlineButton[][];
+}
+
 export interface ContinuousStepResult {
-  reply: {
-    text: string;
-    parseMode?: 'Markdown';
-    inlineKeyboard?: InlineButton[][];
-  };
+  reply: BotReply;
   updatedData?: Record<string, unknown>;
   finished?: boolean;
 }
@@ -56,7 +59,9 @@ export interface ActionDef<TInput = unknown> {
   /** Prompts por campo faltante (clave = nombre del campo). */
   fieldPrompts?: Record<string, string>;
   /** Resumen de lo entendido, para la confirmación (obligatorio si write). */
-  summarize?: (input: TInput) => string;
+  summarize?: (input: TInput, ctx?: ActionContext) => string | Promise<string>;
+  /** Botones personalizados de confirmación (si no se define, se usa Sí/No por defecto). */
+  confirmButtons?: (input: TInput) => InlineButton[][];
   handler: (ctx: ActionContext, input: TInput) => Promise<ActionResult>;
   /** Modo continuo: registro rápido secuencial sin confirmación individual. */
   isContinuous?: boolean;
@@ -111,7 +116,8 @@ export interface TemplateDefinition {
    */
   interpretDirectly?: (
     text: string,
-    activeActionName?: string | null
+    activeActionName?: string | null,
+    activeData?: Record<string, unknown>
   ) => { actionName: string; params: Record<string, unknown> } | null;
   /**
    * Pista contextual que se agrega al /start, /menu y /ayuda (opcional).
@@ -124,8 +130,23 @@ export interface TemplateDefinition {
    * acciones más usadas en lenguaje del usuario. Si no se define, no hay barra.
    */
   replyMenu?: ReplyMenuItem[];
+  /**
+   * Distribución de filas para el teclado persistente (ej: [1, 2, 2]).
+   * Si no se define, se agrupan de a 2 por fila.
+   */
+  replyMenuLayout?: number[];
   /** Comandos que aparecen en el botón Menú de Telegram (base + template). */
   menuCommands?: { command: string; description: string }[];
+  /**
+   * Delegación de callbacks inline propios del template.
+   */
+  handleCallback?: (
+    ctx: ActionContext,
+    data: string,
+    activeState: ConversationState | null,
+    conversations?: IConversationRepository,
+    audit?: { log: (entry: import('../persistence/repositories.js').ILogAuditData) => Promise<unknown> }
+  ) => Promise<BotReply | null>;
 }
 
 export class ActionRegistry {

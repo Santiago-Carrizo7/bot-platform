@@ -15,6 +15,7 @@ import { buildTelegramWebhookRoutes } from '../infrastructure/telegram/bot.js';
 import type { ExtraRoute } from '../infrastructure/http/server.js';
 import { createGastosTemplate } from '../templates/gastos/index.js';
 import { createKioscoTemplate } from '../templates/kiosco/index.js';
+import { createRotiseriaTemplate } from '../templates/rotiseria/index.js';
 
 async function bootstrap() {
   const config = loadConfig();
@@ -29,7 +30,8 @@ async function bootstrap() {
     apiSecret: config.API_SECRET,
   });
   const kiosco = createKioscoTemplate({ db: prisma });
-  const templates = [gastos.template, kiosco.template];
+  const rotiseria = createRotiseriaTemplate({ db: prisma });
+  const templates = [gastos.template, kiosco.template, rotiseria.template];
 
   let bots: RunningBot[] = [];
   if (config.TELEGRAM_POLLING === 'off') {
@@ -59,6 +61,7 @@ async function bootstrap() {
   const seedByTemplate: Record<string, (businessId: string) => Promise<void>> = {
     [gastos.template.id]: gastos.seedBusiness,
     [kiosco.template.id]: kiosco.seedBusiness,
+    [rotiseria.template.id]: rotiseria.seedBusiness,
   };
   const adminRouter = buildAdminRouter(core, config, {
     templates: templates.map((t) => ({ id: t.id, label: t.label })),

@@ -35,8 +35,11 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   const { token, templateId, flowDeps, resolver, sttService, visionService } = deps;
   const bot = new Bot<BotContext>(token);
   const limiter = new InMemoryRateLimiter();
-  // Barra persistente de atajos del template (2 botones por fila).
-  const quickRows = toRows((flowDeps.template.replyMenu ?? []).map((m) => m.label), 2);
+  // Barra persistente de atajos del template (respeta replyMenuLayout si existe, o 2 por fila).
+  const quickRows = layoutToRows(
+    (flowDeps.template.replyMenu ?? []).map((m) => m.label),
+    flowDeps.template.replyMenuLayout
+  );
 
   // Identidad + tenant en cada update, antes que cualquier handler.
   bot.use(async (ctx, next) => {
@@ -517,6 +520,24 @@ function formatAudioFinal(transcript: string, body: string, parseMode?: 'Markdow
     return `🎙️ _«${escapeMarkdownV1(transcript)}»_\n\n${body}`;
   }
   return `🎙️ «${transcript}»\n\n${body}`;
+}
+
+/** Distribuye las etiquetas según el layout especificado, o 2 por fila por defecto. */
+function layoutToRows(labels: string[], layout?: number[]): string[][] {
+  if (!layout || layout.length === 0) {
+    return toRows(labels, 2);
+  }
+  const rows: string[][] = [];
+  let index = 0;
+  for (const count of layout) {
+    if (index >= labels.length) break;
+    rows.push(labels.slice(index, index + count));
+    index += count;
+  }
+  if (index < labels.length) {
+    rows.push(labels.slice(index));
+  }
+  return rows;
 }
 
 /** Parte las etiquetas en filas de N botones para el reply keyboard. */

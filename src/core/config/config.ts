@@ -12,6 +12,7 @@ const configSchema = z.object({
   // Todos opcionales: arranca solo lo configurado (un string vacío también falla).
   TELEGRAM_BOT_TOKEN_GASTOS: z.string().min(1).optional(),
   TELEGRAM_BOT_TOKEN_KIOSCO: z.string().min(1).optional(),
+  TELEGRAM_BOT_TOKEN_ROTISERIA: z.string().min(1).optional(),
   // Modo local sin Telegram (solo HTTP/API): TELEGRAM_POLLING=off.
   TELEGRAM_POLLING: z.enum(['on', 'off']).default('on'),
   // Webhook: si se define la URL pública, Telegram empuja los updates al
@@ -111,6 +112,9 @@ export function configuredBots(config: AppConfig): BotBinding[] {
   }
   if (config.TELEGRAM_BOT_TOKEN_KIOSCO) {
     bots.push({ templateId: 'kiosco', token: config.TELEGRAM_BOT_TOKEN_KIOSCO });
+  }
+  if (config.TELEGRAM_BOT_TOKEN_ROTISERIA) {
+    bots.push({ templateId: 'rotiseria', token: config.TELEGRAM_BOT_TOKEN_ROTISERIA });
   }
   if (bots.length === 0) {
     throw new ConfigError(
