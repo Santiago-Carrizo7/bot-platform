@@ -388,7 +388,8 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
   it('multi-monto ventas: "vendí 5000 y vendí 12000" parsea dos ventas sin contaminar la nota y confirma', async () => {
     const f = setupFlow([]);
     const res = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 5000 y vendí 12000', now: NOW });
-    expect(res.text).toContain('Ventas detectadas en el audio:');
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
+    expect(res.text).not.toContain('detectadas en el audio');
     expect(res.text).toContain('1. 🟢 *$ 5.000*');
     expect(res.text).toContain('2. 🟢 *$ 12.000*');
     expect(res.text).toContain('Total:* *$ 17.000* (2 ventas)');
@@ -400,9 +401,35 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(f.repo.movements).toHaveLength(2);
   });
 
+  it('si el mensaje proviene de un audio (isVoice: true), muestra "Ventas detectadas en el audio:"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 5000 y vendí 12000',
+      now: NOW,
+      isVoice: true,
+    });
+    expect(res.text).toContain('Ventas detectadas en el audio:');
+    expect(res.text).toContain('1. 🟢 *$ 5.000*');
+    expect(res.text).toContain('2. 🟢 *$ 12.000*');
+  });
+
+  it('en modo continuo, enviar números por texto muestra "Confirmar ventas" y no "audio"', async () => {
+    const f = setupFlow([]);
+    // Inicia ventas
+    await handleText(f.deps, { resolution: f.resolution, text: '/ventas', now: NOW });
+    // Manda números por texto
+    const res = await handleText(f.deps, { resolution: f.resolution, text: '3000 4000', now: NOW });
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
+    expect(res.text).not.toContain('detectadas en el audio');
+    expect(res.text).toContain('1. 🟢 *$ 3.000*');
+    expect(res.text).toContain('2. 🟢 *$ 4.000*');
+  });
+
   it('multi-monto ventas: "vendí 3000 y 12000" parsea ambas ventas correctamente', async () => {
     const f = setupFlow([]);
     const res = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 3000 y 12000', now: NOW });
+    expect(res.text).toContain('📋 *Confirmar ventas:*');
     expect(res.text).toContain('1. 🟢 *$ 3.000*');
     expect(res.text).toContain('2. 🟢 *$ 12.000*');
     expect(res.text).toContain('Total:* *$ 15.000* (2 ventas)');
@@ -415,7 +442,8 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       text: 'gasté 3000 en coca y 5000 en pan',
       now: NOW,
     });
-    expect(res.text).toContain('Gastos detectados en el audio:');
+    expect(res.text).toContain('📋 *Confirmar gastos:*');
+    expect(res.text).not.toContain('detectados en el audio');
     expect(res.text).toContain('1. 🔴 *$ 3.000* - coca');
     expect(res.text).toContain('2. 🔴 *$ 5.000* - pan');
     expect(res.text).toContain('Total:* *$ 8.000* (2 gastos)');
@@ -437,7 +465,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       text: 'pagué 12000 al proveedor y 4500 de luz',
       now: NOW,
     });
-    expect(res.text).toContain('Gastos detectados en el audio:');
+    expect(res.text).toContain('Confirmar gastos:');
     expect(res.text).toContain('1. 🔴 *$ 12.000* - proveedor');
     expect(res.text).toContain('2. 🔴 *$ 4.500* - luz');
     expect(res.text).toContain('Total:* *$ 16.500* (2 gastos)');
@@ -451,6 +479,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       text: 'vendí 12000, 3000 y 8000',
       now: NOW,
     });
+    expect(initial.text).toContain('Confirmar ventas:');
     expect(initial.text).toContain('1. 🟢 *$ 12.000*');
     expect(initial.text).toContain('2. 🟢 *$ 3.000*');
     expect(initial.text).toContain('3. 🟢 *$ 8.000*');

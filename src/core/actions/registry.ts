@@ -10,6 +10,7 @@ export interface ActionContext {
   /** Usuario que ejecuta (actor, para auditoría). */
   actorUserId: string;
   now: Date;
+  isVoice?: boolean;
 }
 
 export interface InlineButton {

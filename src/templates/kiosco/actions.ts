@@ -439,6 +439,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           switchToConfirming: {
             actionName: 'registrar_lote',
             data: {
+              origen: ctx.isVoice ? 'audio' : 'texto',
               items: multiple.map((m) => ({
                 tipo: 'VENTA',
                 monto: m.amount,
@@ -623,6 +624,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           switchToConfirming: {
             actionName: 'registrar_lote',
             data: {
+              origen: ctx.isVoice ? 'audio' : 'texto',
               items: multiple.map((m) => ({
                 tipo: 'GASTO',
                 monto: m.amount,
@@ -1015,8 +1017,9 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         { text: '❌ Cancelar', callbackData: 'confirm:no' },
       ],
     ],
-    summarize: (data) => {
-      const items = (data as RegistrarLote).items || [];
+    summarize: (data, ctx) => {
+      const lote = data as RegistrarLote;
+      const items = lote.items || [];
       const ventas = items.filter((i) => i.tipo === 'VENTA');
       const gastos = items.filter((i) => i.tipo === 'GASTO');
       const isOnlyVentas = gastos.length === 0;
@@ -1024,11 +1027,19 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       const totalVentas = ventas.reduce((acc, i) => acc + i.monto, 0);
       const totalGastos = gastos.reduce((acc, i) => acc + i.monto, 0);
 
-      const header = isOnlyVentas
-        ? '🎤 *Ventas detectadas en el audio:*'
-        : isOnlyGastos
-          ? '🎤 *Gastos detectados en el audio:*'
-          : '🎤 *Movimientos detectados:*';
+      const isAudio = lote.origen === 'audio' || ctx?.isVoice === true;
+
+      const header = isAudio
+        ? (isOnlyVentas
+            ? '🎤 *Ventas detectadas en el audio:*'
+            : isOnlyGastos
+              ? '🎤 *Gastos detectados en el audio:*'
+              : '🎤 *Movimientos detectados en el audio:*')
+        : (isOnlyVentas
+            ? '📋 *Confirmar ventas:*'
+            : isOnlyGastos
+              ? '📋 *Confirmar gastos:*'
+              : '📋 *Confirmar movimientos:*');
 
       const lines: string[] = [header, ''];
       items.forEach((item, idx) => {

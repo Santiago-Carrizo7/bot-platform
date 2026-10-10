@@ -71,6 +71,7 @@ export const RegistrarLoteInput = z.object({
     .min(1, 'Debe haber al menos un movimiento en el lote'),
   _editingItemIndex: z.number().int().optional(),
   _awaitingCorrection: z.boolean().optional(),
+  origen: z.enum(['audio', 'texto']).optional(),
 });
 
 export type RegistrarLoteInput = z.infer<typeof RegistrarLoteInput>;

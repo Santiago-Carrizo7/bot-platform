@@ -40,6 +40,7 @@ export interface TextInput {
   text: string;
   firstName?: string;
   now: Date;
+  isVoice?: boolean;
 }
 
 export interface CallbackInput {
@@ -150,6 +151,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
         const merged = mergeData(active.data, directConfirm.params);
         return proceedWithAction(deps, tenant, resolution.user.id, directAction, merged, now, access, {
           freshStart: false,
+          isVoice: input.isVoice,
         });
       }
     }
@@ -162,7 +164,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
     if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
       const lower = trimmed.toLowerCase();
-      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
+      const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now, isVoice: input.isVoice };
       if (lower === '/fin' || lower === 'fin' || lower === 'finalizar') {
         const res = await currentAction.handleContinuousStep(ctx, '/fin', active.data);
         await deps.conversations.clear(tenant.business.id, resolution.user.id);
@@ -193,7 +195,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
       if (res.switchToConfirming) {
         const nextAction = deps.template.actions.find((a) => a.name === res.switchToConfirming!.actionName);
         if (nextAction) {
-          return enterConfirming(deps, tenant, resolution.user.id, nextAction, res.switchToConfirming.data, now);
+          return enterConfirming(deps, tenant, resolution.user.id, nextAction, res.switchToConfirming.data, now, input.isVoice);
         }
       }
       if (res.finished) {
@@ -215,6 +217,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
       const merged = mergeData(baseData, direct.params);
       return proceedWithAction(deps, tenant, resolution.user.id, directAction, merged, now, access, {
         freshStart: !active || active.actionName !== directAction.name,
+        isVoice: input.isVoice,
       });
     }
   }
@@ -259,6 +262,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   // Si el mensaje apunta a otra acción, se abandona la anterior.
   return proceedWithAction(deps, tenant, resolution.user.id, interpreted.action, merged, now, access, {
     freshStart: !active || active.actionName !== interpreted.action.name,
+    isVoice: input.isVoice,
   });
 }
 
@@ -387,6 +391,7 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
 
 interface ProceedOpts {
   freshStart: boolean;
+  isVoice?: boolean;
 }
 
 async function handleCommand(
@@ -509,7 +514,8 @@ async function startAction(
   initialData: Record<string, unknown>,
   now: Date,
   access: ReturnType<typeof evaluateAccess>,
-  fromMenu: boolean
+  fromMenu: boolean,
+  isVoice?: boolean
 ): Promise<BotReply> {
   const roleError = checkRole(tenant, action);
   if (roleError) return md(roleError);
@@ -518,7 +524,7 @@ async function startAction(
   }
   if (action.isContinuous) {
     if (!access.canWrite) return md(MSG_READONLY_WRITE);
-    const ctx: ActionContext = { tenant, actorUserId: userId, now };
+    const ctx: ActionContext = { tenant, actorUserId: userId, now, isVoice };
     const result = await action.handler(ctx, initialData);
     if (result.audit) {
       await deps.audit.log({
@@ -547,7 +553,7 @@ async function startAction(
   const missing = missingFields(action.input, initialData);
   if (missing.length === 0) {
     if (action.kind === 'write') {
-      return enterConfirming(deps, tenant, userId, action, initialData, now);
+      return enterConfirming(deps, tenant, userId, action, initialData, now, isVoice);
     }
     return executeAction(deps, tenant, userId, action, initialData, now, access);
   }
@@ -585,7 +591,7 @@ async function proceedWithAction(
   const validation = action.input.safeParse(data);
   if (validation.success) {
     if (action.kind === 'write') {
-      return enterConfirming(deps, tenant, userId, action, validation.data, now);
+      return enterConfirming(deps, tenant, userId, action, validation.data, now, opts.isVoice);
     }
     return executeAction(deps, tenant, userId, action, validation.data, now, access);
   }
@@ -641,21 +647,26 @@ async function enterConfirming(
   userId: string,
   action: ActionDef<unknown>,
   data: unknown,
-  now: Date
+  now: Date,
+  isVoice?: boolean
 ): Promise<BotReply> {
+  const currentData = ((data ?? {}) as Record<string, unknown>);
+  if (currentData.origen === undefined) {
+    currentData.origen = isVoice ? 'audio' : 'texto';
+  }
   await deps.conversations.upsert({
     businessId: tenant.business.id,
     userId,
     phase: 'CONFIRMING',
     actionName: action.name,
-    data: (data ?? {}) as Record<string, unknown>,
+    data: currentData,
     expiresAt: new Date(now.getTime() + (deps.conversationTtlMs ?? 10 * 60_000)),
     updatedAt: now,
   });
-  const ctx: ActionContext = { tenant, actorUserId: userId, now };
-  const summary = action.summarize ? await action.summarize(data as any, ctx) : 'Revisá los datos.';
+  const ctx: ActionContext = { tenant, actorUserId: userId, now, isVoice: currentData.origen === 'audio' };
+  const summary = action.summarize ? await action.summarize(currentData as any, ctx) : 'Revisá los datos.';
 
-  const customButtons = action.confirmButtons ? action.confirmButtons(data as any) : null;
+  const customButtons = action.confirmButtons ? action.confirmButtons(currentData as any) : null;
   const hasConfirmQuestion = /¿confirm/i.test(summary);
   if (customButtons) {
     const text = hasConfirmQuestion ? summary : `${summary}\n\n¿Confirmar?`;

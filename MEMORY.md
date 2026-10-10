@@ -9,7 +9,7 @@
 - Templates: `gastos`, `rotiseria` y `kiosco` (sesión rápida en mostrador: ventas directas
   sin confirmación con acumulador; audios/lotes en confirmación numerada con corrección
   por texto/botones; tip de audios < 1 min; calculadora con asesor de margen).
-- 177 tests unitarios pasando limpios (178 total con integración opcional).
+- 179 tests unitarios pasando limpios (180 total con integración opcional).
 - Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` OK, `pnpm build` OK.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 

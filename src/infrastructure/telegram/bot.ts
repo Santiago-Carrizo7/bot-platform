@@ -133,6 +133,7 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
         text: transcript,
         firstName: ctx.from?.first_name,
         now: new Date(),
+        isVoice: true,
       });
 
       // 5. Respuesta final editando el mismo mensaje
