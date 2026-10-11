@@ -18,9 +18,8 @@
 - Kiosco: 'ventas' y 'gastos' como acciones ágiles (`isContinuous`); ventas individuales
   se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`
   con confirmación numerada y corrección interactiva ("el 2 es 4000", "borrar 2" o botones).
-  Al confirmar lote, se cierra la sesión limpia sin retener al usuario.
-  Concepto y categoría no se duplican si son idénticos (ej. Alquiler).
-  Jerga argentina (palos, lucas, k, millones) y frases complejas delegan al LLM.
+  Al confirmar lote se lista el detalle de ítems + total y cierra sesión limpia.
+  Estadísticas y rangos de fecha usan zona horaria 'America/Argentina/Buenos_Aires'.
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
 - Rotisería: docenas por tarifa (`priceDozen`); turno operativo 00-05 AM;
   anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.
