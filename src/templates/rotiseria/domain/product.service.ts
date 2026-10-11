@@ -131,31 +131,9 @@ export class ProductService {
   // --- SEED IDEMPOTENTE BASE ---
 
   async seedBaseCatalog(businessId: string): Promise<void> {
-    const defaultProducts: CreateProductData[] = [
-      { businessId, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' },
-      { businessId, name: 'Empanada de Jamón y Queso', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' },
-      { businessId, name: 'Empanada de Pollo', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' },
-      { businessId, name: 'Pizza Muzzarella', priceUnit: 9000, category: 'pizzas' },
-      { businessId, name: 'Sándwich de Milanesa', priceUnit: 8500, category: 'sandwiches' },
-    ];
+    
 
-    for (const p of defaultProducts) {
-      const existing = await this.repo.findProductByName(businessId, p.name);
-      if (!existing) {
-        await this.repo.createProduct(p);
-      }
-    }
-
-    const defaultPromo: CreatePromoData = {
-      businessId,
-      name: 'Promo 1',
-      description: '1 Pizza Muzzarella + 6 Empanadas',
-      price: 16000,
-    };
-
-    const existingPromo = await this.repo.findPromoByName(businessId, defaultPromo.name);
-    if (!existingPromo) {
-      await this.repo.createPromo(defaultPromo);
-    }
+    // Negocios nuevos arrancan limpios (0 productos, 0 promos).
+    // La carta y zonas se cargan durante el onboarding de cada local.
   }
 }

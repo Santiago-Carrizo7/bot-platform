@@ -701,12 +701,12 @@ describe('rotiseria: catálogo base idempotente', () => {
     const { products, store } = setupServices();
 
     await products.seedBaseCatalog(BIZ);
-    expect(store.products).toHaveLength(5);
-    expect(store.promos).toHaveLength(1);
+    expect(store.products).toHaveLength(0);
+    expect(store.promos).toHaveLength(0);
 
     await products.seedBaseCatalog(BIZ);
-    expect(store.products).toHaveLength(5);
-    expect(store.promos).toHaveLength(1);
+    expect(store.products).toHaveLength(0);
+    expect(store.promos).toHaveLength(0);
   });
 });
 
