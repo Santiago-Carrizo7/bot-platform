@@ -17,9 +17,9 @@
 
 - Kiosco: 'ventas' y 'gastos' como acciones ágiles (`isContinuous`); ventas individuales
   se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`
-  con confirmación numerada y corrección interactiva ("el 2 es 4000", "borrar 2" o botones).
-  Al confirmar lote se lista el detalle de ítems + total y cierra sesión limpia.
-  Estadísticas y rangos de fecha usan zona horaria 'America/Argentina/Buenos_Aires'.
+  con confirmación numerada y corrección interactiva. Al confirmar lote se lista el detalle + total.
+  Estadísticas usan timezone 'America/Argentina/Buenos_Aires', navegación entre meses
+  (`stats:mes:<offset>`) y desglose de semanas contables dentro del mes (`stats:semanas:<offset>`).
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
 - Rotisería: docenas por tarifa (`priceDozen`); turno operativo 00-05 AM;
   anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.
