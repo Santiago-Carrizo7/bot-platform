@@ -26,7 +26,7 @@
   anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.
 - Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`).
 
-- IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini.
+- IA en cascada (`FallbackAIProvider`): Groq (GPT-OSS 120B) -> OpenRouter -> Gemini.
 
 ## Gotchas
 - Telegram 64-byte limit en callback_data: usar índices numéricos (`rotiseria:precio_item:${idx}`).
