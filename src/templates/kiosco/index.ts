@@ -89,6 +89,18 @@ export function interpretDirectlyKiosco(
   if (lower === 'resumen ayer' || lower === 'caja ayer') {
     return { actionName: 'consultar_resumen', params: { periodo: 'ayer' } };
   }
+  if (lower === 'resumen semana' || lower === 'caja semana' || lower === 'esta semana') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'semana' } };
+  }
+  if (lower === 'resumen mes' || lower === 'caja mes' || lower === 'este mes') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'mes:0' } };
+  }
+  if (lower === 'mes anterior' || lower === 'mes pasado' || lower === 'resumen mes anterior' || lower === 'resumen mes pasado') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'mes:-1' } };
+  }
+  if (lower === 'semanas' || lower === 'semanas del mes' || lower === 'ver semanas') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'semanas:0' } };
+  }
   if (lower === 'movimientos' || lower === 'ultimos movimientos' || lower === 'últimos movimientos') {
     return { actionName: 'consultar_movimientos', params: { limite: 10 } };
   }

@@ -45,7 +45,7 @@ export const CalcularPrecioInput = z.object({
 export type CalcularPrecioInput = z.infer<typeof CalcularPrecioInput>;
 
 export const ConsultarResumenInput = z.object({
-  periodo: z.enum(['hoy', 'ayer', 'semana', 'mes', 'categorias', 'movimientos', 'menu']).default('hoy'),
+  periodo: z.string().default('hoy'),
 });
 
 export type ConsultarResumenInput = z.infer<typeof ConsultarResumenInput>;

@@ -41,7 +41,9 @@ REGLAS DE INTERPRETACIÓN:
 - CONSULTAS Y ESTADÍSTICAS:
   * "¿Cuánto vendí hoy?", "Resumen de hoy", "Caja de hoy", "¿Cuánto gané?" -> consultar_resumen con periodo: "hoy".
   * "¿Cuánto vendí esta semana?", "Resumen de la semana" -> consultar_resumen con periodo: "semana".
-  * "¿Cómo voy este mes?", "Resumen del mes", "¿Cuánto gasté este mes?" -> consultar_resumen con periodo: "mes".
+  * "¿Cómo voy este mes?", "Resumen del mes", "¿Cuánto gasté este mes?" -> consultar_resumen con periodo: "mes:0".
+  * "¿Cómo nos fue el mes pasado?", "Resumen del mes anterior", "Mes pasado" -> consultar_resumen con periodo: "mes:-1".
+  * "Ver semanas del mes", "Resumen por semanas", "Semanas" -> consultar_resumen con periodo: "semanas:0".
   * "Últimos movimientos", "Movimientos recientes", "Historial" -> consultar_movimientos.
 
 - DESHACER / ANULAR:

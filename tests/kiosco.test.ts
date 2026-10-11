@@ -731,5 +731,136 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(resAyer.text).toContain('Ventas: *$ 15.000* (1 venta)');
     expect(resAyer.text).toContain('Resultado en caja: +$ 15.000');
   });
+
+  it('navegación de meses: permite consultar este mes y navegar al mes anterior con botones interactivos', async () => {
+    const f = setupFlow([]);
+    // Venta en Septiembre 2026 (mes anterior)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 45000,
+      concept: 'Venta Septiembre',
+      date: new Date('2026-09-20T15:00:00Z'),
+    });
+    // Venta en Octubre 2026 (este mes)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 80000,
+      concept: 'Venta Octubre',
+      date: new Date('2026-10-05T15:00:00Z'),
+    });
+
+    const refOctubre = new Date('2026-10-11T14:00:00Z');
+
+    // 1. Consultar este mes (offset 0)
+    const resEsteMes = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:mes:0',
+      now: refOctubre,
+    });
+    expect(resEsteMes.text).toContain('Resumen de este mes (Octubre 2026)');
+    expect(resEsteMes.text).toContain('Ventas: *$ 80.000* (1 venta)');
+    expect(resEsteMes.inlineKeyboard).toBeDefined();
+
+    // Verificamos botones de navegación en mes actual:
+    const flatButtonsMes0 = resEsteMes.inlineKeyboard!.flat();
+    expect(flatButtonsMes0.find((b) => b.text.includes('Mes anterior'))?.callbackData).toBe('stats:mes:-1');
+    expect(flatButtonsMes0.find((b) => b.text.includes('Ver semanas del mes'))?.callbackData).toBe('stats:semanas:0');
+    // En mes actual no debe haber botón de "Mes siguiente"
+    expect(flatButtonsMes0.some((b) => b.text.includes('Mes siguiente'))).toBe(false);
+
+    // 2. Navegar al mes anterior (offset -1: Septiembre 2026)
+    const resMesAnt = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:mes:-1',
+      now: refOctubre,
+    });
+    expect(resMesAnt.text).toContain('Resumen de Septiembre 2026');
+    expect(resMesAnt.text).toContain('Ventas: *$ 45.000* (1 venta)');
+
+    // En mes anterior debe tener botón para volver al mes siguiente (Octubre) y al mes anterior (Agosto)
+    const flatButtonsMesAnt = resMesAnt.inlineKeyboard!.flat();
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Mes anterior'))?.callbackData).toBe('stats:mes:-2');
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Mes siguiente'))?.callbackData).toBe('stats:mes:0');
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Ver semanas del mes'))?.callbackData).toBe('stats:semanas:-1');
+  });
+
+  it('desglose de semanas contables: muestra semanas del mes particionadas de lunes a domingo y suma exacta', async () => {
+    const f = setupFlow([]);
+    // Semana 1 de Octubre (1 al 4 de oct)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 20000,
+      concept: 'Venta Semana 1',
+      date: new Date('2026-10-02T15:00:00Z'),
+    });
+    // Semana 2 de Octubre (5 al 11 de oct)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 35000,
+      concept: 'Venta Semana 2',
+      date: new Date('2026-10-08T15:00:00Z'),
+    });
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'OUT',
+      amount: 5000,
+      concept: 'Gasto Pan',
+      date: new Date('2026-10-08T16:00:00Z'),
+    });
+
+    const refOctubre = new Date('2026-10-11T14:00:00Z');
+
+    // Consultar semanas del mes actual (offset 0)
+    const resSemanas = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:semanas:0',
+      now: refOctubre,
+    });
+
+    expect(resSemanas.text).toContain('Semanas de Octubre 2026');
+    expect(resSemanas.text).toContain('Semana 1 (1 al 4 de oct)');
+    expect(resSemanas.text).toContain('Ventas: *$ 20.000* (1)');
+    expect(resSemanas.text).toContain('Semana 2 (5 al 11 de oct)');
+    expect(resSemanas.text).toContain('Ventas: *$ 35.000* (1) | 💸 Gastos: *$ 5.000* (1)');
+    expect(resSemanas.text).toContain('Balance: *+$ 30.000*');
+    // Total del mes debe sumar exactamente ambas semanas
+    expect(resSemanas.text).toContain('Total de Octubre 2026:');
+    expect(resSemanas.text).toContain('Ventas: *$ 55.000* (2)');
+    expect(resSemanas.text).toContain('Gastos: *$ 5.000* (1)');
+    expect(resSemanas.text).toContain('Resultado en caja: +$ 50.000');
+
+    // Botones de navegación en desglose de semanas:
+    const flatButtons = resSemanas.inlineKeyboard!.flat();
+    expect(flatButtons.find((b) => b.text.includes('Semanas mes ant.'))?.callbackData).toBe('stats:semanas:-1');
+    expect(flatButtons.find((b) => b.text.includes('Total del mes'))?.callbackData).toBe('stats:mes:0');
+  });
+
+  it('interpretación directa en texto: reconoce "mes pasado" y "semanas del mes"', async () => {
+    const f = setupFlow([]);
+    const ref = new Date('2026-10-11T14:00:00Z');
+
+    const resMesPasado = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'mes pasado',
+      now: ref,
+    });
+    expect(resMesPasado.text).toContain('Resumen de Septiembre 2026');
+
+    const resSemanas = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'semanas del mes',
+      now: ref,
+    });
+    expect(resSemanas.text).toContain('Semanas de Octubre 2026');
+  });
 });
 

@@ -1,7 +1,7 @@
 import type { MoneyMovement } from '@prisma/client';
 import { AppError } from '../../../core/errors/errors.js';
 import { CashRepository } from '../persistence/cash.repo.js';
-import type { ExpenseInput, PeriodSummary, PricingCalculation, SaleInput } from '../types.js';
+import type { ExpenseInput, MonthWeekSummary, PeriodSummary, PricingCalculation, SaleInput } from '../types.js';
 
 export class CashService {
   constructor(private readonly cash: CashRepository) {}
@@ -141,6 +141,67 @@ export class CashService {
   }
 
   /**
+   * Desglose de semanas contables dentro de un mes (Lunes a Domingo dentro de los límites del mes).
+   */
+  async getMonthWeeksSummary(
+    businessId: string,
+    refDate: Date = new Date(),
+    timezone = 'America/Argentina/Buenos_Aires'
+  ): Promise<MonthWeekSummary[]> {
+    const safeTz = timezone || 'America/Argentina/Buenos_Aires';
+    const parts = getZonedParts(refDate, safeTz);
+    const lastDay = new Date(Date.UTC(parts.year, parts.month + 1, 0)).getUTCDate();
+    const monthNames = [
+      'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+      'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
+    ];
+    const monthAbbr = monthNames[parts.month].slice(0, 3);
+
+    let currentStartDay = 1;
+    let weekNumber = 1;
+    const weekBlocks: Array<{ weekNumber: number; startDay: number; endDay: number }> = [];
+
+    for (let d = 1; d <= lastDay; d++) {
+      const dayDate = zonedDateToUtc(parts.year, parts.month, d, 12, 0, 0, 0, safeTz);
+      const dayParts = getZonedParts(dayDate, safeTz);
+      if (dayParts.weekday === 0 || d === lastDay) {
+        weekBlocks.push({
+          weekNumber,
+          startDay: currentStartDay,
+          endDay: d,
+        });
+        weekNumber++;
+        currentStartDay = d + 1;
+      }
+    }
+
+    const results: MonthWeekSummary[] = [];
+    for (const b of weekBlocks) {
+      const start = zonedDateToUtc(parts.year, parts.month, b.startDay, 0, 0, 0, 0, safeTz);
+      const end = zonedDateToUtc(parts.year, parts.month, b.endDay, 23, 59, 59, 999, safeTz);
+      const totals = await this.cash.getTotalsByDateRange(businessId, start, end);
+
+      const label = b.startDay === b.endDay
+        ? `Semana ${b.weekNumber} (${b.startDay} de ${monthAbbr})`
+        : `Semana ${b.weekNumber} (${b.startDay} al ${b.endDay} de ${monthAbbr})`;
+
+      results.push({
+        weekNumber: b.weekNumber,
+        label,
+        startDay: b.startDay,
+        endDay: b.endDay,
+        ventasTotal: totals.totalIn,
+        ventasCount: totals.countIn,
+        gastosTotal: totals.totalOut,
+        gastosCount: totals.countOut,
+        balanceCaja: round2(totals.totalIn - totals.totalOut),
+      });
+    }
+
+    return results;
+  }
+
+  /**
    * Calculadora de precio de venta:
    * Recargo (markup): Precio = Costo * (1 + porcentaje / 100)
    * Margen: Precio = Costo / (1 - porcentaje / 100)
@@ -248,7 +309,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function getZonedParts(date: Date, tz: string) {
+export function getZonedParts(date: Date, tz: string) {
   const f = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     year: 'numeric',
@@ -273,7 +334,7 @@ function getZonedParts(date: Date, tz: string) {
   };
 }
 
-function zonedDateToUtc(
+export function zonedDateToUtc(
   year: number,
   month: number,
   day: number,

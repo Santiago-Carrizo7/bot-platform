@@ -45,3 +45,16 @@ export interface PeriodSummary {
   gastosCount: number;
   balanceCaja: number;
 }
+
+export interface MonthWeekSummary {
+  weekNumber: number;
+  label: string;
+  startDay: number;
+  endDay: number;
+  ventasTotal: number;
+  ventasCount: number;
+  gastosTotal: number;
+  gastosCount: number;
+  balanceCaja: number;
+}
+

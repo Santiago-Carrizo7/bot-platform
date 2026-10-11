@@ -1,5 +1,5 @@
 import type { ActionDef, ActionContext } from '../../core/actions/registry.js';
-import type { CashService } from './domain/cash.service.js';
+import { CashService, getZonedParts, zonedDateToUtc } from './domain/cash.service.js';
 import {
   CalcularPrecioInput,
   ConsultarMovimientosInput,
@@ -898,7 +898,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     ],
     [
       { text: '🗓️ Esta semana', callbackData: 'stats:semana' },
-      { text: '🗓️ Este mes', callbackData: 'stats:mes' },
+      { text: '🗓️ Este mes', callbackData: 'stats:mes:0' },
     ],
     [
       { text: '🏷️ Gastos por categoría', callbackData: 'stats:categorias' },
@@ -911,7 +911,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       { text: current === 'hoy' ? '• Hoy •' : '📅 Hoy', callbackData: 'stats:hoy' },
       { text: current === 'ayer' ? '• Ayer •' : '📅 Ayer', callbackData: 'stats:ayer' },
       { text: current === 'semana' ? '• Semana •' : '🗓️ Semana', callbackData: 'stats:semana' },
-      { text: current === 'mes' ? '• Mes •' : '🗓️ Mes', callbackData: 'stats:mes' },
+      { text: current === 'mes' ? '• Mes •' : '🗓️ Mes', callbackData: 'stats:mes:0' },
     ],
     [
       { text: '🏷️ Gastos por categoría', callbackData: 'stats:categorias' },
@@ -919,10 +919,46 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     ],
   ];
 
+  const monthNavKeyboard = (offset: number) => {
+    const navRow = [
+      { text: '◀️ Mes anterior', callbackData: `stats:mes:${offset - 1}` },
+    ];
+    if (offset < 0) {
+      navRow.push({ text: 'Mes siguiente ▶️', callbackData: `stats:mes:${offset + 1}` });
+    }
+    return [
+      navRow,
+      [
+        { text: '📅 Ver semanas del mes', callbackData: `stats:semanas:${offset}` },
+      ],
+      [
+        { text: '📅 Hoy', callbackData: 'stats:hoy' },
+        { text: '🗓️ Esta semana', callbackData: 'stats:semana' },
+        { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' },
+      ],
+    ];
+  };
+
+  const weeksNavKeyboard = (offset: number) => {
+    const navRow = [
+      { text: '◀️ Semanas mes ant.', callbackData: `stats:semanas:${offset - 1}` },
+    ];
+    if (offset < 0) {
+      navRow.push({ text: 'Semanas mes sig. ▶️', callbackData: `stats:semanas:${offset + 1}` });
+    }
+    return [
+      navRow,
+      [
+        { text: '📊 Total del mes', callbackData: `stats:mes:${offset}` },
+        { text: '⬅️ Menú estadísticas', callbackData: 'stats:menu' },
+      ],
+    ];
+  };
+
   const consultarResumen: ActionDef<ConsultarResumen> = {
     name: 'consultar_resumen',
     description:
-      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes", "categorias", "movimientos", "menu"). Por defecto "hoy".',
+      'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes", "mes:-1", "semanas", "semanas:-1", "categorias", "movimientos", "menu"). Por defecto "hoy".',
     kind: 'read',
     input: ConsultarResumenInput,
     handler: async (ctx, input) => {
@@ -984,6 +1020,99 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
+      if (input.periodo.startsWith('semanas')) {
+        const parts = input.periodo.split(':');
+        const offset = parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
+        const tz = ctx.tenant.business.timezone;
+        const nowParts = getZonedParts(ctx.now, tz);
+        const targetRef = zonedDateToUtc(nowParts.year, nowParts.month + offset, 15, 12, 0, 0, 0, tz);
+        const targetParts = getZonedParts(targetRef, tz);
+        const monthNames = [
+          'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+          'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+        ];
+        const monthName = monthNames[targetParts.month];
+        const targetYear = targetParts.year;
+
+        const weeks = await cash.getMonthWeeksSummary(ctx.tenant.business.id, targetRef, tz);
+
+        const weekLines = weeks.map((w) => {
+          if (w.ventasCount === 0 && w.gastosCount === 0) {
+            return `• *${w.label}*\n  _Sin movimientos registrados_`;
+          }
+          const wSign = w.balanceCaja >= 0 ? '+' : '';
+          return [
+            `• *${w.label}*`,
+            `  🛒 Ventas: *${formatCurrency(w.ventasTotal)}* (${w.ventasCount}) | 💸 Gastos: *${formatCurrency(w.gastosTotal)}* (${w.gastosCount})`,
+            `  ⚖️ Balance: *${wSign}${formatCurrency(w.balanceCaja)}*`,
+          ].join('\n');
+        });
+
+        const totalVentas = weeks.reduce((acc, w) => acc + w.ventasTotal, 0);
+        const totalGastos = weeks.reduce((acc, w) => acc + w.gastosTotal, 0);
+        const totalCountVentas = weeks.reduce((acc, w) => acc + w.ventasCount, 0);
+        const totalCountGastos = weeks.reduce((acc, w) => acc + w.gastosCount, 0);
+        const totalBalance = Math.round((totalVentas - totalGastos) * 100) / 100;
+        const totalSign = totalBalance >= 0 ? '+' : '';
+
+        return {
+          reply: [
+            `🗓️ *Semanas de ${monthName} ${targetYear}*`,
+            '',
+            ...weekLines.flatMap((w) => [w, '']),
+            '───────────────',
+            `📊 *Total de ${monthName} ${targetYear}:*`,
+            `🛒 Ventas: *${formatCurrency(totalVentas)}* (${totalCountVentas})`,
+            `💸 Gastos: *${formatCurrency(totalGastos)}* (${totalCountGastos})`,
+            '',
+            `⚖️ *Resultado en caja: ${totalSign}${formatCurrency(totalBalance)}*`,
+          ].join('\n'),
+          inlineKeyboard: weeksNavKeyboard(offset),
+        };
+      }
+
+      if (input.periodo.startsWith('mes')) {
+        const parts = input.periodo.split(':');
+        const offset = parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
+        const tz = ctx.tenant.business.timezone;
+        const nowParts = getZonedParts(ctx.now, tz);
+        const targetRef = zonedDateToUtc(nowParts.year, nowParts.month + offset, 15, 12, 0, 0, 0, tz);
+        const targetParts = getZonedParts(targetRef, tz);
+        const monthNames = [
+          'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+          'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+        ];
+        const monthName = monthNames[targetParts.month];
+        const targetYear = targetParts.year;
+
+        const summary = await cash.getMonthSummary(ctx.tenant.business.id, targetRef, tz);
+        const periodLabel = offset === 0 ? `este mes (${monthName} ${targetYear})` : `${monthName} ${targetYear}`;
+
+        const sign = summary.balanceCaja >= 0 ? '+' : '';
+        const emptyNote =
+          summary.ventasCount === 0 && summary.gastosCount === 0
+            ? '\n_Todavía sin movimientos registrados en este período._\n'
+            : '';
+
+        return {
+          reply: [
+            `📊 *Resumen de ${periodLabel}*`,
+            '',
+            `🛒 Ventas: *${formatCurrency(summary.ventasTotal)}* (${summary.ventasCount} ${summary.ventasCount === 1 ? 'venta' : 'ventas'})`,
+            `💸 Gastos: *${formatCurrency(summary.gastosTotal)}* (${summary.gastosCount} ${summary.gastosCount === 1 ? 'gasto' : 'gastos'})`,
+            '',
+            '',
+            `⚖️ *Resultado en caja: ${sign}${formatCurrency(summary.balanceCaja)}*`,
+            emptyNote,
+            '',
+            '_(Nota: balance de flujo neto en efectivo; no deduce costos de mercadería)._',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          inlineKeyboard: monthNavKeyboard(offset),
+        };
+      }
+
       let summary: PeriodSummary;
       const tz = ctx.tenant.business.timezone;
       if (input.periodo === 'ayer') {
@@ -992,8 +1121,6 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         summary.periodLabel = 'ayer';
       } else if (input.periodo === 'semana') {
         summary = await cash.getWeekSummary(ctx.tenant.business.id, ctx.now, tz);
-      } else if (input.periodo === 'mes') {
-        summary = await cash.getMonthSummary(ctx.tenant.business.id, ctx.now, tz);
       } else {
         summary = await cash.getDaySummary(ctx.tenant.business.id, ctx.now, tz);
       }
