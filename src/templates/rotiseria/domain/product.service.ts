@@ -114,16 +114,79 @@ export class ProductService {
       this.repo.listPromos(businessId),
     ]);
 
-    const normalize = (s: string) => s.trim().toLowerCase();
+    const normalize = (s: string) =>
+      s
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+    const cleanNeedle = (s: string) =>
+      normalize(s)
+        .replace(/^(?:una|un|\d+)\s+(?:de\s+)?/i, '')
+        .replace(/^(?:empanadas?\s+de\s+|empanadas?\s+|pizzas?\s+de\s+|pizzas?\s+|sandwiches?\s+de\s+|sandwiches?\s+)/i, '')
+        .replace(/^(?:de\s+)/i, '')
+        .replace(/\b(?:carne\s+vacuna|de\s+vaca|vacuna)\b/gi, 'carne')
+        .trim();
+
+    const extractTokens = (s: string) =>
+      cleanNeedle(s)
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 3 && !['empanada', 'empanadas', 'pizza', 'pizzas', 'sandwich', 'sandwiches', 'vaca', 'vacuna'].includes(w));
 
     return {
       findProduct: (name: string) => {
         const needle = normalize(name);
-        return products.find((p) => normalize(p.name) === needle);
+        // 1. Coincidencia exacta
+        const exact = products.find((p) => normalize(p.name) === needle);
+        if (exact) return exact;
+
+        // 2. Coincidencia limpia idéntica (ej. "1 de carne" o "carne" -> "Empanada de Carne" si cleanNeedle es idéntico)
+        const cleaned = cleanNeedle(name);
+        if (cleaned) {
+          const matchCleaned = products.find((p) => cleanNeedle(p.name) === cleaned);
+          if (matchCleaned) return matchCleaned;
+        }
+
+        // 3. Coincidencia por palabra o sabor raíz (tokens significativos con word-boundary)
+        const needleTokens = extractTokens(name);
+        if (needleTokens.length > 0) {
+          // Buscar productos cuyos tokens contengan todos los tokens del needle
+          const tokenMatches = products.filter((p) => {
+            const pTokens = extractTokens(p.name);
+            return needleTokens.every((nt) => pTokens.some((pt) => pt.includes(nt) || nt.includes(pt)));
+          });
+          if (tokenMatches.length === 1) {
+            return tokenMatches[0];
+          }
+          if (tokenMatches.length > 1) {
+            // Priorizar si coincide exactamente con el sabor principal (ej: "carne" -> "Empanada de Carne" sobre "Empanada de Carne Picante")
+            const exactFlavor = tokenMatches.find((p) => {
+              const pTokens = extractTokens(p.name);
+              return pTokens.length === needleTokens.length && needleTokens.every((nt, idx) => pTokens[idx] === nt);
+            });
+            if (exactFlavor) return exactFlavor;
+            return tokenMatches[0];
+          }
+        }
+
+        // 4. Substring match seguro (requiere palabra completa en nombre del producto)
+        if (cleaned.length >= 3) {
+          const sub = products.find((p) => {
+            const pCleaned = cleanNeedle(p.name);
+            const regex = new RegExp(`\\b${cleaned}\\b`, 'i');
+            return regex.test(pCleaned) || regex.test(normalize(p.name));
+          });
+          if (sub) return sub;
+        }
+
+        return undefined;
       },
       findPromo: (name: string) => {
         const needle = normalize(name);
-        return promos.find((p) => normalize(p.name) === needle);
+        const exact = promos.find((p) => normalize(p.name) === needle);
+        if (exact) return exact;
+        return promos.find((p) => normalize(p.name).includes(needle) || needle.includes(normalize(p.name)));
       },
     };
   }

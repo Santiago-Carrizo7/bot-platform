@@ -135,11 +135,10 @@ export function calculatePricing(
 
     for (const [priceDozen, tierLines] of tierMap.entries()) {
       const totalDozenUnits = tierLines.reduce((acc, curr) => acc + curr.quantity, 0);
-      const fullDozens = Math.floor(totalDozenUnits / 12);
-      const remainderUnits = totalDozenUnits % 12;
+      const totalFullDozens = Math.floor(totalDozenUnits / 12);
 
-      if (fullDozens === 0) {
-        // No alcanza para una docena en esta tarifa: se cobran a precio unitario
+      if (totalFullDozens === 0) {
+        // No alcanza para ninguna docena en esta tarifa: se cobran a precio unitario
         for (const { product, quantity } of tierLines) {
           const price = Number(product.priceUnit);
           const subtotal = round2(price * quantity);
@@ -158,63 +157,98 @@ export function calculatePricing(
           breakdown.push(`• ${formatQty(quantity)}x *${esc(product.name)}* — *${formatCurrency(subtotal)}*`);
         }
       } else {
-        // Hay al menos 1 docena en esta tarifa
-        const unitPool: Array<{ product: RotiseriaProduct }> = [];
+        // 1. Extraer docenas puras completas por sabor individual y recolectar sobrantes
+        const pureDozensByProduct = new Map<string, number>();
+        const leftoversByProduct: Array<{ product: RotiseriaProduct; quantity: number }> = [];
+
         for (const line of tierLines) {
-          for (let i = 0; i < line.quantity; i++) {
-            unitPool.push({ product: line.product });
+          const fullSingleDozens = Math.floor(line.quantity / 12);
+          const leftoverQty = line.quantity % 12;
+
+          if (fullSingleDozens > 0) {
+            pureDozensByProduct.set(line.product.name, fullSingleDozens);
+            const pureSubtotal = round2(fullSingleDozens * priceDozen);
+            total = round2(total + pureSubtotal);
+            breakdown.push(
+              `• ${fullSingleDozens}x Docena${fullSingleDozens > 1 ? 's' : ''} (${fullSingleDozens * 12} ${esc(line.product.name)}) — *${formatCurrency(pureSubtotal)}*`
+            );
+          }
+
+          if (leftoverQty > 0) {
+            leftoversByProduct.push({ product: line.product, quantity: leftoverQty });
           }
         }
 
-        // Ordenar por precio unitario ascendente: el remanente toma las unidades más baratas
-        unitPool.sort((a, b) => Number(a.product.priceUnit) - Number(b.product.priceUnit));
+        // 2. Con los sobrantes de todos los sabores del tier:
+        const totalLeftovers = leftoversByProduct.reduce((acc, curr) => acc + curr.quantity, 0);
+        const combinedDozens = Math.floor(totalLeftovers / 12);
+        const finalRemainder = totalLeftovers % 12;
 
-        const remainderUnitsList = unitPool.slice(0, remainderUnits);
-        const dozenUnitsList = unitPool.slice(remainderUnits);
-
-        const dozenSubtotal = round2(fullDozens * priceDozen);
-        total = round2(total + dozenSubtotal);
-
-        const dozenBreakdownCounts: Record<string, number> = {};
-        for (const item of dozenUnitsList) {
-          dozenBreakdownCounts[item.product.name] = (dozenBreakdownCounts[item.product.name] ?? 0) + 1;
-        }
-
-        const dozenFlavors = Object.entries(dozenBreakdownCounts)
-          .map(([name, qty]) => `${qty} ${name}`)
-          .join(', ');
-        breakdown.push(
-          `• ${fullDozens}x Docena${fullDozens > 1 ? 's' : ''} (${esc(dozenFlavors)}) — *${formatCurrency(dozenSubtotal)}*`
-        );
-
-        // Remanente
+        const combinedDozenCounts: Record<string, number> = {};
         const remainderCounts: Record<string, { product: RotiseriaProduct; count: number }> = {};
-        for (const item of remainderUnitsList) {
-          if (!remainderCounts[item.product.name]) {
-            remainderCounts[item.product.name] = { product: item.product, count: 0 };
+
+        if (totalLeftovers > 0) {
+          // Armar pool de unidades de sobrantes
+          const leftoverUnitPool: Array<{ product: RotiseriaProduct }> = [];
+          for (const item of leftoversByProduct) {
+            for (let i = 0; i < item.quantity; i++) {
+              leftoverUnitPool.push({ product: item.product });
+            }
           }
-          remainderCounts[item.product.name].count++;
-        }
 
-        for (const { product, count } of Object.values(remainderCounts)) {
-          const unitPrice = Number(product.priceUnit);
-          const remSubtotal = round2(unitPrice * count);
-          total = round2(total + remSubtotal);
+          // Ordenar por precio unitario ascendente: el remanente suelto toma las unidades de menor precio unitario
+          leftoverUnitPool.sort((a, b) => Number(a.product.priceUnit) - Number(b.product.priceUnit));
 
-          breakdown.push(
-            `• ${count}x *${esc(product.name)}* (suelta${count > 1 ? 's' : ''}) — *${formatCurrency(remSubtotal)}*`
-          );
+          const remainderUnitsList = leftoverUnitPool.slice(0, finalRemainder);
+          const combinedUnitsList = leftoverUnitPool.slice(finalRemainder);
+
+          // Si hay docenas combinadas
+          if (combinedDozens > 0) {
+            const combinedSubtotal = round2(combinedDozens * priceDozen);
+            total = round2(total + combinedSubtotal);
+
+            for (const item of combinedUnitsList) {
+              combinedDozenCounts[item.product.name] = (combinedDozenCounts[item.product.name] ?? 0) + 1;
+            }
+
+            const combinedFlavors = Object.entries(combinedDozenCounts)
+              .map(([name, qty]) => `${qty} ${name}`)
+              .join(', ');
+            breakdown.push(
+              `• ${combinedDozens}x Docena${combinedDozens > 1 ? 's' : ''} (${esc(combinedFlavors)}) — *${formatCurrency(combinedSubtotal)}*`
+            );
+          }
+
+          // Sueltas reales (remanente)
+          for (const item of remainderUnitsList) {
+            if (!remainderCounts[item.product.name]) {
+              remainderCounts[item.product.name] = { product: item.product, count: 0 };
+            }
+            remainderCounts[item.product.name].count++;
+          }
+
+          for (const { product, count } of Object.values(remainderCounts)) {
+            const unitPrice = Number(product.priceUnit);
+            const remSubtotal = round2(unitPrice * count);
+            total = round2(total + remSubtotal);
+
+            breakdown.push(
+              `• ${count}x *${esc(product.name)}* (suelta${count > 1 ? 's' : ''}) — *${formatCurrency(remSubtotal)}*`
+            );
+          }
         }
 
         // Generar líneas de venta para persistencia
         for (const line of tierLines) {
           const product = line.product;
+          const pureDozens = pureDozensByProduct.get(product.name) ?? 0;
+          const pureUnits = pureDozens * 12;
+          const inCombinedDozen = combinedDozenCounts[product.name] ?? 0;
           const inRemainder = remainderCounts[product.name]?.count ?? 0;
-          const inDozen = dozenBreakdownCounts[product.name] ?? 0;
 
           const effectiveSubtotal = round2(
             inRemainder * Number(product.priceUnit) +
-              inDozen * (priceDozen / 12)
+              (pureUnits + inCombinedDozen) * (priceDozen / 12)
           );
 
           const effectiveUnitPrice = round2(effectiveSubtotal / line.quantity);

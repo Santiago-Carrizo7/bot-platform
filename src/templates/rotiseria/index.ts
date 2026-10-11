@@ -233,7 +233,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         }
 
         // Modificación de pedido en curso
-        if (activeData?._modifying && Array.isArray(activeData.items)) {
+        if ((activeData?._awaitingModification || activeData?._modifying) && Array.isArray(activeData.items)) {
           const currentItems = activeData.items.map((it: any) => ({
             name: String(it.nombre ?? it.name),
             quantity: Number(it.cantidad ?? it.quantity),
@@ -243,16 +243,26 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           if (patch) {
             const updated = applyModification(currentItems, patch);
             if (updated.length > 0) {
+              const {
+                _awaitingModification: _dropAwaitingMod,
+                _modifying: _dropMod,
+                _uncataloguedZeroItems: _dropUncat,
+                no_reconocidos: _dropNoRec,
+                ...restParams
+              } = activeData;
               return {
                 actionName: 'registrar_venta',
                 params: {
-                  ...activeData,
+                  ...restParams,
                   items: updated.map((it) => ({
                     nombre: it.name,
                     cantidad: it.quantity,
                     precio_unitario: (it as any).unitPrice,
                   })),
                   _modifying: true,
+                  _awaitingModification: false,
+                  no_reconocidos: undefined,
+                  _uncataloguedZeroItems: undefined,
                 },
               };
             }
@@ -587,6 +597,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
             data: {
               ...activeState.data,
               _modifying: true,
+              _awaitingModification: true,
             },
             expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
             updatedAt: ctx.now,

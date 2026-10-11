@@ -156,7 +156,81 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
       }
     }
 
-    return md('¿Confirmás la operación? Respondé *Sí* o *No* (o tocá los botones para elegir el día de la caja).');
+    const currentData = (active.data ?? {}) as Record<string, unknown>;
+    const isAwaitingSubState = Boolean(
+      currentData._awaitingModification ||
+      currentData._modifying ||
+      currentData._awaitingDelivery ||
+      currentData._awaitingManualFee ||
+      currentData._awaitingCustomDate ||
+      currentData._awaitingItemPriceFor
+    );
+
+    if (!isAwaitingSubState) {
+      // Si el usuario envía un mensaje que representa una nueva acción (ej: una nueva venta)
+      // mientras está en CONFIRMING, se descarta el borrador congelado y se procesa limpio.
+      const directFresh = deps.template.interpretDirectly?.(trimmed, undefined, undefined);
+      if (directFresh) {
+        const directAction = deps.template.actions.find((a) => a.name === directFresh.actionName);
+        if (directAction) {
+          await deps.conversations.clear(tenant.business.id, resolution.user.id);
+          return proceedWithAction(deps, tenant, resolution.user.id, directAction, directFresh.params, now, access, {
+            freshStart: true,
+            isVoice: input.isVoice,
+          });
+        }
+      }
+
+      // Si no es directo, intentar interpretar con IA para ver si es un nuevo pedido u otra acción
+      try {
+        await enforceAiBudget(deps, tenant.business.id, now);
+        const dateStr = now.toISOString().slice(0, 10);
+        const hints = await deps.template.resolveHints?.(tenant).catch(() => '');
+        const interpretedFresh = await deps.interpreter.interpret(
+          deps.template.systemPrompt(tenant.business.name, dateStr, hints ?? ''),
+          deps.template.actions,
+          trimmed,
+          { referenceDate: now, businessId: tenant.business.id }
+        );
+        if (interpretedFresh && interpretedFresh.action) {
+          await deps.aiUsage.log({
+            businessId: tenant.business.id,
+            userId: resolution.user.id,
+            provider: deps.aiProviderName,
+            model: deps.aiModel,
+          });
+          await deps.conversations.clear(tenant.business.id, resolution.user.id);
+          return proceedWithAction(deps, tenant, resolution.user.id, interpretedFresh.action, interpretedFresh.params, now, access, {
+            freshStart: true,
+            isVoice: input.isVoice,
+          });
+        }
+      } catch {
+        // Si la IA falla o no reconoce, continuamos al renderizado del confirm prompt
+      }
+    }
+
+    const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
+    const buttons = currentAction?.confirmButtons ? currentAction.confirmButtons(active.data) : confirmKeyboard();
+    let promptText = '¿Confirmar?';
+    if (currentAction?.summarize) {
+      try {
+        const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now, isVoice: input.isVoice };
+        const summary = await currentAction.summarize(active.data, ctx);
+        if (summary) {
+          promptText = /¿confirm/i.test(summary)
+            ? summary
+            : `${summary}\n\n¿Confirmar?`;
+        }
+      } catch {
+        // Fallback al texto por defecto
+      }
+    }
+    return {
+      text: promptText,
+      parseMode: 'Markdown',
+      inlineKeyboard: buttons,
+    };
   }
 
   // Interceptación de paso en modo continuo (registro rápido sin IA)
@@ -676,7 +750,7 @@ async function enterConfirming(
   const early = getEarlyMorningContext(now, tenant.business.timezone);
   if (early.isEarlyMorning) {
     return {
-      ...md(`${summary}\n\n🕐 *Veo que son las ${early.timeStr}.* ¿A qué caja corresponde este movimiento?`),
+      ...md(`${summary}\n\n🕐 *Veo que son las ${early.timeStr}.* ¿A qué fecha corresponde este movimiento?`),
       inlineKeyboard: [
         [
           { text: `📅 Ayer (${early.yesterdayLabel})`, callbackData: 'confirm:yesterday' },

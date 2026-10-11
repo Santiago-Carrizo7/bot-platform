@@ -1,10 +1,19 @@
 import { z } from 'zod';
 
-const VentaItemSchema = z.object({
+const VentaItemSchema = z.preprocess((val: any) => {
+  if (typeof val === 'object' && val !== null) {
+    return {
+      nombre: val.nombre ?? val.name,
+      cantidad: val.cantidad ?? val.quantity,
+      precio_unitario: val.precio_unitario ?? val.unitPrice ?? val.unit_price,
+    };
+  }
+  return val;
+}, z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre del producto o promo'),
   cantidad: z.number().positive('La cantidad debe ser mayor a 0').default(1),
   precio_unitario: z.number().min(0).nullable().optional(),
-});
+}));
 
 const NoReconocidoSchema = z.object({
   texto: z.string().trim().min(1),
@@ -19,7 +28,7 @@ export const RegistrarVentaInput = z
     zona_envio: z.string().trim().nullable().optional(),
     flete_monto: z.number().min(0).nullable().optional(),
     zona_no_reconocida: z.string().trim().nullable().optional(),
-    nota: z.string().trim().optional(),
+    nota: z.string().trim().nullable().optional(),
     fecha: z.string().trim().optional(), // 'YYYY-MM-DD'
     _modifying: z.boolean().optional(),
     _awaitingCustomDate: z.boolean().optional(),
@@ -41,10 +50,14 @@ export const RegistrarVentaInput = z
       return;
     }
     if (data.items.length === 0) {
-      if (data.no_reconocidos && data.no_reconocidos.length > 0) {
-        const hasSuggestion = data.no_reconocidos.some((n) => n.sugerencia != null && n.sugerencia.trim() !== '');
+      const GENERIC_QUANTIFIERS = new Set(['docena', 'una docena', '1 docena', 'media docena', 'docenas', 'empanada', 'empanadas']);
+      const filteredNoRec = data.no_reconocidos?.filter(
+        (n) => !GENERIC_QUANTIFIERS.has(n.texto.trim().toLowerCase())
+      );
+      if (filteredNoRec && filteredNoRec.length > 0) {
+        const hasSuggestion = filteredNoRec.some((n) => n.sugerencia != null && n.sugerencia.trim() !== '');
         if (!hasSuggestion) {
-          const bullets = data.no_reconocidos.map((n) => `• ${n.texto}`).join('\n');
+          const bullets = filteredNoRec.map((n) => `• ${n.texto}`).join('\n');
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `⚠️ No reconocí estos productos en la carta:\n${bullets}\n\nPor favor repetí el pedido usando los nombres del menú o consultá /menu.`,

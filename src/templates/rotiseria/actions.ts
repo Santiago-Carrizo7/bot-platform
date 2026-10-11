@@ -52,6 +52,15 @@ export interface RotiseriaActionDeps {
   deliveryZones: DeliveryZoneService;
 }
 
+function isValidZoneOrBarrioName(name: string): boolean {
+  const trimmed = name.trim().toLowerCase();
+  if (trimmed.length < 2 || trimmed.length > 50) return false;
+  // Descartar si coincide con direcciones de calle con numeración (ej: "calle 123", "av. san martín 450", etc.)
+  if (/(?:calle|av\.?|avenida|pasaje|pje\.?|ruta|bvd\.?|boulevard)\s+\d+/i.test(trimmed)) return false;
+  if (/\b\d{1,5}\b/.test(trimmed)) return false; // si tiene número de altura (ej: "Mitre 450")
+  return true;
+}
+
 export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unknown>[] {
   const { products, sales, deliveryZones } = deps;
 
@@ -159,9 +168,35 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       let deliveryZoneName: string | null | undefined = i.zona_envio;
       let zonaNoReconocida: string | null | undefined = i.zona_no_reconocida;
 
+      let savedZoneNotice: string | null = null;
+
       if (ctx) {
-        // Resolver zona de envío si se indicó nombre pero no monto
-        if (deliveryFee === undefined && deliveryZoneName) {
+        // Resolver o registrar zona de envío
+        if (deliveryFee !== undefined && deliveryFee !== null && deliveryZoneName) {
+          const rawZone = deliveryZoneName.trim();
+          const isGeneric = ['envio', 'envío', 'delivery', 'flete', 'mostrador'].includes(rawZone.toLowerCase());
+          if (!isGeneric && isValidZoneOrBarrioName(rawZone)) {
+            try {
+              const matched = await deliveryZones.findMatching(ctx.tenant.business.id, rawZone);
+              if (!matched) {
+                const capName = rawZone.charAt(0).toUpperCase() + rawZone.slice(1);
+                await deliveryZones.upsertBatch(ctx.tenant.business.id, [
+                  {
+                    name: capName,
+                    price: deliveryFee,
+                    barrios: [rawZone.toLowerCase()],
+                  },
+                ]);
+                deliveryZoneName = capName;
+                savedZoneNotice = `🛵 Flete asignado: $ ${new Intl.NumberFormat('es-AR').format(deliveryFee)} (Zona '${capName}' guardada para futuros envíos)`;
+              } else {
+                deliveryZoneName = matched.name;
+              }
+            } catch {
+              // Si falla la persistencia, continuar sin bloquear
+            }
+          }
+        } else if (deliveryFee === undefined && deliveryZoneName) {
           const matched = await deliveryZones.findMatching(ctx.tenant.business.id, deliveryZoneName);
           if (matched) {
             deliveryFee = matched.price;
@@ -229,6 +264,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         isModifying: Boolean(i._modifying),
         now: ctx?.now,
         timezone: ctx?.tenant.business.timezone,
+        savedZoneNotice,
         noReconocidos,
       });
     },
@@ -241,9 +277,32 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
 
       let deliveryInput: { fee?: number | null; zoneName?: string | null } | undefined;
       if (input.flete_monto !== undefined && input.flete_monto !== null) {
+        const rawZone = (input.zona_envio ?? 'Envío').trim();
+        const isGeneric = ['envio', 'envío', 'delivery', 'flete', 'mostrador'].includes(rawZone.toLowerCase());
+        let finalZoneName = rawZone;
+        if (!isGeneric && isValidZoneOrBarrioName(rawZone)) {
+          try {
+            const matched = await deliveryZones.findMatching(ctx.tenant.business.id, rawZone);
+            if (!matched) {
+              const capName = rawZone.charAt(0).toUpperCase() + rawZone.slice(1);
+              await deliveryZones.upsertBatch(ctx.tenant.business.id, [
+                {
+                  name: capName,
+                  price: input.flete_monto,
+                  barrios: [rawZone.toLowerCase()],
+                },
+              ]);
+              finalZoneName = capName;
+            } else {
+              finalZoneName = matched.name;
+            }
+          } catch {
+            // continuar si ya existe o falla
+          }
+        }
         deliveryInput = {
           fee: input.flete_monto,
-          zoneName: input.zona_envio ?? 'Envío',
+          zoneName: finalZoneName,
         };
       } else if (input.zona_envio) {
         const matched = await deliveryZones.findMatching(ctx.tenant.business.id, input.zona_envio);
@@ -263,7 +322,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
           quantity: it.cantidad,
           unitPrice: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
         })),
-        input.nota,
+        input.nota ?? undefined,
         ctx.now,
         ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires',
         customDate,

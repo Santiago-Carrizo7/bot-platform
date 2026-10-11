@@ -22,8 +22,11 @@
   Concepto y categoría no se duplican si son idénticos (ej. Alquiler).
   Jerga argentina (palos, lucas, k, millones) y frases complejas delegan al LLM.
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
-- Rotisería: docenas por tarifa (`priceDozen`); turno operativo 00-05 AM;
-  anulación interactiva con audit `sale.cancelled`; cambio de precios guiado; semáforo 7 días.
+- Rotiseria: docenas por tarifa extrayendo primero docenas puras completas por sabor; turno operativo 00-05 AM;
+  anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas descartando alturas de calle;
+  matcher por sabor raíz y variantes carne vacuna; prompts con alcance estricto de docenas y extracción exhaustiva;
+  reset de borrador congelado en `CONFIRMING` ante nueva comanda si no está activo `_awaitingModification`;
+  `parseModificationText` con soporte para números en palabras, docenas y limpieza de muletillas/warnings viejos.
 - Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`).
 
 - IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini.

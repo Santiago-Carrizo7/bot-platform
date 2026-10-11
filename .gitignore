@@ -4,3 +4,4 @@ dist/
 *.log
 coverage/
 repomix-output.md
+repomix-output.xml

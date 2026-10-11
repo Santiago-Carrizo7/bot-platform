@@ -17,7 +17,7 @@ export class SaleRepository {
     total: number,
     shiftDate: Date,
     lines: ResolvedSaleLine[],
-    note?: string,
+    note?: string | null,
     deliveryZoneName?: string | null,
     deliveryFee?: number | null,
     tx?: Prisma.TransactionClient
