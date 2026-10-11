@@ -79,17 +79,59 @@ export function applyModification(
   return items;
 }
 
+const WORD_TO_NUMBER: Array<[RegExp, string]> = [
+  [/\bmedia\s+docena\b/gi, '6'],
+  [/\bdocena\b/gi, '12'],
+  [/\bdiez\b/gi, '10'],
+  [/\bnueve\b/gi, '9'],
+  [/\bocho\b/gi, '8'],
+  [/\bsiete\b/gi, '7'],
+  [/\bseis\b/gi, '6'],
+  [/\bcinco\b/gi, '5'],
+  [/\bcuatro\b/gi, '4'],
+  [/\btres\b/gi, '3'],
+  [/\bdos\b/gi, '2'],
+  [/\b(?:un|una|uno)\b/gi, '1'],
+];
+
+function cleanProductName(raw: string): string {
+  let s = raw.trim();
+  // Limpiar artículos y preposiciones iniciales
+  s = s.replace(/^(?:la|el|las|los|de|a|al|del)\s+/i, '').trim();
+  // Limpiar muletillas al inicio o final: "más", "mas", "extra", "por favor", "también"
+  s = s.replace(/\b(?:m[aá]s|extra|por\s+favor|tambi[eé]n)\b/gi, '').trim();
+  // Limpiar preposiciones residuales que hayan quedado
+  s = s.replace(/^(?:de|a)\s+/i, '').replace(/\s+(?:de|a)$/i, '').trim();
+  return s;
+}
+
+function resolveAgainstExisting(name: string, currentItems?: SaleLineInput[]): string {
+  if (!currentItems || currentItems.length === 0) return name;
+  const lower = name.toLowerCase().trim();
+  const match = currentItems.find((it) => {
+    const itLower = it.name.toLowerCase().trim();
+    return itLower === lower || itLower.includes(lower) || lower.includes(itLower);
+  });
+  return match ? match.name : name;
+}
+
 /**
  * Parser determinístico para frases de modificación de pedidos:
  * - Reemplazo: "cambiá las de carne por pollo", "cambiá la pizza por una mila"
  * - Fijar cantidad: "dejá solo 6 de carne", "deja 6 de carne"
  * - Restar cantidad: "bajale 2 a las empanadas", "sacale 2 de carne", "restale 2 a carne"
  * - Quitar total: "sacá la pizza", "sin pizza", "eliminá la pizza", "cancelá la mila"
- * - Sumar: "sumale 2 de pollo", "agregá 1 pizza", "+2 carne"
+ * - Sumar: "sumale 2 de pollo", "agregá 1 pizza", "+2 carne", "Agrega dos de pollo más"
  */
 export function parseModificationText(text: string, currentItems?: SaleLineInput[]): OrderPatch | null {
-  const t = text.trim();
-  const lower = t.toLowerCase();
+  let normalized = text.trim();
+
+  // 1. Normalización de palabras numéricas a dígitos
+  for (const [pattern, replacement] of WORD_TO_NUMBER) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+
+  const lower = normalized.toLowerCase();
 
   const add: SaleLineInput[] = [];
   const remove: string[] = [];
@@ -102,21 +144,22 @@ export function parseModificationText(text: string, currentItems?: SaleLineInput
   );
   if (changeMatch) {
     const explicitQtyFrom = changeMatch[1] ? parseInt(changeMatch[1], 10) : undefined;
-    const fromName = changeMatch[2].trim();
+    const fromName = cleanProductName(changeMatch[2]);
     const explicitQtyTo = changeMatch[3] ? parseInt(changeMatch[3], 10) : undefined;
-    const toName = changeMatch[4].trim();
+    const toName = cleanProductName(changeMatch[4]);
 
     let qty = explicitQtyTo ?? explicitQtyFrom;
     if (!qty && currentItems) {
       const match = currentItems.find((it) => {
         const itName = it.name.toLowerCase();
-        return itName.includes(fromName) || fromName.includes(itName);
+        return itName.includes(fromName.toLowerCase()) || fromName.toLowerCase().includes(itName);
       });
       if (match) qty = match.quantity;
     }
 
+    const resolvedTo = resolveAgainstExisting(toName, currentItems);
     remove.push(fromName);
-    add.push({ name: toName, quantity: qty ?? 1 });
+    add.push({ name: resolvedTo, quantity: qty ?? 1 });
     return { add, remove };
   }
 
@@ -125,9 +168,10 @@ export function parseModificationText(text: string, currentItems?: SaleLineInput
   let setMatch: RegExpExecArray | null;
   while ((setMatch = setRegex.exec(lower)) !== null) {
     const qty = parseInt(setMatch[1], 10);
-    const name = setMatch[2].replace(/^(?:la|el|las|los|de|a)\s+/i, '').trim();
+    const name = cleanProductName(setMatch[2]);
     if (name) {
-      setQuantity.push({ name, quantity: qty });
+      const resolved = resolveAgainstExisting(name, currentItems);
+      setQuantity.push({ name: resolved, quantity: qty });
     }
   }
 
@@ -136,9 +180,10 @@ export function parseModificationText(text: string, currentItems?: SaleLineInput
   let redMatch: RegExpExecArray | null;
   while ((redMatch = reduceRegex.exec(lower)) !== null) {
     const qty = parseInt(redMatch[1], 10);
-    const name = redMatch[2].replace(/^(?:la|el|las|los|de|a)\s+/i, '').trim();
+    const name = cleanProductName(redMatch[2]);
     if (name) {
-      reduce.push({ name, quantity: qty });
+      const resolved = resolveAgainstExisting(name, currentItems);
+      reduce.push({ name: resolved, quantity: qty });
     }
   }
 
@@ -147,21 +192,22 @@ export function parseModificationText(text: string, currentItems?: SaleLineInput
   const removeRegex = /(?:sacal[eé]|sacá|saca|sacar|quital[eé]|quitá|quita|quitar|borr[aá]|borrar|elimin[aá]|eliminar|cancel[aá]|cancelar|sin)\s+(?:la\s+|el\s+|las\s+|los\s+|una\s+|un\s+)?([a-zñáéíóú\s]+?)(?:$|\s*(?:y|,|\.))/gi;
   let remMatch: RegExpExecArray | null;
   while ((remMatch = removeRegex.exec(lower)) !== null) {
-    const name = remMatch[1].replace(/^(?:la|el|las|los|de|a)\s+/i, '').trim();
-    // Evitar capturar si ya fue procesado como reducción numérica
-    if (name && !reduce.some((r) => r.name.includes(name) || name.includes(r.name))) {
-      remove.push(name);
+    const name = cleanProductName(remMatch[1]);
+    if (name && !reduce.some((r) => r.name.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(r.name.toLowerCase()))) {
+      const resolved = resolveAgainstExisting(name, currentItems);
+      remove.push(resolved);
     }
   }
 
-  // 5. Sumar / agregar: "sumale 2 de pollo", "agregá 1 pizza", "+2 carne"
+  // 5. Sumar / agregar: "sumale 2 de pollo", "agregá 1 pizza", "+2 carne", "Agrega dos de pollo más"
   const addRegex = /(?:sumal[eé]|suma|sumá|agregal[eé]|agrega|agregá|\+)\s*(?:(\d+)\s+)?(?:de\s+|una\s+|un\s+)?(?:la\s+|el\s+|las\s+|los\s+)?([a-zñáéíóú\s]+?)(?:$|\s*(?:y|,|\.))/gi;
   let addMatch: RegExpExecArray | null;
   while ((addMatch = addRegex.exec(lower)) !== null) {
     const qty = addMatch[1] ? parseInt(addMatch[1], 10) : 1;
-    const name = addMatch[2].replace(/^(?:la|el|las|los|de|a)\s+/i, '').trim();
+    const name = cleanProductName(addMatch[2]);
     if (name) {
-      add.push({ name, quantity: qty });
+      const resolved = resolveAgainstExisting(name, currentItems);
+      add.push({ name: resolved, quantity: qty });
     }
   }
 

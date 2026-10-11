@@ -17,6 +17,7 @@ import { DeliveryZoneService } from '../src/templates/rotiseria/domain/delivery-
 import { getShiftDate, formatShiftLabel } from '../src/templates/rotiseria/domain/shift.js';
 import { formatRealDateWithDay } from '../src/templates/rotiseria/format.js';
 import { applyModification, parseModificationText } from '../src/templates/rotiseria/domain/modification.js';
+import { calculatePricing } from '../src/templates/rotiseria/domain/pricing.js';
 import { createRotiseriaTemplate } from '../src/templates/rotiseria/index.js';
 import type { ProductRepository } from '../src/templates/rotiseria/persistence/product.repo.js';
 import type { SaleRepository, RotiseriaSaleWithItems } from '../src/templates/rotiseria/persistence/sale.repo.js';
@@ -435,6 +436,24 @@ describe('rotiseria: cálculo de docenas y promos', () => {
       expect.arrayContaining([
         expect.stringContaining('1x Docena'),
         expect.stringContaining('3x *Carne* (sueltas)'),
+      ])
+    );
+  });
+
+  it('docena pura prioritaria: 12 queso + 3 carne = 1 docena pura queso + 3 carne sueltas', async () => {
+    const { products, sales } = setupServices();
+    await products.createProduct({ businessId: BIZ, name: 'Empanada de Queso', priceUnit: 1500, priceDozen: 15000 });
+    await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+    const result = await sales.createSale(BIZ, ACTOR, [
+      { name: 'Empanada de Queso', quantity: 12 },
+      { name: 'Empanada de Carne', quantity: 3 },
+    ]);
+    expect(Number(result.sale.total)).toBe(19500);
+    expect(result.pricing.breakdown).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('1x Docena (12 Empanada de Queso) — *$ 15.000*'),
+        expect.stringContaining('3x *Empanada de Carne* (sueltas) — *$ 4.500*'),
       ])
     );
   });
@@ -2410,6 +2429,294 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       // Botón volver a envíos presente
       const flatBtns = statsCallback.inlineKeyboard?.flat() ?? [];
       expect(flatBtns.some((b) => b.callbackData === 'rotiseria:envios_menu')).toBe(true);
+    });
+
+    it('getCatalogLookup resuelve nombres con números, prefijos o solo sabor', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Pollo', priceUnit: 1500, priceDozen: 15000 });
+      await products.createProduct({ businessId: BIZ, name: 'Pizza Muzzarella', priceUnit: 9000 });
+
+      const lookup = await products.getCatalogLookup(BIZ);
+      expect(lookup.findProduct('Empanada de Carne')?.name).toBe('Empanada de Carne');
+      expect(lookup.findProduct('1 de carne')?.name).toBe('Empanada de Carne');
+      expect(lookup.findProduct('carne')?.name).toBe('Empanada de Carne');
+      expect(lookup.findProduct('de pollo')?.name).toBe('Empanada de Pollo');
+      expect(lookup.findProduct('muzzarella')?.name).toBe('Pizza Muzzarella');
+    });
+
+    it('confirmación de flow emite el resumen completo del pedido con botones y pregunta amigable', async () => {
+      const f = setupFlow([
+        { action: 'registrar_venta', params: { items: [{ nombre: 'Empanada de Carne', cantidad: 12 }] } },
+      ]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+      // Iniciar comanda
+      const initReply = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne',
+        now: NOW,
+      });
+
+      expect(initReply.text).toContain('📋 *Detalle del pedido:*');
+      expect(initReply.text).toContain('1x Docena (12 Empanada de Carne)');
+      expect(initReply.text).toContain('💰 *Total:* *$ 15.000*');
+      expect(initReply.text).toContain('¿Confirmar venta? Seleccioná una opción para continuar:');
+      expect(initReply.inlineKeyboard).toBeDefined();
+
+      // Enviar texto no reconocido durante CONFIRMING: no debe ser confirmación ciega
+      const reply = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: 'algún texto random',
+        now: NOW,
+      });
+
+      expect(reply.text).not.toContain('Respondé *Sí* o *No*');
+      expect(reply.text).not.toContain('día de la caja');
+      expect(reply.text).toContain('📋 *Detalle del pedido:*');
+      expect(reply.text).toContain('1x Docena (12 Empanada de Carne)');
+      expect(reply.text).toContain('💰 *Total:* *$ 15.000*');
+      expect(reply.text).toContain('¿Confirmar venta? Seleccioná una opción para continuar:');
+      expect(reply.inlineKeyboard).toBeDefined();
+    });
+
+    it('cotiza 24 unidades de carne como 2 docenas en pricing', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      const catalog = await products.getCatalogLookup(BIZ);
+
+      const pricing = calculatePricing([{ name: 'Empanada de Carne', quantity: 24 }], catalog);
+      expect(pricing.total).toBe(30000);
+      expect(pricing.breakdown).toContain('• 2x Docenas (24 Empanada de Carne) — *$ 30.000*');
+    });
+
+    it('auto-registra zona de envío desconocida al asignar flete manual', async () => {
+      const f = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+            zona_envio: 'Barrio Santa Ana',
+            flete_monto: 2500,
+          },
+        },
+      ]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+      // Verificar que inicialmente no existe la zona
+      const initialMatch = await f.deliveryZones.findMatching(BIZ, 'Barrio Santa Ana');
+      expect(initialMatch).toBeNull();
+
+      // Registrar venta con flete y zona nueva
+      const reply = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne a Barrio Santa Ana con flete 2500',
+        now: NOW,
+      });
+
+      // Debe mostrar la notificación sutil en el resumen
+      expect(reply.text).toContain("Zona 'Barrio Santa Ana' guardada para futuros envíos");
+      expect(reply.text).toContain('🛵 Envío (Barrio Santa Ana): *$ 2.500*');
+
+      // La zona debe haber quedado persistida en el repositorio
+      const persisted = await f.deliveryZones.findMatching(BIZ, 'Barrio Santa Ana');
+      expect(persisted).not.toBeNull();
+      expect(persisted?.name).toBe('Barrio Santa Ana');
+      expect(persisted?.price).toBe(2500);
+
+      // Confirmar venta
+      const confirmReply = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'confirm:yes',
+        now: NOW,
+      });
+      expect(confirmReply.text).toContain('registrada con éxito');
+      expect(confirmReply.text).toContain('Barrio Santa Ana');
+    });
+
+    it('findProduct("carne") resuelve estrictamente a un producto de carne y nunca a pollo ni jamón y queso', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Pollo', priceUnit: 1500, priceDozen: 15000 });
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Jamón y Queso', priceUnit: 1500, priceDozen: 15000 });
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+      const lookup = await products.getCatalogLookup(BIZ);
+      const match = lookup.findProduct('carne');
+      expect(match).toBeDefined();
+      expect(match?.name).toBe('Empanada de Carne');
+      expect(match?.name).not.toBe('Empanada de Pollo');
+      expect(match?.name).not.toBe('Empanada de Jamón y Queso');
+
+      // Si no existe coincidencia, no debe devolver pollo ni productos arbitrarios
+      const noMatch = lookup.findProduct('humita');
+      expect(noMatch).toBeUndefined();
+    });
+
+    it('cotiza exactamente 1 docena + 3 empanadas sueltas (no 3 docenas) para 12 queso y 3 carne', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Queso', priceUnit: 1500, priceDozen: 15000 });
+      const catalog = await products.getCatalogLookup(BIZ);
+
+      // Sabor queso: 12 (1 docena pura), Sabor carne: 3 (3 sueltas)
+      const pricing = calculatePricing(
+        [
+          { name: 'Empanada de Queso', quantity: 12 },
+          { name: 'Empanada de Carne', quantity: 3 },
+        ],
+        catalog
+      );
+
+      // Docena de queso ($15.000) + 3 sueltas de carne (3 * $1.500 = $4.500) = $19.500
+      expect(pricing.total).toBe(19500);
+      expect(pricing.breakdown).toContain('• 1x Docena (12 Empanada de Queso) — *$ 15.000*');
+      expect(pricing.breakdown).toContain('• 3x *Empanada de Carne* (sueltas) — *$ 4.500*');
+      expect(pricing.breakdown.some((b) => b.includes('3x Docenas'))).toBe(false);
+      expect(pricing.breakdown.some((b) => b.includes('36 Empanada'))).toBe(false);
+    });
+
+    it('asignar monto manual a una zona desconocida persiste en repositorio sin reventar por unique constraints', async () => {
+      const f = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+            zona_envio: 'Villa Primavera',
+            flete_monto: 3000,
+          },
+        },
+      ]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+      // Primera llamada: crea la zona
+      await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne a Villa Primavera con flete 3000',
+        now: NOW,
+      });
+
+      const zone1 = await f.deliveryZones.findMatching(BIZ, 'Villa Primavera');
+      expect(zone1).not.toBeNull();
+      expect(zone1?.price).toBe(3000);
+
+      // Segunda llamada con misma zona y precio actualizado: no debe lanzar error por unique constraint
+      const f2 = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+            zona_envio: 'Villa Primavera',
+            flete_monto: 3500,
+          },
+        },
+      ]);
+      f2.deps.deliveryZones = f.deps.deliveryZones;
+
+      await expect(
+        handleText(f2.deps, {
+          resolution: f.resolution,
+          text: '1 docena de carne a Villa Primavera con flete 3500',
+          now: NOW,
+        })
+      ).resolves.toBeDefined();
+
+      // Descartar si el texto es una dirección con numeración de calle
+      const f3 = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+            zona_envio: 'Av. San Martín 450',
+            flete_monto: 2000,
+          },
+        },
+      ]);
+      f3.deps.deliveryZones = f.deps.deliveryZones;
+
+      await handleText(f3.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne a Av. San Martín 450 con flete 2000',
+        now: NOW,
+      });
+
+      const addressZone = await f.deliveryZones.findMatching(BIZ, 'Av. San Martín 450');
+      expect(addressZone).toBeNull();
+    });
+  });
+
+  describe('Modificaciones y Reset de Pedidos no confirmados', () => {
+    it('parseModificationText suma cantidades en palabras y limpia muletillas ("Agrega dos de pollo más")', () => {
+      const currentItems = [
+        { name: 'Empanada de Pollo', quantity: 4 },
+        { name: 'Empanada de Carne', quantity: 6 },
+      ];
+
+      const patch = parseModificationText('Agrega dos de pollo más', currentItems);
+      expect(patch).not.toBeNull();
+      const updated = applyModification(currentItems, patch!);
+
+      const pollo = updated.find((it) => it.name === 'Empanada de Pollo');
+      expect(pollo?.quantity).toBe(6);
+    });
+
+    it('parseModificationText suma cuantificador de media docena ("sumale media docena de carne")', () => {
+      const currentItems = [
+        { name: 'Empanada de Carne', quantity: 6 },
+      ];
+
+      const patch = parseModificationText('sumale media docena de carne', currentItems);
+      expect(patch).not.toBeNull();
+      const updated = applyModification(currentItems, patch!);
+
+      const carne = updated.find((it) => it.name === 'Empanada de Carne');
+      expect(carne?.quantity).toBe(12);
+    });
+
+    it('al enviar una nueva venta durante CONFIRMING sin _awaitingModification, resetea el borrador previo y crea venta limpia', async () => {
+      const f = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Carne', cantidad: 12 }],
+          },
+        },
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [{ nombre: 'Empanada de Pollo', cantidad: 12 }],
+          },
+        },
+      ]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Pollo', priceUnit: 1500, priceDozen: 15000 });
+
+      // 1. Enviar primera venta -> queda en CONFIRMING
+      const res1 = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de carne',
+        now: NOW,
+      });
+      expect(res1.text).toContain('Detalle del pedido');
+      expect(res1.text).toContain('Empanada de Carne');
+
+      const conv1 = await f.conversations.get(BIZ, ACTOR);
+      expect(conv1?.phase).toBe('CONFIRMING');
+      expect(conv1?.data?.items).toEqual([{ nombre: 'Empanada de Carne', cantidad: 12 }]);
+
+      // 2. Sin presionar modificar, enviar una venta nueva completa: "1 docena de pollo"
+      const res2 = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '1 docena de pollo',
+        now: NOW,
+      });
+      expect(res2.text).toContain('Detalle del pedido');
+      expect(res2.text).toContain('Empanada de Pollo');
+      // No debe arrastrar carne
+      expect(res2.text).not.toContain('Empanada de Carne');
+
+      const conv2 = await f.conversations.get(BIZ, ACTOR);
+      expect(conv2?.phase).toBe('CONFIRMING');
+      expect(conv2?.data?.items).toEqual([{ nombre: 'Empanada de Pollo', cantidad: 12 }]);
     });
   });
 });

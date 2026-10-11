@@ -28,21 +28,56 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
   • Ejemplo: "2 carneee" (audio confuso de carne) ->
     items: [],
     no_reconocidos: [{ texto: "carneee", cantidad: 2, sugerencia: "Empanada de Carne" }].
-- Mapeo de modismos de empanadas a cantidades numéricas:
-  • "una docena" / "1 docena" -> cantidad 12.
-  • "media docena" -> cantidad 6.
-  • "docena y media" / "1 docena y media" -> cantidad 18.
-  • "dos docenas" -> cantidad 24.
-  • "tres docenas" -> cantidad 36.
-  • "docena surtida: 6 carne, 4 pollo y 2 jyq" -> 3 items: carne (6), pollo (4), jyq (2). El sistema agrupará y calculará automáticamente la docena.
+- REGLAS ESTRICTAS DE CONVERSIÓN DE CUANTIFICADORES COLOQUIALES Y ALCANCE:
+  • ALCANCE ESTRICTO DE CUANTIFICADORES (PROHIBIDO CONTAGIAR DOCENAS):
+    - La palabra "docena" o "docenas" aplica ÚNICA Y EXCLUSIVAMENTE al sabor o comida que acompaña de inmediato.
+    - Cualquier número posterior que NO tenga explícitamente la palabra "docena" (ej: "y 3 de carne", "más 2 de pollo", "y cuatro empanadas") representa UNIDADES SUELTAS LITERALES (cantidad: 3, 2, 4).
+    - ESTÁ TERMINANTEMENTE PROHIBIDO multiplicar por 12 si el usuario no dijo la palabra "docena" para ese sabor específico.
+  • EXTRACCIÓN EXHAUSTIVA DEL ARRAY "items":
+    - Si el mensaje o audio menciona 3 comidas o sabores distintos, el array "items" DEBE contener obligatoriamente 3 elementos.
+    - ESTÁ PROHIBIDO truncar, resumir o descartar sabores de la comanda.
+  • FIDELIDAD LITERAL AL SABOR (PROHIBIDO ALUCINAR O SUSTITUIR SABORES):
+    - El campo nombre/name debe coincidir con el sabor exacto transcripto o su equivalente exacto en el catálogo (HINTS).
+    - Si el usuario dice "carne", debe extraer "Empanada de Carne". PROHIBIDO inferir o cambiar a sabores no mencionados (como Pollo o Jamón y Queso). "Carne" NUNCA es "Pollo".
+  • CUANTIFICADORES A CANTIDADES:
+    - "media docena" / "1/2 docena" -> cantidad: 6.
+    - "una docena" / "1 docena" -> cantidad: 12.
+    - "docena y media" / "1 docena y media" -> cantidad: 18.
+    - "dos docenas" / "2 docenas" -> cantidad: 24.
+    - "dos docenas y media" / "2 docenas y media" -> cantidad: 30.
+    - "tres docenas" / "3 docenas" -> cantidad: 36.
+    - "cuatro docenas" / "4 docenas" -> cantidad: 48.
+    - "docena surtida: 6 carne, 4 pollo y 2 jyq" -> 3 items: carne (6), pollo (4), jyq (2). El sistema agrupará y calculará automáticamente la docena.
+    - "vendí una docena, 1 de carne, 5 de pollo, 6 de queso" (o cualquier lista de números y sabores tras "una docena"): "una docena" es el encabezado del pedido. NUNCA agregues "docena" a items ni a no_reconocidos. Extraé cada sabor con su número respectivo como ítem individual: Carne (1), Pollo (5), Queso (6).
+    - Números tipo "1 de carne", "4 de pollo", "media de jamón y queso" (6 u.): extraé cada sabor usando el nombre correspondiente del catálogo (ej: "Empanada de Carne", cantidad: 1).
+    - "vendí una docena y 1 de carne" -> docena + sueltas del mismo sabor: total 13 de Carne (12 + 1).
+    - Si dice solo "vendí una docena" (o "media docena") sin detallar sabores: extraé 12 unidades asociadas a la variedad principal de empanada de HINTS (ej: "Empanada de Carne").
+    - Las palabras "docena", "media docena", "docenas", "empanada", "empanadas" NUNCA son nombres de productos ni deben ir jamás en "no_reconocidos".
 - Mapeo de términos gastronómicos populares:
+  • "carne vacuna", "vacuna", "de vaca" -> Empanada de Carne.
   • "muzza" / "muzzarella" -> Pizza Muzzarella.
   • "napo" / "napolitana" -> Pizza Napolitana.
   • "mila" / "milanesa" -> Sándwich de Milanesa.
   • "promo 1", "promo 2" -> la promo correspondiente del catálogo.
-- Venta de productos:
-  • "Vendí 1 docena de carne y una muzza" -> registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 12 }, { nombre: "Pizza Muzzarella", cantidad: 1 }].
-  • "Vendí 8 empanadas de carne y 4 de jamón y queso" -> items: [{ nombre: "Empanada de Carne", cantidad: 8 }, { nombre: "Empanada de Jamón y Queso", cantidad: 4 }].
+- Venta de productos (FEW-SHOTS OBLIGATORIOS):
+  • "Una docena de queso y tres de carne con una pizza mozzarella" ->
+    registrar_venta con items: [{ nombre: "Empanada de Queso", cantidad: 12 }, { nombre: "Empanada de Carne", cantidad: 3 }, { nombre: "Pizza Muzzarella", cantidad: 1 }].
+  • "Una docena de carne, tres de queso y dos de pollo" ->
+    registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 12 }, { nombre: "Empanada de Queso", cantidad: 3 }, { nombre: "Empanada de Pollo", cantidad: 2 }].
+  • "Vendí 7 empanadas de carne y 2 de pollo" ->
+    registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 7 }, { nombre: "Empanada de Pollo", cantidad: 2 }].
+  • "Vendí dos docenas de carne" ->
+    registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 24 }].
+  • "Dos docenas de carne y una de pollo" ->
+    registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 24 }, { nombre: "Empanada de Pollo", cantidad: 12 }].
+  • "Media docena de queso" ->
+    registrar_venta con items: [{ nombre: "Empanada de Queso", cantidad: 6 }].
+  • "Vendí 1 docena de carne y una muzza" ->
+    registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 12 }, { nombre: "Pizza Muzzarella", cantidad: 1 }].
+  • "Vendí 8 empanadas de carne y 4 de jamón y queso" ->
+    items: [{ nombre: "Empanada de Carne", cantidad: 8 }, { nombre: "Empanada de Jamón y Queso", cantidad: 4 }].
+  • "Vendí una docena: 1 de carne, 5 de pollo, 6 de queso" ->
+    items: [{ nombre: "Empanada de Carne", cantidad: 1 }, { nombre: "Empanada de Pollo", cantidad: 5 }, { nombre: "Empanada de Queso", cantidad: 6 }].
   • El importe total lo calcula automáticamente el sistema según precios unitarios y de docena. Vos NUNCA inventes ni calcules el total.
 - FLETE Y ENVÍOS A DOMICILIO (PROHIBIDO PARSEAR COMO COMIDA):
   • "envío", "flete", "cadete", "cadetería", "delivery" NUNCA son comidas ni productos del catálogo. NUNCA los agregues a "items" ni a "no_reconocidos" como comida.

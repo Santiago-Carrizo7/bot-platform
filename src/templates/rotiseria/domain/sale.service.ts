@@ -27,7 +27,7 @@ export class SaleService {
     businessId: string,
     actorUserId: string,
     items: SaleLineInput[],
-    note?: string,
+    note?: string | null,
     now: Date = new Date(),
     timezone = 'America/Argentina/Buenos_Aires',
     customShiftDate?: Date,

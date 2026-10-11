@@ -3,19 +3,45 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// Permite pasar el ID por argumento CLI: pnpm exec tsx scripts/cargar-el-recinto.ts --business <ID>
 function getBusinessId(): string {
   const argIdx = process.argv.indexOf("--business");
   if (argIdx >= 0 && process.argv[argIdx + 1]) {
     return process.argv[argIdx + 1];
   }
-  return "1234576"; // ID por defecto
+  console.error("❌ Error: Debes pasar el ID del negocio con --business <UUID>");
+  process.exit(1);
 }
 
 const BUSINESS_ID = getBusinessId();
 
 async function main() {
-  console.log(`\n🚀 Cargando datos para negocio ID: ${BUSINESS_ID} (El Recinto)...`);
+  console.log(`\n🧹 Purgando ventas, tickets, catálogo y zonas para negocio: ${BUSINESS_ID}...`);
+
+  // 1. Borrar ítems de venta (hijos)
+  await prisma.rotiseriaSaleItem.deleteMany({
+    where: { sale: { businessId: BUSINESS_ID } },
+  });
+
+  // 2. Borrar las ventas completas (tickets y caja)
+  await prisma.rotiseriaSale.deleteMany({
+    where: { businessId: BUSINESS_ID },
+  });
+
+  // 3. Borrar catálogo anterior (productos y promos)
+  await prisma.rotiseriaProduct.deleteMany({
+    where: { businessId: BUSINESS_ID },
+  });
+
+  await prisma.rotiseriaPromo.deleteMany({
+    where: { businessId: BUSINESS_ID },
+  });
+
+  // 4. Borrar zonas de delivery anteriores
+  await prisma.rotiseriaDeliveryZone.deleteMany({
+    where: { businessId: BUSINESS_ID },
+  });
+
+  console.log("✅ Limpieza completa. Cargando carta y zonas oficiales de El Recinto...\n");
 
   // ==========================================
   // 1. CARTA GASTRONÓMICA (EMPANADAS)
@@ -38,7 +64,7 @@ async function main() {
     { name: "Empanada Árabe", category: "empanadas", priceUnit: 2000, priceDozen: 22000 },
   ];
 
-  console.log("\n📦 Cargando catálogo de empanadas...");
+  console.log("📦 Insertando productos...");
   for (const prod of productos) {
     await prisma.rotiseriaProduct.upsert({
       where: {
@@ -114,7 +140,7 @@ async function main() {
     },
   ];
 
-  console.log("\n🛵 Cargando zonas de delivery y barrios...");
+  console.log("\n🛵 Insertando zonas de delivery...");
   for (const zona of zonasEnvio) {
     await prisma.rotiseriaDeliveryZone.upsert({
       where: {
@@ -139,7 +165,7 @@ async function main() {
     console.log(`  ✓ ${zona.name} — $${zona.price} [${zona.barrios.join(", ")}]`);
   }
 
-  console.log(`\n✅ ¡Listo! Se cargaron ${productos.length} sabores y ${zonasEnvio.length} zonas de envío.\n`);
+  console.log(`\n✅ Proceso terminado: 0 ventas previas, ${productos.length} sabores activos y ${zonasEnvio.length} zonas cargadas.\n`);
 }
 
 main()

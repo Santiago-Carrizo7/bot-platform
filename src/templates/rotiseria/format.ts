@@ -92,6 +92,7 @@ export interface FormatSaleSummaryParams {
   isModifying?: boolean;
   now?: Date;
   timezone?: string;
+  savedZoneNotice?: string | null;
   noReconocidos?: Array<{ texto: string; cantidad?: number; sugerencia?: string | null } | string>;
 }
 
@@ -112,6 +113,10 @@ export function formatSaleSummary(params: FormatSaleSummaryParams): string {
     for (const it of params.items) {
       parts.push(`• ${formatQty(it.cantidad)}x *${esc(it.nombre)}*`);
     }
+  }
+
+  if (params.savedZoneNotice && params.savedZoneNotice.trim() !== '') {
+    parts.push(params.savedZoneNotice);
   }
 
   if (params.zonaNoReconocida && params.zonaNoReconocida.trim() !== '') {
@@ -150,7 +155,7 @@ export function formatSaleSummary(params: FormatSaleSummaryParams): string {
     : getShiftDate(params.now ?? new Date(), params.timezone ?? 'America/Argentina/Buenos_Aires');
 
   parts.push(`📅 *Fecha asignada:* ${formatRealDateWithDay(targetDate)}`);
-  parts.push('', params.isModifying ? '¿Confirmamos esta venta?' : '¿Confirmar venta?');
+  parts.push('', '¿Confirmar venta? Seleccioná una opción para continuar:');
   return parts.join('\n');
 }
 
