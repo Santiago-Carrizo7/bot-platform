@@ -937,7 +937,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       }
 
       if (input.periodo === 'categorias') {
-        const cats = await cash.getExpensesByCategory(ctx.tenant.business.id, ctx.now);
+        const tz = ctx.tenant.business.timezone;
+        const cats = await cash.getExpensesByCategory(ctx.tenant.business.id, ctx.now, tz);
         if (cats.length === 0) {
           return {
             reply: '🏷️ *Gastos por categoría (este mes):*\n\nTodavía no hay gastos registrados este mes.',
@@ -984,16 +985,17 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       }
 
       let summary: PeriodSummary;
+      const tz = ctx.tenant.business.timezone;
       if (input.periodo === 'ayer') {
         const ayer = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
-        summary = await cash.getDaySummary(ctx.tenant.business.id, ayer);
+        summary = await cash.getDaySummary(ctx.tenant.business.id, ayer, tz);
         summary.periodLabel = 'ayer';
       } else if (input.periodo === 'semana') {
-        summary = await cash.getWeekSummary(ctx.tenant.business.id, ctx.now);
+        summary = await cash.getWeekSummary(ctx.tenant.business.id, ctx.now, tz);
       } else if (input.periodo === 'mes') {
-        summary = await cash.getMonthSummary(ctx.tenant.business.id, ctx.now);
+        summary = await cash.getMonthSummary(ctx.tenant.business.id, ctx.now, tz);
       } else {
-        summary = await cash.getDaySummary(ctx.tenant.business.id, ctx.now);
+        summary = await cash.getDaySummary(ctx.tenant.business.id, ctx.now, tz);
       }
 
       const sign = summary.balanceCaja >= 0 ? '+' : '';
@@ -1004,14 +1006,16 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       return {
         reply: [
-          `📊 *Resumen de ${summary.periodLabel}:*`,
+          `📊 *Resumen de ${summary.periodLabel}*`,
           '',
           `🛒 Ventas: *${formatCurrency(summary.ventasTotal)}* (${summary.ventasCount} ${summary.ventasCount === 1 ? 'venta' : 'ventas'})`,
           `💸 Gastos: *${formatCurrency(summary.gastosTotal)}* (${summary.gastosCount} ${summary.gastosCount === 1 ? 'gasto' : 'gastos'})`,
           '',
-          `⚖️ *Resultado registrado: ${sign}${formatCurrency(summary.balanceCaja)}*`,
+          '',
+          `⚖️ *Resultado en caja: ${sign}${formatCurrency(summary.balanceCaja)}*`,
           emptyNote,
-          '_ℹ️ Este balance representa el flujo neto de dinero registrado, no la ganancia contable real ya que no deduce costos por producto._',
+          '',
+          '_(Nota: balance de flujo neto en efectivo; no deduce costos de mercadería)._',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -1143,13 +1147,35 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       const resLines: string[] = [];
       if (isOnlyVentas) {
-        resLines.push(`✅ *${countVentas} ventas registradas con éxito${targetLabel} (${formatCurrency(totalVentas)}).*`);
+        resLines.push(`✅ *${countVentas} ${countVentas === 1 ? 'venta registrada' : 'ventas registradas'} con éxito${targetLabel}:*`);
+        resLines.push('');
+        for (const item of input.items) {
+          const notePart = item.nota?.trim() ? ` _(${esc(item.nota.trim())})_` : '';
+          resLines.push(`• *${formatCurrency(item.monto)}*${notePart}`);
+        }
+        resLines.push('');
+        resLines.push(`*Total: ${formatCurrency(totalVentas)}*`);
       } else if (isOnlyGastos) {
-        resLines.push(`✅ *${countGastos} gastos registrados con éxito${targetLabel} (${formatCurrency(totalGastos)}).*`);
+        resLines.push(`✅ *${countGastos} ${countGastos === 1 ? 'gasto registrado' : 'gastos registrados'} con éxito${targetLabel}:*`);
+        resLines.push('');
+        for (const item of input.items) {
+          const conceptPart = item.concepto?.trim() ? ` _(${esc(item.concepto.trim())})_` : '';
+          resLines.push(`• *${formatCurrency(item.monto)}*${conceptPart}`);
+        }
+        resLines.push('');
+        resLines.push(`*Total: ${formatCurrency(totalGastos)}*`);
       } else {
         resLines.push(`✅ *Lote registrado con éxito${targetLabel}:*`);
-        resLines.push(`• ${countVentas} ventas: ${formatCurrency(totalVentas)}`);
-        resLines.push(`• ${countGastos} gastos: ${formatCurrency(totalGastos)}`);
+        resLines.push('');
+        for (const item of input.items) {
+          const label = item.tipo === 'VENTA' ? 'Venta' : 'Gasto';
+          const detail = (item.tipo === 'VENTA' ? item.nota : item.concepto)?.trim();
+          const detailPart = detail ? ` _(${esc(detail)})_` : '';
+          resLines.push(`• ${label}: *${formatCurrency(item.monto)}*${detailPart}`);
+        }
+        resLines.push('');
+        resLines.push(`• Total ventas: *${formatCurrency(totalVentas)}* (${countVentas} ${countVentas === 1 ? 'venta' : 'ventas'})`);
+        resLines.push(`• Total gastos: *${formatCurrency(totalGastos)}* (${countGastos} ${countGastos === 1 ? 'gasto' : 'gastos'})`);
       }
 
       return {

@@ -71,8 +71,12 @@ export class CashService {
   /**
    * Resumen del día: ventas, gastos, cantidad de operaciones y balance de caja.
    */
-  async getDaySummary(businessId: string, refDate: Date = new Date()): Promise<PeriodSummary> {
-    const { start, end } = dayRange(refDate);
+  async getDaySummary(
+    businessId: string,
+    refDate: Date = new Date(),
+    timezone = 'America/Argentina/Buenos_Aires'
+  ): Promise<PeriodSummary> {
+    const { start, end } = dayRange(refDate, timezone);
     const totals = await this.cash.getTotalsByDateRange(businessId, start, end);
     return {
       periodLabel: 'hoy',
@@ -87,8 +91,12 @@ export class CashService {
   /**
    * Resumen de la semana en curso (desde el lunes 00:00).
    */
-  async getWeekSummary(businessId: string, refDate: Date = new Date()): Promise<PeriodSummary> {
-    const { start, end } = weekRange(refDate);
+  async getWeekSummary(
+    businessId: string,
+    refDate: Date = new Date(),
+    timezone = 'America/Argentina/Buenos_Aires'
+  ): Promise<PeriodSummary> {
+    const { start, end } = weekRange(refDate, timezone);
     const totals = await this.cash.getTotalsByDateRange(businessId, start, end);
     return {
       periodLabel: 'esta semana',
@@ -103,8 +111,12 @@ export class CashService {
   /**
    * Resumen del mes en curso.
    */
-  async getMonthSummary(businessId: string, refDate: Date = new Date()): Promise<PeriodSummary> {
-    const { start, end } = monthRange(refDate);
+  async getMonthSummary(
+    businessId: string,
+    refDate: Date = new Date(),
+    timezone = 'America/Argentina/Buenos_Aires'
+  ): Promise<PeriodSummary> {
+    const { start, end } = monthRange(refDate, timezone);
     const totals = await this.cash.getTotalsByDateRange(businessId, start, end);
     return {
       periodLabel: 'este mes',
@@ -121,9 +133,10 @@ export class CashService {
    */
   async getExpensesByCategory(
     businessId: string,
-    refDate: Date = new Date()
+    refDate: Date = new Date(),
+    timezone = 'America/Argentina/Buenos_Aires'
   ): Promise<Array<{ category: string; total: number; count: number }>> {
-    const { start, end } = monthRange(refDate);
+    const { start, end } = monthRange(refDate, timezone);
     return this.cash.getExpensesByCategory(businessId, start, end);
   }
 
@@ -235,31 +248,100 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function dayRange(ref: Date): { start: Date; end: Date } {
-  const start = new Date(ref);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(ref);
-  end.setHours(23, 59, 59, 999);
+function getZonedParts(date: Date, tz: string) {
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    weekday: 'short',
+    hour12: false,
+  });
+  const p = Object.fromEntries(f.formatToParts(date).map((x) => [x.type, x.value]));
+  const days: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: parseInt(p.year, 10),
+    month: parseInt(p.month, 10) - 1,
+    day: parseInt(p.day, 10),
+    hour: parseInt(p.hour, 10) === 24 ? 0 : parseInt(p.hour, 10),
+    minute: parseInt(p.minute, 10),
+    second: parseInt(p.second, 10),
+    weekday: days[p.weekday] ?? 0,
+  };
+}
+
+function zonedDateToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  ms: number,
+  tz: string
+): Date {
+  const guessUtc = Date.UTC(year, month, day, hour, minute, second, ms);
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+  });
+  const parts = Object.fromEntries(f.formatToParts(new Date(guessUtc)).map((x) => [x.type, x.value]));
+  const h = parseInt(parts.hour, 10) === 24 ? 0 : parseInt(parts.hour, 10);
+  const actualInTz = Date.UTC(
+    parseInt(parts.year, 10),
+    parseInt(parts.month, 10) - 1,
+    parseInt(parts.day, 10),
+    h,
+    parseInt(parts.minute, 10),
+    parseInt(parts.second, 10),
+    ms
+  );
+  const diff = actualInTz - guessUtc;
+  return new Date(guessUtc - diff);
+}
+
+export function dayRange(ref: Date, timezone = 'America/Argentina/Buenos_Aires'): { start: Date; end: Date } {
+  const safeTz = timezone || 'America/Argentina/Buenos_Aires';
+  const parts = getZonedParts(ref, safeTz);
+  const start = zonedDateToUtc(parts.year, parts.month, parts.day, 0, 0, 0, 0, safeTz);
+  const end = zonedDateToUtc(parts.year, parts.month, parts.day, 23, 59, 59, 999, safeTz);
   return { start, end };
 }
 
-function weekRange(ref: Date): { start: Date; end: Date } {
-  const start = new Date(ref);
-  const day = start.getDay(); // 0 domingo, 1 lunes...
-  const diff = day === 0 ? -6 : 1 - day; // inicio el lunes
-  start.setDate(start.getDate() + diff);
-  start.setHours(0, 0, 0, 0);
+export function weekRange(ref: Date, timezone = 'America/Argentina/Buenos_Aires'): { start: Date; end: Date } {
+  const safeTz = timezone || 'America/Argentina/Buenos_Aires';
+  const parts = getZonedParts(ref, safeTz);
+  const diff = parts.weekday === 0 ? -6 : 1 - parts.weekday;
+  const mondayLocal = new Date(Date.UTC(parts.year, parts.month, parts.day + diff));
+  const mYear = mondayLocal.getUTCFullYear();
+  const mMonth = mondayLocal.getUTCMonth();
+  const mDay = mondayLocal.getUTCDate();
 
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
+  const start = zonedDateToUtc(mYear, mMonth, mDay, 0, 0, 0, 0, safeTz);
+
+  const sundayLocal = new Date(Date.UTC(mYear, mMonth, mDay + 6));
+  const sYear = sundayLocal.getUTCFullYear();
+  const sMonth = sundayLocal.getUTCMonth();
+  const sDay = sundayLocal.getUTCDate();
+
+  const end = zonedDateToUtc(sYear, sMonth, sDay, 23, 59, 59, 999, safeTz);
   return { start, end };
 }
 
-function monthRange(ref: Date): { start: Date; end: Date } {
-  const year = ref.getFullYear();
-  const month = ref.getMonth();
-  const start = new Date(year, month, 1, 0, 0, 0, 0);
-  const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+export function monthRange(ref: Date, timezone = 'America/Argentina/Buenos_Aires'): { start: Date; end: Date } {
+  const safeTz = timezone || 'America/Argentina/Buenos_Aires';
+  const parts = getZonedParts(ref, safeTz);
+  const start = zonedDateToUtc(parts.year, parts.month, 1, 0, 0, 0, 0, safeTz);
+  const lastDayOfMonth = new Date(Date.UTC(parts.year, parts.month + 1, 0)).getUTCDate();
+  const end = zonedDateToUtc(parts.year, parts.month, lastDayOfMonth, 23, 59, 59, 999, safeTz);
   return { start, end };
 }

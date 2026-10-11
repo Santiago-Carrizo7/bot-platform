@@ -250,7 +250,6 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
       { command: 'ventas', description: '💰 Registrar ventas' },
       { command: 'gastos', description: '💸 Registrar gastos' },
       { command: 'estadisticas', description: '📊 Estadísticas y resumen' },
-      { command: 'resumen', description: '📊 Resumen de caja' },
       { command: 'movimientos', description: '📋 Últimos movimientos' },
       { command: 'calcular', description: '🧮 Calcular precio' },
       { command: 'deshacer', description: '↩️ Deshacer última acción' },

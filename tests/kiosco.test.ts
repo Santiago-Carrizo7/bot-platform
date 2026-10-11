@@ -326,8 +326,8 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     const reply = await handleText(f.deps, { resolution: f.resolution, text: '¿Cuánto vendí hoy?', now: NOW });
     expect(reply.text).toContain('Ventas: *$ 20.000*');
     expect(reply.text).toContain('Gastos: *$ 5.000*');
-    expect(reply.text).toContain('Resultado registrado: +$ 15.000');
-    expect(reply.text).toContain('no la ganancia contable real');
+    expect(reply.text).toContain('Resultado en caja: +$ 15.000');
+    expect(reply.text).toContain('no deduce costos de mercadería');
   });
 
   it('tenant isolation: un negocio no ve ni anula movimientos de otro', async () => {
@@ -609,10 +609,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
 
     // 2. Tocar 'Hoy'
     const hoy = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:hoy', now: NOW });
-    expect(hoy.text).toContain('Resumen de hoy:');
+    expect(hoy.text).toContain('Resumen de hoy');
     expect(hoy.text).toContain('Ventas: *$ 30.000*');
     expect(hoy.text).toContain('Gastos: *$ 8.000*');
-    expect(hoy.text).toContain('Resultado registrado: +$ 22.000');
+    expect(hoy.text).toContain('Resultado en caja: +$ 22.000');
 
     // 3. Tocar 'Gastos por categoría'
     const cats = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:categorias', now: NOW });
@@ -695,6 +695,41 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(res.text).toContain('1. 🔴 *$ 150.000* - Alquiler');
     expect(res.text).toContain('2. 🔴 *$ 1.200.000* - Sueldo de empleado');
     expect(res.text).toContain('Total:* *$ 1.350.000* (2 gastos)');
+  });
+
+  it('zona horaria de Argentina: movimiento registrado a las 21:09 hs de ayer (00:09 UTC) pertenece a ayer y no a hoy', async () => {
+    const f = setupFlow([]);
+    // 21:09 hs de Argentina el 10 de octubre de 2026 = 00:09 hs UTC del 11 de octubre de 2026
+    const fechaAyerNocheUtc = new Date('2026-10-11T00:09:00.000Z');
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 15000,
+      concept: 'Venta de noche',
+      date: fechaAyerNocheUtc,
+    });
+
+    // Ahora es el 11 de octubre a las 11:38 hs en Argentina (14:38 hs UTC)
+    const fechaHoyDiaUtc = new Date('2026-10-11T14:38:00.000Z');
+
+    // 1. Consultar resumen de "hoy" (no debe incluir la venta de las 21:09 de ayer)
+    const resHoy = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'caja hoy',
+      now: fechaHoyDiaUtc,
+    });
+    expect(resHoy.text).toContain('Ventas: *$ 0* (0 ventas)');
+    expect(resHoy.text).toContain('Resultado en caja: +$ 0');
+
+    // 2. Consultar resumen de "ayer" (SÍ debe incluir la venta de las 21:09)
+    const resAyer = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'resumen ayer',
+      now: fechaHoyDiaUtc,
+    });
+    expect(resAyer.text).toContain('Ventas: *$ 15.000* (1 venta)');
+    expect(resAyer.text).toContain('Resultado en caja: +$ 15.000');
   });
 });
 
