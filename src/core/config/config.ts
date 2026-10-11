@@ -36,7 +36,7 @@ const configSchema = z.object({
   OPENROUTER_MODEL: z
     .string()
     .default(
-      'meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-24b-instruct-2501:free,qwen/qwen-2.5-72b-instruct:free'
+      'nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free'
     ),
   // Groq Chat (ultra rápido, tier gratuito generoso: 30 RPM, 14.400 RPD)
   GROQ_API_KEY: z.string().optional(),
