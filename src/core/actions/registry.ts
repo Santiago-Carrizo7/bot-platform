@@ -108,7 +108,7 @@ export interface ReplyMenuItem {
 export interface TemplateDefinition {
   id: string;
   label: string;
-  welcome: (businessName: string, firstName?: string) => string;
+  welcome: (businessName: string, firstName?: string, role?: string) => string;
   /**
    * Prompt de sistema para freestyle. `hints` trae contexto dinámico del negocio
    * (ej. categorías o productos disponibles), resuelto por `resolveHints`.

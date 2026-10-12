@@ -108,7 +108,7 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
         ? '\n\nComo dueño podés sumar a tu equipo con /invitar.'
         : '';
     return md(
-      `${deps.template.welcome(resolution.tenant.business.name, input.firstName)}\n\nYa quedaste vinculado como *${roleLabel(resolution.tenant.membership.role)}*.${inviteHint}`
+      `${deps.template.welcome(resolution.tenant.business.name, input.firstName, resolution.tenant.membership.role)}\n\nYa quedaste vinculado como *${roleLabel(resolution.tenant.membership.role)}*.${inviteHint}`
     );
   }
 
@@ -127,7 +127,10 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   // Botones de la barra persistente: match exacto → acción directa, sin IA.
   // Un tap abandona la conversación en curso (incluso una confirmación pendiente),
   // igual que cambiar de acción por texto.
-  const menuHit = deps.template.replyMenu?.find((m) => m.label === trimmed);
+  const replyMenuItems = deps.template.getReplyMenu
+    ? deps.template.getReplyMenu(tenant.membership.role)
+    : deps.template.replyMenu;
+  const menuHit = replyMenuItems?.find((m) => m.label === trimmed);
   if (menuHit) {
     const menuAction = deps.template.actions.find((a) => a.name === menuHit.action);
     if (!menuAction) return md(MSG_UNKNOWN);
@@ -385,6 +388,9 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
   if (data.startsWith('stats:')) {
     const statsAction = deps.template.actions.find((a) => a.name === 'consultar_resumen');
     if (statsAction) {
+      if (statsAction.roles && !statsAction.roles.includes(tenant.membership.role)) {
+        return md('Solo el dueño del negocio puede consultar las estadísticas y el balance de caja.');
+      }
       const period = data.slice('stats:'.length);
       const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now };
       const res = await statsAction.handler(ctx, { periodo: period });
@@ -393,6 +399,16 @@ export async function handleCallback(deps: FlowDeps, input: CallbackInput): Prom
         inlineKeyboard: res.inlineKeyboard,
       };
     }
+  }
+  if (data.startsWith('invite:role:')) {
+    if (tenant.membership.role !== 'OWNER') {
+      return md('Solo el dueño del negocio puede generar invitaciones.');
+    }
+    if (!deps.inviteBotUsername) {
+      return md('Las invitaciones no están disponibles en este servidor.');
+    }
+    const role = data.slice('invite:role:'.length) as 'OWNER' | 'EMPLOYEE';
+    return generateInviteReply(deps, tenant, resolution.user.id, role);
   }
   if (data === 'undo:ask') {
     const active = await getActiveConversation(deps, tenant, resolution.user.id, now);
@@ -526,7 +542,7 @@ async function handleCommand(
     const hint = await deps.template.welcomeHint?.(tenant).catch(() => null);
     const hintText = hint ? `\n\n${hint}` : '';
     return {
-      ...md(`${deps.template.welcome(tenant.business.name, firstName)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}${hintText}`),
+      ...md(`${deps.template.welcome(tenant.business.name, firstName, tenant.membership.role)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}${hintText}`),
       inlineKeyboard: menuKeyboard(deps.template, tenant.membership.role),
     };
   }
@@ -538,16 +554,30 @@ async function handleCommand(
       return md('Las invitaciones no están disponibles en este servidor.');
     }
     const arg = text.slice(1).split(/\s+/)[1]?.toLowerCase();
-    const role = arg === 'dueno' || arg === 'dueño' ? 'OWNER' : 'EMPLOYEE';
-    const created = await deps.invitations.create(tenant.business.id, role, {
-      createdByUserId: resolution.user.id,
-      ttlHours: 7 * 24,
-      botUsername: deps.inviteBotUsername,
-    });
-    const whom = role === 'OWNER' ? 'tu socio' : 'tu empleado';
-    return md(
-      `Pasale este enlace a ${whom} (vale 7 días, un solo uso):\n${created.deepLink}`
-    );
+    if (arg === 'dueno' || arg === 'dueño' || arg === 'socio') {
+      return generateInviteReply(deps, tenant, resolution.user.id, 'OWNER');
+    }
+    if (arg === 'empleado') {
+      return generateInviteReply(deps, tenant, resolution.user.id, 'EMPLOYEE');
+    }
+    return {
+      text: [
+        '👥 *Invitación a tu equipo*',
+        '',
+        'Elegí qué rol va a tener la persona que querés sumar a tu negocio:',
+        '',
+        '🤝 *Socio / Co-dueño:*',
+        'Tendrá acceso total: ve exactamente los mismos comandos, estadísticas y balances de caja, y puede invitar a otros miembros.',
+        '',
+        '👤 *Empleado:*',
+        'Tendrá acceso a las operaciones diarias (Registrar ventas, registrar gastos si paga proveedores, ver últimos movimientos y calcular precios). No podrá consultar estadísticas ni balances de caja.',
+      ].join('\n'),
+      parseMode: 'Markdown',
+      inlineKeyboard: [
+        [{ text: '🤝 Invitar como Socio', callbackData: 'invite:role:OWNER' }],
+        [{ text: '👤 Invitar como Empleado', callbackData: 'invite:role:EMPLOYEE' }],
+      ],
+    };
   }
   if (name === 'negocios') {
     if (resolution.memberships.length <= 1) {
@@ -583,6 +613,35 @@ async function handleCommand(
 
 function roleLabel(role: string): string {
   return role === 'OWNER' ? 'dueño' : 'empleado';
+}
+
+async function generateInviteReply(
+  deps: FlowDeps,
+  tenant: TenantContext,
+  actorUserId: string,
+  role: 'OWNER' | 'EMPLOYEE'
+): Promise<BotReply> {
+  const isOwner = role === 'OWNER';
+  const created = await deps.invitations.create(tenant.business.id, role, {
+    createdByUserId: actorUserId,
+    ttlHours: 7 * 24,
+    botUsername: deps.inviteBotUsername!,
+  });
+  const roleTitle = isOwner ? 'Socio / Co-dueño 🤝' : 'Empleado 👤';
+  const accessDesc = isOwner
+    ? 'Tendrá acceso completo: ve las mismas opciones, estadísticas y balances de caja, y puede generar invitaciones.'
+    : 'Tendrá funciones operativas (Registrar ventas, registrar gastos si paga proveedores, ver últimos movimientos y calcular precios). No podrá consultar estadísticas ni balances de caja.';
+  return {
+    text: [
+      `🔗 Invitación generada para ${roleTitle}`,
+      '',
+      `Pasale este enlace para sumarse a "${tenant.business.name}":`,
+      created.deepLink,
+      '',
+      `📌 ${accessDesc}`,
+      '⏳ Válido por 7 días, un solo uso.',
+    ].join('\n'),
+  };
 }
 
 async function startAction(
@@ -715,6 +774,9 @@ async function proceedWithAction(
 function checkRole(tenant: TenantContext, action: ActionDef<unknown>): string | null {
   const allowed = action.roles ?? ['OWNER', 'EMPLOYEE'];
   if (!allowed.includes(tenant.membership.role)) {
+    if (action.name === 'consultar_resumen') {
+      return 'Solo el dueño del negocio puede consultar las estadísticas y el balance de caja.';
+    }
     return 'Solo el dueño del negocio puede hacer esto.';
   }
   return null;

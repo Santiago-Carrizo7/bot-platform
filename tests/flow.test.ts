@@ -330,28 +330,65 @@ describe('pipeline de mensajes', () => {
     expect(writeCalls).toBe(0);
   });
 
-  it('/invitar como OWNER: devuelve deep link de empleado válido 7 días', async () => {
+  it('/invitar como OWNER sin argumento: muestra selector de rol interactivo con explicación', async () => {
     const f = setup({ role: 'OWNER' });
     const reply = await text(f, '/invitar');
+    expect(reply.text).toContain('Invitación a tu equipo');
+    expect(reply.text).toContain('Socio / Co-dueño');
+    expect(reply.text).toContain('Empleado');
+    expect(reply.inlineKeyboard).toEqual([
+      [{ text: '🤝 Invitar como Socio', callbackData: 'invite:role:OWNER' }],
+      [{ text: '👤 Invitar como Empleado', callbackData: 'invite:role:EMPLOYEE' }],
+    ]);
+    expect(f.invitations.store.size).toBe(0);
+    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
+  });
+
+  it('/invitar empleado: genera invitación de EMPLOYEE', async () => {
+    const f = setup({ role: 'OWNER' });
+    const reply = await text(f, '/invitar empleado');
     expect(reply.text).toContain('https://t.me/mi_bot?start=');
+    expect(reply.text).toContain('Empleado');
     expect(reply.text).toContain('7 días');
     const stored = [...f.invitations.store.values()];
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({ role: 'EMPLOYEE', businessId: f.tenant.business.id });
-    expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
   });
 
-  it('/invitar dueno: genera invitación de OWNER', async () => {
+  it('/invitar dueno o socio: genera invitación de OWNER', async () => {
     const f = setup({ role: 'OWNER' });
     const reply = await text(f, '/invitar dueno');
     expect(reply.text).toContain('https://t.me/mi_bot?start=');
-    expect(reply.text).toContain('socio');
+    expect(reply.text).toContain('Socio');
     expect([...f.invitations.store.values()][0]).toMatchObject({ role: 'OWNER' });
+  });
+
+  it('callbacks invite:role:OWNER e invite:role:EMPLOYEE generan las invitaciones correspondientes', async () => {
+    const f = setup({ role: 'OWNER' });
+    const repOwner = await handleCallback(f.deps, { resolution: f.resolution, data: 'invite:role:OWNER', now: NOW });
+    expect(repOwner.text).toContain('https://t.me/mi_bot?start=');
+    expect(repOwner.text).toContain('Socio');
+
+    const repEmp = await handleCallback(f.deps, { resolution: f.resolution, data: 'invite:role:EMPLOYEE', now: NOW });
+    expect(repEmp.text).toContain('https://t.me/mi_bot?start=');
+    expect(repEmp.text).toContain('Empleado');
+
+    const stored = [...f.invitations.store.values()];
+    expect(stored).toHaveLength(2);
+    expect(stored[0]).toMatchObject({ role: 'OWNER' });
+    expect(stored[1]).toMatchObject({ role: 'EMPLOYEE' });
   });
 
   it('/invitar como EMPLOYEE: denegado sin crear nada', async () => {
     const f = setup({ role: 'EMPLOYEE' });
     const reply = await text(f, '/invitar');
+    expect(reply.text).toContain('Solo el dueño');
+    expect(f.invitations.store.size).toBe(0);
+  });
+
+  it('callback invite:role: como EMPLOYEE: denegado sin crear nada', async () => {
+    const f = setup({ role: 'EMPLOYEE' });
+    const reply = await handleCallback(f.deps, { resolution: f.resolution, data: 'invite:role:EMPLOYEE', now: NOW });
     expect(reply.text).toContain('Solo el dueño');
     expect(f.invitations.store.size).toBe(0);
   });

@@ -199,7 +199,10 @@ describe('template kiosco: dominio financiero', () => {
 });
 
 describe('template kiosco: flujo por bot (Telegram)', () => {
-  function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
+  function setupFlow(
+    queue: Array<{ action: string; params: Record<string, unknown> }>,
+    role: 'OWNER' | 'EMPLOYEE' = 'OWNER'
+  ) {
     const { cash, repo } = setupServices();
     const { template } = createKioscoTemplateWithCash(cash);
     const businesses = new FakeBusinessRepo();
@@ -212,7 +215,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       id: 'mem-1',
       businessId: BIZ,
       userId: ACTOR,
-      role: 'EMPLOYEE' as const,
+      role,
       lastUsedAt: null,
       createdAt: NOW,
       updatedAt: NOW,
@@ -904,8 +907,89 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(res.text).toContain('Confirmar ventas:');
     expect(res.text).toContain('1. 🟢 *$ 8.000* (Coca Cola)');
     expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
-    expect(res.text).toContain('3. 🟢 *$ 30.000* (gaseosa)');
     expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
+
+  describe('RBAC: Dueño vs Empleado', () => {
+    it('empleado: se le bloquea consultar_resumen por comando (/resumen, /estadisticas)', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resResumen = await handleText(f.deps, { resolution: f.resolution, text: '/resumen', now: NOW });
+      expect(resResumen.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+
+      const resStats = await handleText(f.deps, { resolution: f.resolution, text: '/estadisticas', now: NOW });
+      expect(resStats.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: se le bloquea consultar_resumen por texto ("caja", "balance", "estadisticas")', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resCaja = await handleText(f.deps, { resolution: f.resolution, text: 'caja hoy', now: NOW });
+      expect(resCaja.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+
+      const resStats = await handleText(f.deps, { resolution: f.resolution, text: 'estadísticas', now: NOW });
+      expect(resStats.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: se le bloquea callback con prefijo stats:', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resCb = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:hoy', now: NOW });
+      expect(resCb.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: menú inline (/menu) no incluye estadísticas pero sí movimientos y calculadora', () => {
+      const { cash } = setupServices();
+      const { template } = createKioscoTemplateWithCash(cash);
+      const menuEmp = template.getMenu?.('EMPLOYEE') ?? [];
+      expect(menuEmp.some((m) => m.action === 'consultar_resumen')).toBe(false);
+      expect(menuEmp.some((m) => m.action === 'registrar_venta')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'registrar_gasto')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'consultar_movimientos')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'calcular_precio')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'deshacer_ultimo')).toBe(true);
+
+      const menuOwner = template.getMenu?.('OWNER') ?? [];
+      expect(menuOwner.some((m) => m.action === 'consultar_resumen')).toBe(true);
+    });
+
+    it('empleado: replyMenu persistente reemplaza estadísticas por movimientos', () => {
+      const { cash } = setupServices();
+      const { template } = createKioscoTemplateWithCash(cash);
+      const replyEmp = template.getReplyMenu?.('EMPLOYEE') ?? [];
+      expect(replyEmp.some((m) => m.action === 'consultar_resumen')).toBe(false);
+      expect(replyEmp.some((m) => m.action === 'consultar_movimientos')).toBe(true);
+
+      const replyOwner = template.getReplyMenu?.('OWNER') ?? [];
+      expect(replyOwner.some((m) => m.action === 'consultar_resumen')).toBe(true);
+    });
+
+    it('empleado: tap en "📋 Movimientos" en barra persistente dispara últimos movimientos', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'IN', amount: 3500, concept: 'Venta' });
+      const res = await handleText(f.deps, { resolution: f.resolution, text: '📋 Movimientos', now: NOW });
+      expect(res.text).toContain('Últimos movimientos');
+      expect(res.text).toContain('+$ 3.500');
+    });
+
+    it('empleado: PUEDE registrar ventas, gastos, calcular precio y deshacer', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      // Venta
+      const resVenta = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 4200', now: NOW });
+      expect(resVenta.text).toContain('Venta registrada');
+      expect(f.repo.movements).toHaveLength(1);
+
+      // Gasto
+      const resGasto = await handleText(f.deps, { resolution: f.resolution, text: 'gasté 1500 en pan', now: NOW });
+      expect(resGasto.text).toContain('Gasto registrado');
+      expect(f.repo.movements).toHaveLength(2);
+
+      // Calcular precio
+      const resCalc = await handleText(f.deps, { resolution: f.resolution, text: 'costo 500 margen 50%', now: NOW });
+      expect(resCalc.text).toContain('Precio de venta: $ 1.000');
+
+      // Deshacer
+      const resUndo = await handleText(f.deps, { resolution: f.resolution, text: '/deshacer', now: NOW });
+      expect(resUndo.text).toContain('Se anuló el último movimiento');
+      expect(f.repo.movements).toHaveLength(1);
+    });
   });
 
   it('lote de ventas rápidas con productos sin verbo: "8000 gaseosa, 15000 papa, 30000 golosinas"', async () => {

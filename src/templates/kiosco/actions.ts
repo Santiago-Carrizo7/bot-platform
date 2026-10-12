@@ -976,8 +976,14 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     description:
       'Muestra el resumen de ventas, gastos y balance de caja de un período. Dato: periodo ("hoy", "ayer", "semana", "mes", "mes:-1", "semanas", "semanas:-1", "categorias", "movimientos", "menu"). Por defecto "hoy".',
     kind: 'read',
+    roles: ['OWNER'],
     input: ConsultarResumenInput,
     handler: async (ctx, input) => {
+      if (ctx.tenant.membership.role === 'EMPLOYEE') {
+        return {
+          reply: 'Solo el dueño del negocio puede consultar las estadísticas y el balance de caja.',
+        };
+      }
       const periodo = input?.periodo ?? 'menu';
       if (periodo === 'menu') {
         return {

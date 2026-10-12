@@ -233,20 +233,25 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
   const template: TemplateDefinition = {
     id: 'kiosco',
     label: 'Kiosco',
-    welcome: (businessName, firstName) =>
-      [
-        `👋 ¡Hola${firstName ? ` ${firstName}` : ''}! Administro la caja y finanzas de *${businessName}*.`,
+    welcome: (businessName, firstName, role) => {
+      const isEmployee = role === 'EMPLOYEE';
+      const statsOrMovementsLine = isEmployee
+        ? '• *📋 Movimientos:* Consultá los últimos cobros y gastos registrados.'
+        : '• *📊 Estadísticas:* Balance de caja de hoy, ayer, semana o mes.';
+      return [
+        `👋 ¡Hola${firstName ? ` ${firstName}` : ''}! Administro la caja${isEmployee ? '' : ' y finanzas'} de *${businessName}*.`,
         '',
         '• *💰 Ventas:* Ingresá los cobros del mostrador uno tras otro sin frenar.',
         '• *💸 Gastos:* Registrá compras a proveedores y servicios para controlar salidas.',
         '• *🧮 Calcular:* Calculadora de precios de venta sugeridos y márgenes.',
-        '• *📊 Estadísticas:* Balance de caja de hoy, ayer, semana o mes.',
+        statsOrMovementsLine,
         '• *↩️ Deshacer última acción:* Anulá el último movimiento si hubo un error.',
         '',
         '🎙️ *Audios:* Podés dictarme ventas o gastos como a un empleado. Te sugerimos mandar audios de menos de 1 minuto para que la respuesta sea instantánea.',
         '',
         '📌 Abajo tenés los botones directos, o tocá /menu para ver todo.',
-      ].join('\n'),
+      ].join('\n');
+    },
     systemPrompt: (businessName, referenceDate, hints) =>
       buildKioscoSystemPrompt(businessName, referenceDate, hints),
     interpretDirectly: interpretDirectlyKiosco,
@@ -259,7 +264,26 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
       { label: '🧮 Calcular', action: 'calcular_precio' },
       { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
     ],
+    getReplyMenu: (role?: string) => {
+      if (role === 'EMPLOYEE') {
+        return [
+          { label: '💰 Ventas', action: 'registrar_venta' },
+          { label: '💸 Gastos', action: 'registrar_gasto' },
+          { label: '📋 Movimientos', action: 'consultar_movimientos' },
+          { label: '🧮 Calcular', action: 'calcular_precio' },
+          { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+        ];
+      }
+      return [
+        { label: '💰 Ventas', action: 'registrar_venta' },
+        { label: '💸 Gastos', action: 'registrar_gasto' },
+        { label: '📊 Estadísticas', action: 'consultar_resumen' },
+        { label: '🧮 Calcular', action: 'calcular_precio' },
+        { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+      ];
+    },
     replyMenuLayout: [2, 2, 1],
+    getReplyMenuLayout: (_role?: string) => [2, 2, 1],
     menu: [
       { label: '💰 Registrar ventas', action: 'registrar_venta' },
       { label: '💸 Registrar gastos', action: 'registrar_gasto' },
@@ -268,6 +292,25 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
       { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
       { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
     ],
+    getMenu: (role?: string) => {
+      if (role === 'EMPLOYEE') {
+        return [
+          { label: '💰 Registrar ventas', action: 'registrar_venta' },
+          { label: '💸 Registrar gastos', action: 'registrar_gasto' },
+          { label: '🧮 Calcular precio', action: 'calcular_precio' },
+          { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
+          { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+        ];
+      }
+      return [
+        { label: '💰 Registrar ventas', action: 'registrar_venta' },
+        { label: '💸 Registrar gastos', action: 'registrar_gasto' },
+        { label: '📊 Estadísticas y resumen', action: 'consultar_resumen' },
+        { label: '🧮 Calcular precio', action: 'calcular_precio' },
+        { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
+        { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+      ];
+    },
     menuCommands: [
       { command: 'ventas', description: '💰 Registrar ventas' },
       { command: 'gastos', description: '💸 Registrar gastos' },

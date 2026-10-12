@@ -16,29 +16,24 @@
   trial 10 días desde 1ª escritura → `READ_ONLY`; tablas tipadas, sin `Record` genérico.
 
 - Kiosco: 'ventas' y 'gastos' como acciones ágiles (`isContinuous`); ventas individuales
-  se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`
-  con confirmación numerada y corrección interactiva. Al confirmar lote se lista el detalle + total.
-  Estadísticas usan timezone 'America/Argentina/Buenos_Aires', navegación entre meses
-  (`stats:mes:<offset>`) y desglose de semanas contables dentro del mes (`stats:semanas:<offset>`).
-  Botonera '📊 Estadísticas' normaliza input a 'menu'. Sanitizado de pausas ('...') y
-  soporte de multiplicadores ('mil', 'k', 'lucas') en lotes con notas de productos.
-  Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
-- Rotiseria: docenas por tarifa extrayendo primero docenas puras completas por sabor; turno operativo 00-05 AM;
-  anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas; matcher por sabor raíz;
-  reset de borrador ante nueva comanda; parseModification con palabras numéricas y docenas;
-  módulo de bebidas (`/bebidas`) en `rotiseria_products` (`category: 'bebidas'`); botones `rotiseria:quitar_linea:<idx>`;
-  RBAC para `EMPLOYEE` (bloquea `/stats`, `/dias`, `/invitar` y callbacks de recaudación, omite del menú);
-  estadísticas con desglose y ranking de bebidas (`rotiseria:stats_bebidas:<period>`).
-- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`) + botones para quitar ítems en modificación o con precio $0.
-
+  se asientan de inmediato sin confirmación; audios y ráfagas van a `registrar_lote`.
+  RBAC Kiosco: `consultar_resumen` (`roles: ['OWNER']`), callbacks `stats:*` bloqueados para `EMPLOYEE`,
+  menú inline y teclado persistente reemplazan estadísticas por `📋 Movimientos` para empleados.
+  `/invitar`: menú interactivo (🤝 Socio vs 👤 Empleado) sin romper Markdown V1 por guiones bajos en links.
+  Multi-dueño soportado de forma nativa (múltiples membresías `OWNER` por negocio).
+- Rotiseria: docenas por tarifa; turno 00-05 AM; anulación interactiva; RBAC EMPLOYEE.
 - IA en cascada (`FallbackAIProvider`): Groq (GPT-OSS 120B) -> OpenRouter -> Gemini.
 
 ## Gotchas
+- Telegram Markdown V1 rompe con `_` en URLs: enlaces deep link deben enviarse sin `parseMode: 'Markdown'`.
 - Telegram 64-byte limit en callback_data: usar índices numéricos (`rotiseria:precio_item:${idx}`).
 - En Windows usar `pnpm.cmd` por soporte de OS.
-- Zod schemas: campos auxiliares deben declararse `.nullable().optional()` para no invalidar `safeParse`.
-- Regex de palabras con tilde (ej: vendí, gasté): usar `(?:\s+|$|\b)` en vez de `\b` (límite ASCII).
 
 ## Próximos pasos
 - [ ] Verificar deploy automático en Render de los cambios de `main`.
-- [ ] Probar interacciones en Telegram en vivo del bot Kiosco (audios y estadísticas).
+- [ ] Aplicar migración `20261012000000_manual_payments` en staging/Supabase (`prisma migrate deploy`).
+- [ ] Probar interacciones en Telegram en vivo del bot Kiosco con usuarios Socio y Empleado.
+
+## Admin v2 (2026-10-12)
+- Dashboard + Negocios + Trials + Pagos manuales (`ManualPayment`) + Auditoría + Config.
+- Gates: typecheck ✓, build ✓, tests 261/261 ✓.
