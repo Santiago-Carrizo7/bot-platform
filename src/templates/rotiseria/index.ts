@@ -1666,7 +1666,16 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           });
         }
         return {
-          text: '🎁 *Nueva Promoción*\n\nEscribí los datos en formato:\n`Nombre | Precio | Descripción (opcional)`\n\nPor ejemplo:\n`Promo 2 | 18000 | 1 Pizza Especial + 6 Empanadas`',
+          text: [
+            '🎁 *Nueva Promoción*',
+            '',
+            'Escribí o mandá un audio con el nombre, precio y qué incluye.',
+            '',
+            '💡 *Ejemplos válidos:*',
+            '• `Promo 2 | 18000 | 1 Pizza Especial + 6 Empanadas`',
+            '• `Combo Familiar / 25000 / 2 Muzza + 12 Empanadas`',
+            '• O en texto directo: *"Promo 1 a 16000: Muzza + 6 empanadas"*',
+          ].join('\n'),
           parseMode: 'Markdown',
         };
       }
@@ -2547,10 +2556,16 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         }
         return {
           text: [
-            '🥤 *Carga de Bebidas por Lote*',
+            '🥤 *Carga de Bebidas*',
             '',
-            'Escribí o mandá un audio con tus bebidas y precios:',
-            '👉 *"Coca 1.5L 3500, Sprite 1.5L 3500, Cerveza Quilmes 1L 4000, Agua 500ml 1500"*',
+            'Mandá un audio o mensaje indicando marca, tamaño y precio.',
+            '',
+            '💡 *Tip de formato:*',
+            "Usá punto y 'L' para litros, o 'ml' para envases chicos:",
+            '• *"Coca-Cola 1.5L 3500"*',
+            '• *"Sprite 2.25L 4200"*',
+            '• *"Agua 500ml 1800"*',
+            '• *"Cerveza Quilmes 1L 4000"*',
             '',
             'También podés ponerlas renglón por renglón.',
           ].join('\n'),

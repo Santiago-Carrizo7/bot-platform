@@ -96,14 +96,16 @@ export const CambiarPrecioInput = z
     nombre: z.string().trim().optional(),
     precio_unitario: z.number().positive('El precio debe ser mayor a 0').optional(),
     precio_docena: z.number().positive('El precio de la docena debe ser mayor a 0').optional(),
+    precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').optional(),
   })
   .refine(
     (v) =>
       (!v.nombre && !v.product_id) ||
       v.precio_unitario !== undefined ||
-      v.precio_docena !== undefined,
+      v.precio_docena !== undefined ||
+      v.precio_media_docena !== undefined,
     {
-      message: 'Tenés que indicar al menos un precio nuevo (unitario o docena)',
+      message: 'Tenés que indicar al menos un precio nuevo (unitario, media docena o docena)',
       path: ['precio_unitario'],
     }
   );
@@ -123,6 +125,7 @@ export const CrearProductoInput = z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre del producto'),
   precio_unitario: z.number().positive('El precio unitario debe ser mayor a 0'),
   precio_docena: z.number().positive('El precio de docena debe ser mayor a 0').optional(),
+  precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').optional(),
   categoria: z.string().trim().default('empanadas'),
 });
 export type CrearProductoInput = z.infer<typeof CrearProductoInput>;

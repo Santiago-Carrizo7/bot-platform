@@ -22,12 +22,12 @@
   Concepto y categoría no se duplican si son idénticos (ej. Alquiler).
   Jerga argentina (palos, lucas, k, millones) y frases complejas delegan al LLM.
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
-- Rotiseria: docenas por tarifa extrayendo primero docenas puras completas por sabor; turno operativo 00-05 AM;
-  anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas; matcher por sabor raíz;
+- Rotiseria: docenas y media docena por tarifa (3 precios: unitario, media docena, docena);
+  preview detallada en lote de envíos; tips de formato en módulo de bebidas;
+  turno operativo 00-05 AM; anulación interactiva; auto-registro de zonas; matcher por sabor raíz;
   reset de borrador ante nueva comanda; parseModification con palabras numéricas y docenas;
-  módulo de bebidas (`/bebidas`) en `rotiseria_products` (`category: 'bebidas'`); botones `rotiseria:quitar_linea:<idx>`;
-  RBAC para `EMPLOYEE` (bloquea `/stats`, `/dias`, `/invitar` y callbacks de recaudación, omite del menú);
-  estadísticas con desglose y ranking de bebidas (`rotiseria:stats_bebidas:<period>`).
+  módulo de bebidas (`/bebidas`); botones `rotiseria:quitar_linea:<idx>`;
+  RBAC para `EMPLOYEE`; estadísticas y ranking de bebidas (`rotiseria:stats_bebidas:<period>`).
 - Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`) + botones para quitar ítems en modificación o con precio $0.
 
 - IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini.

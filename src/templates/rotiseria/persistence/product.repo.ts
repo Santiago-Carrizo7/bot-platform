@@ -25,6 +25,7 @@ export class ProductRepository {
         name: data.name.trim(),
         priceUnit: data.priceUnit,
         priceDozen: data.priceDozen ?? null,
+        priceHalfDozen: data.priceHalfDozen ?? null,
         category: data.category?.trim() || 'empanadas',
       },
     });
@@ -76,6 +77,7 @@ export class ProductRepository {
         ...(data.name !== undefined ? { name: data.name.trim() } : {}),
         ...(data.priceUnit !== undefined ? { priceUnit: data.priceUnit } : {}),
         ...(data.priceDozen !== undefined ? { priceDozen: data.priceDozen } : {}),
+        ...(data.priceHalfDozen !== undefined ? { priceHalfDozen: data.priceHalfDozen } : {}),
         ...(data.category !== undefined ? { category: data.category.trim() } : {}),
       },
     });

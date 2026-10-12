@@ -139,7 +139,13 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
     - La palabra "gratis" o "$0" siempre significa precio = 0. Si se mencionan varios barrios para una misma tarifa (ej: "A, B y C a 2000"), agrupalos en una zona coherente con esos barrios en "barrios".
   • Últimas ventas ("últimas ventas", "historial de ventas", "ver ventas") -> consultar_ventas.
   • Gestionar / Crear / Editar promo ("promos", "gestionar promos", "crear promo", "editar promo") -> crear_editar_promo.
-  • Crear comida o producto ("crear empanada", "crear comida") -> crear_producto.
+  • Crear comida o producto ("crear empanada", "crear comida") -> crear_producto con { nombre, precio_unitario, precio_media_docena, precio_docena, categoria }.
+    Reconoce el trío de precios (unidad, media docena y docena).
+    Few-shot obligatorio:
+    - "Empanada de atún 1300 20000 y la media docena 6000" ->
+      crear_producto con { nombre: "Empanada de Atún", precio_unitario: 1300, precio_docena: 20000, precio_media_docena: 6000, categoria: "empanadas" }.
+    - "Crear empanada de carne a 1500, media docena 8000, docena 15000" ->
+      crear_producto con { nombre: "Empanada de Carne", precio_unitario: 1500, precio_media_docena: 8000, precio_docena: 15000, categoria: "empanadas" }.
 - Fecha de referencia: ${referenceDateStr}.`;
 }
 

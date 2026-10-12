@@ -479,10 +479,12 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         const updated = await products.updateProduct(product.id, businessId, {
           priceUnit: input.precio_unitario,
           priceDozen: input.precio_docena,
+          priceHalfDozen: input.precio_media_docena,
         });
+        const halfText = updated.priceHalfDozen ? ` (Media docena: *${formatCurrency(Number(updated.priceHalfDozen))}*)` : '';
         const docenaText = updated.priceDozen ? ` (Docena: *${formatCurrency(Number(updated.priceDozen))}*)` : '';
         return {
-          reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.priceUnit))}*${docenaText}.`,
+          reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.priceUnit))}*${halfText}${docenaText}.`,
           audit: {
             action: 'product.price_updated',
             entityType: 'rotiseria_product',
@@ -691,14 +693,27 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
   const crearProducto: ActionDef<CrearProducto> = {
     name: 'crear_producto',
     description:
-      'Crea un nuevo producto en la rotisería. Datos: nombre, precio_unitario, precio_docena (opcional), categoria (opcional, ej. "empanadas", "pizzas", "sandwiches").',
+      'Crea un nuevo producto en la rotisería. Datos: nombre, precio_unitario, precio_media_docena (opcional), precio_docena (opcional), categoria (opcional, ej. "empanadas", "pizzas", "sandwiches").',
     kind: 'write',
     input: CrearProductoInput,
-    intro:
-      'Para crear un producto decime nombre y precio unitario. Ejemplo: *"Crear empanada de carne a 1500, docena 15000"*.',
+    intro: [
+      '📦 *Crear Comida o Producto*',
+      '',
+      'Mandá un mensaje o audio indicando el nombre y los precios.',
+      '',
+      '💡 *Tip de precios:*',
+      'Podés cargar:',
+      '• *Con 3 precios (unidad, media docena y docena):*',
+      '  👉 *"Empanada de Carne 1500, media docena 8000, docena 15000"*',
+      '• *Con 2 precios (unidad y docena):*',
+      '  👉 *"Empanada de Jamón y Queso 1500, docena 15000"*',
+      '  _(la media docena se liquidará por unidad automáticamente)_',
+      '• *Solo precio unitario:*',
+      '  👉 *"Pizza Muzzarella 8500"* o *"Sándwich de Milanesa 6500"*',
+    ].join('\n'),
     fieldPrompts: {
-      nombre: '¿Cómo se llama el producto?',
-      precio_unitario: '¿Precio unitario?',
+      nombre: '¿Cómo se llama el producto? (ej: "Empanada de Pollo" o "Pizza Especial")',
+      precio_unitario: '¿Precio unitario por unidad? (ej: "1500")',
     },
     summarize: (i) =>
       [
@@ -706,6 +721,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         '',
         `📦 *${esc(i.nombre)}*`,
         `• Precio unitario: *${formatCurrency(i.precio_unitario)}*`,
+        i.precio_media_docena ? `• Media docena: *${formatCurrency(i.precio_media_docena)}*` : '',
         i.precio_docena ? `• Precio docena: *${formatCurrency(i.precio_docena)}*` : '',
         `• Categoría: *${esc(i.categoria)}*`,
         '\n¿Confirmar creación?',
@@ -718,11 +734,15 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         name: input.nombre,
         priceUnit: input.precio_unitario,
         priceDozen: input.precio_docena,
+        priceHalfDozen: input.precio_media_docena,
         category: input.categoria,
       });
 
+      const halfStr = p.priceHalfDozen ? ` (media docena ${formatCurrency(Number(p.priceHalfDozen))})` : '';
+      const dozenStr = p.priceDozen ? ` (docena ${formatCurrency(Number(p.priceDozen))})` : '';
+
       return {
-        reply: `✅ Creado *${esc(p.name)}* a ${formatCurrency(Number(p.priceUnit))}${p.priceDozen ? ` (docena ${formatCurrency(Number(p.priceDozen))})` : ''}.`,
+        reply: `✅ Creado *${esc(p.name)}* a ${formatCurrency(Number(p.priceUnit))}${halfStr}${dozenStr}.`,
         audit: {
           action: 'product.created',
           entityType: 'rotiseria_product',
@@ -739,10 +759,19 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       'Crea una nueva promoción fija con precio cerrado. Datos: nombre, precio, descripcion (opcional).',
     kind: 'write',
     input: CrearPromoInput,
-    intro: 'Para crear una promo decime el nombre y precio. Ejemplo: *"Promo 1 a 16000: Muzza + 6 empanadas"*.',
+    intro: [
+      '🎁 *Crear Promoción*',
+      '',
+      'Mandá un mensaje o audio indicando el nombre de la promo, su precio y qué incluye.',
+      '',
+      '💡 *Tip de formato:*',
+      '• *"Promo 1 a 16000: Muzza + 6 empanadas de carne"*',
+      '• *"Promo Pareja 12000: 2 Sándwiches de Milanesa con papas"*',
+      '• O separando con barra: *"Promo 3 | 18500 | 1 Pizza Especial + 6 Empanadas"*',
+    ].join('\n'),
     fieldPrompts: {
-      nombre: '¿Cómo se llama la promo?',
-      precio: '¿Cuál es el precio de la promo?',
+      nombre: '¿Cómo se llama la promo? (ej: "Promo 1" o "Combo Familiar")',
+      precio: '¿Cuál es el precio total de la promo? (ej: "16000")',
     },
     summarize: (i) =>
       [
@@ -1038,6 +1067,23 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     description: 'Configura o actualiza en lote las zonas de envío, precios y barrios asociados.',
     kind: 'write',
     input: ConfigurarEnviosLoteInput,
+    summarize: (input) => {
+      if (!input.zonas || input.zonas.length === 0) {
+        return '⚠️ No pude detectar zonas ni precios válidos en el mensaje. Probá con: "Centro 1500, San Lorenzo 2500".';
+      }
+      const lines = input.zonas.map((z) => {
+        const precioStr = z.precio === 0 ? '¡GRATIS! ($0)' : `$ ${new Intl.NumberFormat('es-AR').format(z.precio)}`;
+        const barriosStr = z.barrios && z.barrios.length > 0 ? ` [${z.barrios.join(', ')}]` : '';
+        return `• *${z.nombre}*: *${precioStr}*${barriosStr}`;
+      });
+      return [
+        '🛵 *Zonas y tarifas detectadas:*',
+        '',
+        ...lines,
+        '',
+        '¿Confirmás guardar estas zonas?',
+      ].join('\n');
+    },
     handler: async (ctx, input) => {
       const updated = await deliveryZones.upsertBatch(
         ctx.tenant.business.id,
@@ -1127,6 +1173,18 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     description: 'Carga o actualiza en lote la lista de bebidas y sus precios.',
     kind: 'write',
     input: ConfigurarBebidasLoteInput,
+    intro: [
+      '🥤 *Carga de Bebidas*',
+      '',
+      'Mandá un audio o mensaje indicando marca, tamaño y precio.',
+      '',
+      '💡 *Tip de formato:*',
+      "Usá punto y 'L' para litros, o 'ml' para envases chicos:",
+      '• *"Coca-Cola 1.5L 3500"*',
+      '• *"Sprite 2.25L 4200"*',
+      '• *"Agua 500ml 1800"*',
+      '• *"Cerveza Quilmes 1L 4000"*',
+    ].join('\n'),
     handler: async (ctx, input) => {
       const updated = await products.upsertBatchBebidas(
         ctx.tenant.business.id,
