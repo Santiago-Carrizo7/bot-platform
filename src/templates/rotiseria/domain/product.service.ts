@@ -4,6 +4,35 @@ import type { CatalogLookup } from './pricing.js';
 import { ProductRepository, type ProductListOptions } from '../persistence/product.repo.js';
 import type { CreateProductData, CreatePromoData, UpdateProductData, UpdatePromoData } from '../types.js';
 
+export function normalizeDrinkName(raw: string): string {
+  let name = raw.trim();
+
+  // Mapear marcas y nombres coloquiales
+  name = name.replace(/\bcoca\s*cola\b/gi, 'Coca-Cola');
+  name = name.replace(/\bcoca\b/gi, 'Coca-Cola');
+  name = name.replace(/\bpepsi\b/gi, 'Pepsi');
+  name = name.replace(/\bsprite\b/gi, 'Sprite');
+  name = name.replace(/\bfanta\b/gi, 'Fanta');
+  name = name.replace(/\bseven\s*up\b|\b7up\b/gi, '7Up');
+  name = name.replace(/\bquilmes\b/gi, 'Cerveza Quilmes');
+  name = name.replace(/\bbrahma\b/gi, 'Cerveza Brahma');
+  name = name.replace(/\bheineken\b/gi, 'Cerveza Heineken');
+  name = name.replace(/\bcervesa\b/gi, 'Cerveza');
+  name = name.replace(/\bcerveza\s+cerveza\b/gi, 'Cerveza');
+
+  // Mapear tamaños coloquiales a formatos estándar
+  name = name.replace(/\b(?:litro\s+y\s+medio|de\s+litro\s+y\s+medio|1\s+y\s+medio|1,5\s*l(?:itros?)?|1\.5\s*l(?:itros?)?)\b/gi, '1.5L');
+  name = name.replace(/\b(?:dos\s+litros|de\s+dos\s+litros|2\s*l(?:itros?)?)\b/gi, '2L');
+  name = name.replace(/\b(?:un\s+litro|de\s+un\s+litro|1\s*l(?:itro)?)\b/gi, '1L');
+  name = name.replace(/\b(?:medio\s+litro|de\s+medio\s+litro|500\s*ml|500)\b/gi, '500ml');
+  name = name.replace(/\blatas?\b/gi, 'Lata');
+
+  // Si dice "grande" o "chica"
+  name = name.replace(/\bchica\b/gi, '500ml');
+
+  return name.trim().replace(/\s+/g, ' ');
+}
+
 export class ProductService {
   constructor(private readonly repo: ProductRepository) {}
 
@@ -37,6 +66,36 @@ export class ProductService {
       throw new AppError('Producto no encontrado.');
     }
     return this.repo.deactivateProduct(id);
+  }
+
+  async upsertBatchBebidas(
+    businessId: string,
+    bebidas: Array<{ nombre: string; precio: number }>
+  ): Promise<RotiseriaProduct[]> {
+    const results: RotiseriaProduct[] = [];
+    for (const b of bebidas) {
+      const normalizedName = normalizeDrinkName(b.nombre);
+      const existing = await this.repo.findProductByName(businessId, normalizedName);
+      if (existing) {
+        const updated = await this.repo.updateProduct(existing.id, businessId, {
+          name: normalizedName,
+          priceUnit: b.precio,
+          priceDozen: null,
+          category: 'bebidas',
+        });
+        results.push(updated);
+      } else {
+        const created = await this.repo.createProduct({
+          businessId,
+          name: normalizedName,
+          priceUnit: b.precio,
+          priceDozen: undefined,
+          category: 'bebidas',
+        });
+        results.push(created);
+      }
+    }
+    return results;
   }
 
   async listProducts(businessId: string, options: ProductListOptions = {}): Promise<RotiseriaProduct[]> {
@@ -140,6 +199,13 @@ export class ProductService {
         // 1. Coincidencia exacta
         const exact = products.find((p) => normalize(p.name) === needle);
         if (exact) return exact;
+
+        // 1b. Coincidencia con normalización de bebidas (ej: "coca de litro y medio" -> "Coca-Cola 1.5L")
+        const normDrink = normalizeDrinkName(name);
+        if (normDrink) {
+          const matchDrink = products.find((p) => normalize(p.name) === normalize(normDrink));
+          if (matchDrink) return matchDrink;
+        }
 
         // 2. Coincidencia limpia idéntica (ej. "1 de carne" o "carne" -> "Empanada de Carne" si cleanNeedle es idéntico)
         const cleaned = cleanNeedle(name);

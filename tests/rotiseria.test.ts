@@ -10,15 +10,15 @@ import { handleCallback, handleText, type FlowDeps, type ResolutionInfo } from '
 import type { ActionDef } from '../src/core/actions/registry.js';
 import type { ActionInterpreter } from '../src/core/ai/interpreter.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
-import { ProductService } from '../src/templates/rotiseria/domain/product.service.js';
+import { ProductService, normalizeDrinkName } from '../src/templates/rotiseria/domain/product.service.js';
 import { SaleService } from '../src/templates/rotiseria/domain/sale.service.js';
 import { StatsService } from '../src/templates/rotiseria/domain/stats.service.js';
 import { DeliveryZoneService } from '../src/templates/rotiseria/domain/delivery-zone.service.js';
 import { getShiftDate, formatShiftLabel } from '../src/templates/rotiseria/domain/shift.js';
-import { formatRealDateWithDay } from '../src/templates/rotiseria/format.js';
+import { formatRealDateWithDay, esc } from '../src/templates/rotiseria/format.js';
 import { applyModification, parseModificationText } from '../src/templates/rotiseria/domain/modification.js';
 import { calculatePricing } from '../src/templates/rotiseria/domain/pricing.js';
-import { createRotiseriaTemplate } from '../src/templates/rotiseria/index.js';
+import { createRotiseriaTemplate, parseBebidasBatchText } from '../src/templates/rotiseria/index.js';
 import type { ProductRepository } from '../src/templates/rotiseria/persistence/product.repo.js';
 import type { SaleRepository, RotiseriaSaleWithItems } from '../src/templates/rotiseria/persistence/sale.repo.js';
 import type { DeliveryZoneRepository } from '../src/templates/rotiseria/persistence/delivery-zone.repo.js';
@@ -1378,6 +1378,7 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       { command: 'comida', description: '➕ Crear comida' },
       { command: 'precio', description: '🏷️ Modificar precios de la carta' },
       { command: 'envios', description: '🛵 Envíos a domicilio y tarifas' },
+      { command: 'bebidas', description: '🥤 Bebidas y refrescos' },
       { command: 'dias', description: '📅 Control de días recientes' },
       { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
       { command: 'ventas', description: '🧾 Últimas ventas registradas' },
@@ -1394,6 +1395,7 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       'anular_venta',
       'cambiar_precio',
       'gestionar_envios',
+      'gestionar_bebidas',
       'consultar_carta',
       'consultar_ventas',
       'crear_producto',
@@ -2717,6 +2719,155 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       const conv2 = await f.conversations.get(BIZ, ACTOR);
       expect(conv2?.phase).toBe('CONFIRMING');
       expect(conv2?.data?.items).toEqual([{ nombre: 'Empanada de Pollo', cantidad: 12 }]);
+    });
+
+    it('configurar_bebidas_lote: parseo de lote y persistencia de bebidas con categoría y sin precio docena', async () => {
+      const { products } = setupServices();
+      const rawText = 'Coca 1.5L 3500, Sprite 1.5L - 3500, Cerveza Quilmes 1L a 4000, Agua 500ml 1500';
+      const parsed = parseBebidasBatchText(rawText);
+      expect(parsed).toEqual([
+        { nombre: 'Coca 1.5L', precio: 3500 },
+        { nombre: 'Sprite 1.5L', precio: 3500 },
+        { nombre: 'Cerveza Quilmes 1L', precio: 4000 },
+        { nombre: 'Agua 500ml', precio: 1500 },
+      ]);
+
+      const upserted = await products.upsertBatchBebidas(BIZ, parsed);
+      expect(upserted).toHaveLength(4);
+      expect(upserted.every((b) => b.category === 'bebidas')).toBe(true);
+      expect(upserted.every((b) => b.priceDozen === null || b.priceDozen === undefined)).toBe(true);
+      expect(upserted.map((b) => b.name)).toEqual([
+        'Coca-Cola 1.5L',
+        'Sprite 1.5L',
+        'Cerveza Quilmes 1L',
+        'Agua 500ml',
+      ]);
+
+      const activeDrinks = await products.listProducts(BIZ, { category: 'bebidas' });
+      expect(activeDrinks).toHaveLength(4);
+    });
+
+    it('comanda con comidas y bebidas: docena para empanadas y precio unitario para bebidas sin agrupar', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000, category: 'empanadas' });
+      await products.createProduct({ businessId: BIZ, name: 'Coca-Cola 1.5L', priceUnit: 3500, category: 'bebidas' });
+
+      const catalog = await products.getCatalogLookup(BIZ);
+      const pricing = calculatePricing(
+        [
+          { name: 'Empanada de Carne', quantity: 12 },
+          { name: 'Coca-Cola 1.5L', quantity: 2 },
+        ],
+        catalog
+      );
+
+      // 1 docena carne ($15.000) + 2x Coca-Cola ($7.000) = $22.000
+      expect(pricing.total).toBe(22000);
+      expect(pricing.breakdown).toContain('• 1x Docena (12 Empanada de Carne) — *$ 15.000*');
+      expect(pricing.breakdown).toContain(`• 2x *${esc('Coca-Cola 1.5L')}* — *$ 7.000*`);
+
+      // Si se piden 12 bebidas solas, NO se agrupan en docenas
+      const pricingDrinks = calculatePricing(
+        [{ name: 'Coca-Cola 1.5L', quantity: 12 }],
+        catalog
+      );
+      expect(pricingDrinks.total).toBe(42000);
+      expect(pricingDrinks.breakdown[0]).toContain(`12x *${esc('Coca-Cola 1.5L')}* — *$ 42.000*`);
+      expect(pricingDrinks.breakdown[0]).not.toContain('Docena');
+    });
+
+    it('desactivación interactiva de zona y bebida: OWNER permite y desactiva, EMPLOYEE bloquea con error', async () => {
+      const f = setupFlow([]);
+      const zone = await f.deliveryZones.createZone({ businessId: BIZ, name: 'Centro', price: 1500 });
+      const drink = await f.products.createProduct({ businessId: BIZ, name: 'Sprite 1.5L', priceUnit: 3500, category: 'bebidas' });
+
+      // 1. Con rol EMPLOYEE: intentar desactivar zona y bebida -> bloqueado
+      f.resolution.tenant.membership.role = 'EMPLOYEE';
+
+      const resZoneEmp = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: `rotiseria:zona_deactivate:${zone.id}`,
+        now: NOW,
+      });
+      expect(resZoneEmp.text).toContain('Solo el dueño del negocio puede desactivar zonas');
+
+      const resDrinkEmp = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: `rotiseria:bebida_deactivate:${drink.id}`,
+        now: NOW,
+      });
+      expect(resDrinkEmp.text).toContain('Solo el dueño del negocio puede eliminar o desactivar bebidas');
+
+      expect((await f.deliveryZones.listActive(BIZ))).toHaveLength(1);
+      expect((await f.products.listProducts(BIZ, { category: 'bebidas' }))).toHaveLength(1);
+
+      // 2. Con rol OWNER: desactiva correctamente
+      f.resolution.tenant.membership.role = 'OWNER';
+
+      const resZoneOwner = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: `rotiseria:zona_deactivate:${zone.id}`,
+        now: NOW,
+      });
+      expect(resZoneOwner.text).toContain('eliminada correctamente');
+      expect(await f.deliveryZones.listActive(BIZ)).toHaveLength(0);
+
+      const resDrinkOwner = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: `rotiseria:bebida_deactivate:${drink.id}`,
+        now: NOW,
+      });
+      expect(resDrinkOwner.text).toContain('eliminada correctamente');
+      expect(await f.products.listProducts(BIZ, { category: 'bebidas' })).toHaveLength(0);
+    });
+
+    it('callback rotiseria:quitar_linea elimina ítem del borrador y recalcula total', async () => {
+      const f = setupFlow([]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await f.products.createProduct({ businessId: BIZ, name: 'Coca-Cola 1.5L', priceUnit: 3500, category: 'bebidas' });
+
+      // Cargar borrador en CONFIRMING con 2 ítems
+      await f.conversations.upsert({
+        businessId: BIZ,
+        userId: ACTOR,
+        phase: 'CONFIRMING',
+        actionName: 'registrar_venta',
+        data: {
+          items: [
+            { nombre: 'Empanada de Carne', cantidad: 12 },
+            { nombre: 'Coca-Cola 1.5L', cantidad: 2 },
+          ],
+        },
+        expiresAt: new Date(NOW.getTime() + 10 * 60_000),
+        updatedAt: NOW,
+      });
+
+      // Quitar la línea 1 (Coca-Cola 1.5L)
+      const res = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:quitar_linea:1',
+        now: NOW,
+      });
+
+      expect(res.text).toContain('Empanada de Carne');
+      expect(res.text).not.toContain('Coca-Cola 1.5L');
+      expect(res.text).toContain('$ 15.000');
+      expect(res.text).not.toContain('$ 22.000');
+
+      const conv = await f.conversations.get(BIZ, ACTOR);
+      expect(conv?.phase).toBe('CONFIRMING');
+      expect(conv?.data?.items).toEqual([{ nombre: 'Empanada de Carne', cantidad: 12, precio_unitario: undefined }]);
+
+      // Quitar la línea 0 restante -> se cancela el borrador
+      const resEmpty = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:quitar_linea:0',
+        now: NOW,
+      });
+
+      expect(resEmpty.text).toContain('Pedido cancelado al haberse quitado todos los productos');
+      const convEmpty = await f.conversations.get(BIZ, ACTOR);
+      expect(convEmpty).toBeNull();
     });
   });
 });

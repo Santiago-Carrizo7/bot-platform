@@ -79,6 +79,20 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
   • "Vendí una docena: 1 de carne, 5 de pollo, 6 de queso" ->
     items: [{ nombre: "Empanada de Carne", cantidad: 1 }, { nombre: "Empanada de Pollo", cantidad: 5 }, { nombre: "Empanada de Queso", cantidad: 6 }].
   • El importe total lo calcula automáticamente el sistema según precios unitarios y de docena. Vos NUNCA inventes ni calcules el total.
+- BEBIDAS Y REFRESCOS:
+  • Mapear tamaños coloquiales al nombre estándar de catálogo:
+    - "litro y medio" / "de litro y medio" / "1 y medio" -> "1.5L"
+    - "dos litros" / "de dos litros" -> "2L"
+    - "un litro" / "de un litro" -> "1L"
+    - "chica" / "medio litro" / "500" / "500ml" -> "500ml"
+    - "lata" -> "Lata"
+    - "grande" -> "2L" o "1.5L" (según lo que figure en catálogo)
+  • PROHIBICIÓN ESTRICTA: Las bebidas NUNCA participan del cálculo de docenas; siempre se cobran por unidad individual a su precio unitario.
+  • Few-shot obligatorio:
+    - "Una docena de carne y dos cocas de litro y medio" ->
+      registrar_venta con items: [{ nombre: "Empanada de Carne", cantidad: 12 }, { nombre: "Coca-Cola 1.5L", cantidad: 2 }].
+    - "Tres empanadas de pollo, una cerveza de litro y una fanta 1.5L" ->
+      registrar_venta con items: [{ nombre: "Empanada de Pollo", cantidad: 3 }, { nombre: "Cerveza Quilmes 1L", cantidad: 1 }, { nombre: "Fanta 1.5L", cantidad: 1 }].
 - FLETE Y ENVÍOS A DOMICILIO (PROHIBIDO PARSEAR COMO COMIDA):
   • "envío", "flete", "cadete", "cadetería", "delivery" NUNCA son comidas ni productos del catálogo. NUNCA los agregues a "items" ni a "no_reconocidos" como comida.
   • Si el pedido menciona una zona o barrio que figura en las zonas de envío de HINTS (ej: "con envío a Tres Cerritos", "para Barrio Grand Bourg"):
@@ -103,6 +117,8 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
   • Estadísticas ("estadísticas", "cómo venimos", "más vendidos", "resumen semanal") -> consultar_estadisticas.
   • Cambiar precio ("subir la docena a...", "cambiar precio de...") -> cambiar_precio.
   • Menú ("ver menú", "precios", "carta") -> consultar_menu.
+  • Bebidas ("bebidas", "ver bebidas", "refrescos", "carta de bebidas") -> gestionar_bebidas.
+  • Configurar bebidas en lote ("cargar bebidas en lote", "actualizar bebidas", ej: "Coca 1.5L 3500, Fanta 1.5L 3500") -> configurar_bebidas_lote con { bebidas: [{ nombre, precio }] }.
   • Zonas de envío y flete ("ver envíos", "zonas de entrega", "tarifas de flete", "fletes", "costos de envío") -> gestionar_envios.
   • Configurar envíos en lote ("configurar zonas de envío", "actualizar fletes en lote", o audio/texto agrupando barrios por precio) -> configurar_envios_lote con { zonas: [{ nombre, precio, barrios }] }.
     Ejemplos de carga en lote de zonas:

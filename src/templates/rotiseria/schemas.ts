@@ -165,3 +165,20 @@ export const GestionarEnviosInput = z.object({
 });
 export type GestionarEnviosInput = z.infer<typeof GestionarEnviosInput>;
 
+export const BebidaLoteItemSchema = z.object({
+  nombre: z.string().trim().min(1, 'El nombre de la bebida es obligatorio'),
+  precio: z.number().positive('El precio debe ser mayor a 0'),
+});
+export type BebidaLoteItemSchema = z.infer<typeof BebidaLoteItemSchema>;
+
+export const ConfigurarBebidasLoteInput = z.object({
+  bebidas: z.array(BebidaLoteItemSchema).min(1, 'Debe incluir al menos una bebida'),
+});
+export type ConfigurarBebidasLoteInput = z.infer<typeof ConfigurarBebidasLoteInput>;
+
+export const GestionarBebidasInput = z.object({
+  product_id: z.string().trim().optional(),
+  nuevo_precio: z.number().positive().optional(),
+});
+export type GestionarBebidasInput = z.infer<typeof GestionarBebidasInput>;
+

@@ -16,6 +16,8 @@ import {
   GestionarEnviosInput,
   HistorialVentasInput,
   RegistrarVentaInput,
+  ConfigurarBebidasLoteInput,
+  GestionarBebidasInput,
   type AnularVentaInput as AnularVenta,
   type CambiarPrecioInput as CambiarPrecio,
   type ConfigurarEnviosLoteInput as ConfigurarEnviosLote,
@@ -29,6 +31,8 @@ import {
   type GestionarEnviosInput as GestionarEnvios,
   type HistorialVentasInput as HistorialVentas,
   type RegistrarVentaInput as RegistrarVenta,
+  type ConfigurarBebidasLoteInput as ConfigurarBebidasLote,
+  type GestionarBebidasInput as GestionarBebidas,
 } from './schemas.js';
 import {
   esc,
@@ -116,6 +120,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       }
 
       // Si hay ítems no catalogados con precio $0, ofrecer botón para asignar precio por índice
+      // y botón de un toque para quitar la línea errónea
       if (
         Array.isArray(input._uncataloguedZeroItems) &&
         input._uncataloguedZeroItems.length > 0 &&
@@ -132,9 +137,26 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
                 text: `💵 Asignar precio a '${uncat.name.slice(0, 20)}'`,
                 callbackData: `rotiseria:precio_item:${idx}`,
               },
+              {
+                text: `❌ Quitar '${uncat.name.slice(0, 16)}'`,
+                callbackData: `rotiseria:quitar_linea:${idx}`,
+              },
             ]);
           }
         }
+      }
+
+      // Si está en modo modificación, ofrecer botón rápido para quitar cada ítem del borrador
+      if (input._modifying && Array.isArray(input.items) && input.items.length > 0) {
+        input.items.forEach((it: any, idx: number) => {
+          const itName = String(it.nombre ?? it.name);
+          rows.push([
+            {
+              text: `❌ Quitar ${itName.slice(0, 22)}`,
+              callbackData: `rotiseria:quitar_linea:${idx}`,
+            },
+          ]);
+        });
       }
 
       const hasItems = Array.isArray(input.items) && input.items.length > 0;
@@ -968,6 +990,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
         inlineKeyboard: [
           [{ text: '➕ Cargar por lote (audio/texto)', callbackData: 'rotiseria:envios_lote_guia' }],
           [{ text: '🏷️ Cambiar precio de una zona', callbackData: 'rotiseria:envios_cambiar_precio' }],
+          [{ text: '🗑️ Eliminar zona', callbackData: 'rotiseria:zonas_listar_borrar' }],
           [{ text: '📊 Zonas con más movimiento', callbackData: 'rotiseria:envios_stats' }],
         ],
       };
@@ -1010,6 +1033,92 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     },
   };
 
+  const gestionarBebidas: ActionDef<GestionarBebidas> = {
+    name: 'gestionar_bebidas',
+    description: '🥤 Bebidas disponibles y gestión de precios / carta de bebidas.',
+    kind: 'read',
+    input: GestionarBebidasInput,
+    handler: async (ctx, input) => {
+      const businessId = ctx.tenant.business.id;
+
+      if (input.product_id && input.nuevo_precio !== undefined) {
+        const prod = await products.findProductById(input.product_id, businessId);
+        if (!prod) {
+          throw new AppError('Bebida no encontrada.');
+        }
+        const updated = await products.updateProduct(prod.id, businessId, {
+          priceUnit: input.nuevo_precio,
+        });
+        return {
+          reply: `✅ Precio de *${esc(updated.name)}* actualizado a *${formatCurrency(Number(updated.priceUnit))}*.`,
+          audit: {
+            action: 'drink.price_updated',
+            entityType: 'rotiseria_product',
+            entityId: updated.id,
+            metadata: { name: updated.name, price: Number(updated.priceUnit) },
+          },
+          inlineKeyboard: [
+            [{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }],
+          ],
+        };
+      }
+
+      const drinks = await products.listProducts(businessId, { category: 'bebidas', limit: 100 });
+      const lines: string[] = ['🥤 *Bebidas Disponibles:*', ''];
+
+      if (drinks.length === 0) {
+        lines.push('Todavía no tenés bebidas cargadas.');
+        lines.push('Podés cargarlas rápidamente escribiendo o mandando un audio (ej: *"Coca 1.5L 3500, Fanta 1.5L 3500, Cerveza 1L 4000"*).');
+      } else {
+        for (const d of drinks) {
+          lines.push(`• *${esc(d.name)}* — *${formatCurrency(Number(d.priceUnit))}*`);
+        }
+      }
+
+      return {
+        reply: lines.join('\n'),
+        inlineKeyboard: [
+          [{ text: '➕ Cargar bebidas por lote', callbackData: 'rotiseria:bebidas_lote' }],
+          [{ text: '💵 Modificar precio', callbackData: 'rotiseria:bebidas_precio' }],
+          [{ text: '🗑️ Eliminar / Desactivar bebida', callbackData: 'rotiseria:bebidas_borrar' }],
+        ],
+      };
+    },
+  };
+
+  const configurarBebidasLote: ActionDef<ConfigurarBebidasLote> = {
+    name: 'configurar_bebidas_lote',
+    description: 'Carga o actualiza en lote la lista de bebidas y sus precios.',
+    kind: 'write',
+    input: ConfigurarBebidasLoteInput,
+    handler: async (ctx, input) => {
+      const updated = await products.upsertBatchBebidas(
+        ctx.tenant.business.id,
+        input.bebidas.map((b) => ({
+          nombre: b.nombre,
+          precio: b.precio,
+        }))
+      );
+
+      const lines = [
+        `✅ *Se configuraron ${updated.length} bebidas:*`,
+        '',
+      ];
+      for (const b of updated) {
+        lines.push(`• *${esc(b.name)}*: *${formatCurrency(Number(b.priceUnit))}*`);
+      }
+
+      return {
+        reply: lines.join('\n'),
+        audit: {
+          action: 'drink.batch_configured',
+          entityType: 'rotiseria_product',
+          metadata: { count: updated.length },
+        },
+      };
+    },
+  };
+
   return [
     registrarVenta,
     controlDias,
@@ -1026,6 +1135,8 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     consultarVentas,
     gestionarEnvios,
     configurarEnviosLote,
+    gestionarBebidas,
+    configurarBebidasLote,
   ] as unknown as ActionDef<unknown>[];
 }
 

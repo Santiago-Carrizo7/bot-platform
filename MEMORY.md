@@ -26,8 +26,10 @@
   anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas descartando alturas de calle;
   matcher por sabor raíz y variantes carne vacuna; prompts con alcance estricto de docenas y extracción exhaustiva;
   reset de borrador congelado en `CONFIRMING` ante nueva comanda si no está activo `_awaitingModification`;
-  `parseModificationText` con soporte para números en palabras, docenas y limpieza de muletillas/warnings viejos.
-- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`).
+  `parseModificationText` con números en palabras, docenas y limpieza de muletillas/warnings viejos;
+  módulo de bebidas (`/bebidas`) en `rotiseria_products` (`category: 'bebidas'`, `priceDozen: null`, normalización de tamaños estándar, nunca participa de docenas);
+  desactivación interactiva de zonas y bebidas restringida al rol `OWNER`; botones inline `rotiseria:quitar_linea:<idx>` para remover ítems y recalcular en caliente.
+- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`) + botones para quitar ítems en modificación o con precio $0.
 
 - IA en cascada (`FallbackAIProvider`): Groq (Llama 3.3) -> OpenRouter -> Gemini.
 

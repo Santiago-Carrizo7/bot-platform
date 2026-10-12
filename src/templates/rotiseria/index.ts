@@ -100,6 +100,46 @@ export function parseDeliveryZonesBatchText(
   return result;
 }
 
+export function parseBebidasBatchText(
+  text: string
+): Array<{ nombre: string; precio: number }> {
+  const chunks = text.includes('\n')
+    ? text.split('\n')
+    : text.includes(';')
+    ? text.split(';')
+    : text.includes(',')
+    ? text.split(',')
+    : [text];
+  const lines = chunks.map((l) => l.trim()).filter(Boolean);
+  const result: Array<{ nombre: string; precio: number }> = [];
+
+  for (const line of lines) {
+    // 1. Patrón con separador colon o guión o "a": "Coca 1.5L : 3500", "Fanta 1.5L - 3500", "Cerveza 1L a 4000"
+    const m = line.match(/^([^:\-]+?)\s*(?:[:\-]|(?:\s+a\s+))\s*(?:[\$\s]*)(\d+(?:[.,]\d+)?)$/i);
+    if (m) {
+      const nombre = m[1].trim();
+      const precio = parseFloat(m[2].replace(',', '.'));
+      if (nombre && !isNaN(precio) && precio > 0) {
+        result.push({ nombre, precio });
+        continue;
+      }
+    }
+
+    // 2. Patrón de espacio antes del número: "Coca 1.5L 3500", "Agua 500ml 1500"
+    const m2 = line.match(/^(.*?)\s+(?:[\$\s]*)(\d+(?:[.,]\d+)?)$/);
+    if (m2) {
+      const nombre = m2[1].trim();
+      const precio = parseFloat(m2[2].replace(',', '.'));
+      if (nombre && !isNaN(precio) && precio > 0) {
+        result.push({ nombre, precio });
+        continue;
+      }
+    }
+  }
+
+  return result;
+}
+
 export interface RotiseriaTemplateDeps {
   db: PrismaClient;
   products?: ProductService;
@@ -126,6 +166,7 @@ const COMMANDS: CommandDef[] = [
   { command: 'stats', description: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
   { command: 'menu', description: '✨ Funcionalidades disponibles', action: 'mostrar_menu', reply: ROTISERIA_MENU_HELP_TEXT },
   { command: 'producto', description: '➕ Crear comida', action: 'crear_producto' },
+  { command: 'bebidas', description: '🥤 Bebidas y refrescos', action: 'gestionar_bebidas' },
 ];
 
 export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaTemplateBundle {
@@ -417,6 +458,32 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         }
       }
 
+      // Carga de bebidas en lote
+      if (activeActionName === 'configurar_bebidas_lote') {
+        const parsedBebidas = parseBebidasBatchText(trimmed);
+        if (parsedBebidas.length > 0) {
+          return {
+            actionName: 'configurar_bebidas_lote',
+            params: { bebidas: parsedBebidas },
+          };
+        }
+      }
+
+      // Ingreso de nuevo precio para una bebida
+      if (activeActionName === 'gestionar_bebidas' && activeData?._awaitingDrinkPriceId) {
+        const cleanNum = trimmed.replace(/[^0-9.,]/g, '').replace(',', '.');
+        const parsed = parseFloat(cleanNum);
+        if (!isNaN(parsed) && parsed > 0) {
+          return {
+            actionName: 'gestionar_bebidas',
+            params: {
+              product_id: String(activeData._awaitingDrinkPriceId),
+              nuevo_precio: parsed,
+            },
+          };
+        }
+      }
+
       // Ingreso de nuevo precio para una zona de envío
       if (activeActionName === 'gestionar_envios' && activeData?._awaitingZonePriceId) {
         const lower = trimmed.toLowerCase();
@@ -520,6 +587,12 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       if (trimmed.toLowerCase() === 'carta' || trimmed.toLowerCase() === '/carta') {
         return { actionName: 'consultar_carta', params: {} };
       }
+      if (trimmed.toLowerCase() === 'bebidas' || trimmed.toLowerCase() === '/bebidas') {
+        return { actionName: 'gestionar_bebidas', params: {} };
+      }
+      if (trimmed.toLowerCase() === 'envios' || trimmed.toLowerCase() === '/envios') {
+        return { actionName: 'gestionar_envios', params: {} };
+      }
 
       return null;
     },
@@ -539,6 +612,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       { label: '↩️ Anular última venta', action: 'anular_venta' },
       { label: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
       { label: '🛵 Envíos', action: 'gestionar_envios' },
+      { label: '🥤 Bebidas', action: 'gestionar_bebidas' },
       { label: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
       { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
       { label: '➕ Crear comida', action: 'crear_producto' },
@@ -549,6 +623,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       { command: 'comida', description: '➕ Crear comida' },
       { command: 'precio', description: '🏷️ Modificar precios de la carta' },
       { command: 'envios', description: '🛵 Envíos a domicilio y tarifas' },
+      { command: 'bebidas', description: '🥤 Bebidas y refrescos' },
       { command: 'dias', description: '📅 Control de días recientes' },
       { command: 'estadisticas', description: '📈 Estadísticas de ventas' },
       { command: 'ventas', description: '🧾 Últimas ventas registradas' },
@@ -603,9 +678,25 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
             updatedAt: ctx.now,
           });
         }
+
+        const modifyButtons: InlineButton[][] = [];
+        if (items.length > 0) {
+          items.forEach((it: any, idx: number) => {
+            const itName = String(it.nombre ?? it.name);
+            modifyButtons.push([
+              {
+                text: `❌ Quitar ${itName.slice(0, 22)}`,
+                callbackData: `rotiseria:quitar_linea:${idx}`,
+              },
+            ]);
+          });
+        }
+        modifyButtons.push([{ text: '↩️ Volver al pedido', callbackData: 'rotiseria:volver_confirm' }]);
+
         return {
           text: `${cleanSummary}\n\n¿Qué modificamos o agregamos? Podés sumar productos, cambiar cantidades o sacar ítems (ej: *"sacá la pizza"* o *"cambiá las 12 de carne por pollo"*).`,
           parseMode: 'Markdown',
+          inlineKeyboard: modifyButtons,
         };
       }
 
@@ -2119,8 +2210,336 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           inlineKeyboard: [
             [{ text: '➕ Cargar por lote (audio/texto)', callbackData: 'rotiseria:envios_lote_guia' }],
             [{ text: '🏷️ Cambiar precio de una zona', callbackData: 'rotiseria:envios_cambiar_precio' }],
+            [{ text: '🗑️ Eliminar zona', callbackData: 'rotiseria:zonas_listar_borrar' }],
             [{ text: '📊 Zonas con más movimiento', callbackData: 'rotiseria:envios_stats' }],
           ],
+        };
+      }
+
+      // 47. Quitar ítem del pedido en borrador (CONFIRMING o COLLECTING)
+      if (data.startsWith('rotiseria:quitar_linea:')) {
+        const itemIdx = parseInt(data.slice('rotiseria:quitar_linea:'.length), 10);
+        const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
+        const currentItems: Array<{ nombre: string; cantidad: number; precio_unitario?: number }> = Array.isArray(currentData.items)
+          ? currentData.items.map((it: any) => ({
+              nombre: String(it.nombre ?? it.name),
+              cantidad: Number(it.cantidad ?? it.quantity),
+              precio_unitario: it.precio_unitario !== undefined && it.precio_unitario !== null ? Number(it.precio_unitario) : undefined,
+            }))
+          : [];
+
+        if (itemIdx >= 0 && itemIdx < currentItems.length) {
+          currentItems.splice(itemIdx, 1);
+        }
+
+        if (currentItems.length === 0) {
+          if (conversations) {
+            await conversations.clear(ctx.tenant.business.id, ctx.actorUserId);
+          }
+          return {
+            text: '❌ Pedido cancelado al haberse quitado todos los productos.',
+            parseMode: 'Markdown',
+          };
+        }
+
+        let breakdown: string[] | undefined;
+        let total: number | undefined;
+        let foodTotal: number | undefined;
+        let deliveryFee: number | null | undefined = currentData.flete_monto as number | undefined;
+        let deliveryZoneName: string | null | undefined = currentData.zona_envio as string | undefined;
+
+        try {
+          const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+          const pricing = calculatePricing(
+            currentItems.map((it) => ({ name: it.nombre, quantity: it.cantidad, unitPrice: it.precio_unitario })),
+            catalog,
+            deliveryFee !== undefined && deliveryFee !== null ? { fee: deliveryFee, zoneName: deliveryZoneName } : undefined
+          );
+          breakdown = pricing.breakdown;
+          total = pricing.total;
+          foodTotal = pricing.foodTotal;
+          deliveryFee = pricing.deliveryFee;
+          deliveryZoneName = pricing.deliveryZoneName;
+        } catch {
+          // fallback
+        }
+
+        const updatedData: Record<string, unknown> = {
+          ...currentData,
+          items: currentItems,
+          _modifying: true,
+          _awaitingModification: false,
+          _uncataloguedZeroItems: undefined,
+        };
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'CONFIRMING',
+            actionName: 'registrar_venta',
+            data: updatedData,
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+
+        const summaryText = formatSaleSummary({
+          items: currentItems,
+          nota: updatedData.nota as string | undefined,
+          fecha: updatedData.fecha as string | undefined,
+          breakdown,
+          total,
+          foodTotal,
+          deliveryFee,
+          deliveryZoneName,
+          zonaNoReconocida: updatedData.zona_no_reconocida as string | undefined,
+          isModifying: true,
+          now: ctx.now,
+          timezone: ctx.tenant.business.timezone,
+        });
+
+        const actionReg = template.actions.find((a) => a.name === 'registrar_venta');
+        const keyboard = actionReg?.confirmButtons ? actionReg.confirmButtons(updatedData) : undefined;
+
+        return {
+          text: summaryText,
+          parseMode: 'Markdown',
+          inlineKeyboard: keyboard,
+        };
+      }
+
+      // 48. Eliminar / Desactivar zona de envío (Listado de zonas a borrar)
+      if (data === 'rotiseria:zonas_listar_borrar') {
+        if (ctx.tenant.membership.role !== 'OWNER') {
+          return {
+            text: '⛔ Solo el dueño del negocio puede desactivar zonas de envío.',
+            parseMode: 'Markdown',
+          };
+        }
+        const zones = await deliveryZones.listActive(ctx.tenant.business.id);
+        if (zones.length === 0) {
+          return {
+            text: 'No hay zonas de envío activas para eliminar.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [[{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]],
+          };
+        }
+        const rows: InlineButton[][] = [];
+        for (const z of zones) {
+          rows.push([
+            {
+              text: `❌ Borrar ${z.name.slice(0, 24)}`,
+              callbackData: `rotiseria:zona_deactivate:${z.id}`,
+            },
+          ]);
+        }
+        rows.push([{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]);
+
+        return {
+          text: '🗑️ *Seleccioná la zona que querés eliminar:*',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 49. Confirmar desactivación de zona
+      if (data.startsWith('rotiseria:zona_deactivate:')) {
+        if (ctx.tenant.membership.role !== 'OWNER') {
+          return {
+            text: '⛔ Solo el dueño del negocio puede desactivar zonas de envío.',
+            parseMode: 'Markdown',
+          };
+        }
+        const zoneId = data.slice('rotiseria:zona_deactivate:'.length);
+        const deactivated = await deliveryZones.deactivate(zoneId, ctx.tenant.business.id);
+        if (audit) {
+          await audit.log({
+            businessId: ctx.tenant.business.id,
+            actorUserId: ctx.actorUserId,
+            action: 'delivery_zone.deactivated',
+            entityType: 'rotiseria_delivery_zone',
+            entityId: deactivated.id,
+            metadata: { name: deactivated.name },
+          });
+        }
+        return {
+          text: `✅ Zona '${esc(deactivated.name)}' eliminada correctamente.`,
+          parseMode: 'Markdown',
+          inlineKeyboard: [[{ text: '↩️ Volver a Envíos', callbackData: 'rotiseria:envios_menu' }]],
+        };
+      }
+
+      // 50. Menú principal de Bebidas
+      if (data === 'rotiseria:bebidas_menu') {
+        if (conversations) {
+          await conversations.clear(ctx.tenant.business.id, ctx.actorUserId);
+        }
+        const drinks = await products.listProducts(ctx.tenant.business.id, { category: 'bebidas', limit: 100 });
+        const lines: string[] = ['🥤 *Bebidas Disponibles:*', ''];
+
+        if (drinks.length === 0) {
+          lines.push('Todavía no tenés bebidas cargadas.');
+          lines.push('Podés cargarlas rápidamente escribiendo o mandando un audio (ej: *"Coca 1.5L 3500, Fanta 1.5L 3500, Cerveza 1L 4000"*).');
+        } else {
+          for (const d of drinks) {
+            lines.push(`• *${esc(d.name)}* — *${formatCurrency(Number(d.priceUnit))}*`);
+          }
+        }
+
+        return {
+          text: lines.join('\n'),
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [{ text: '➕ Cargar bebidas por lote', callbackData: 'rotiseria:bebidas_lote' }],
+            [{ text: '💵 Modificar precio', callbackData: 'rotiseria:bebidas_precio' }],
+            [{ text: '🗑️ Eliminar / Desactivar bebida', callbackData: 'rotiseria:bebidas_borrar' }],
+          ],
+        };
+      }
+
+      // 51. Guía de carga de bebidas por lote
+      if (data === 'rotiseria:bebidas_lote') {
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'configurar_bebidas_lote',
+            data: { _awaitingBebidasLote: true },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+        return {
+          text: [
+            '🥤 *Carga de Bebidas por Lote*',
+            '',
+            'Escribí o mandá un audio con tus bebidas y precios:',
+            '👉 *"Coca 1.5L 3500, Sprite 1.5L 3500, Cerveza Quilmes 1L 4000, Agua 500ml 1500"*',
+            '',
+            'También podés ponerlas renglón por renglón.',
+          ].join('\n'),
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 52. Selector de bebida para cambiar precio
+      if (data === 'rotiseria:bebidas_precio') {
+        const drinks = await products.listProducts(ctx.tenant.business.id, { category: 'bebidas', limit: 100 });
+        if (drinks.length === 0) {
+          return {
+            text: 'No hay bebidas cargadas para modificar precios.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [[{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }]],
+          };
+        }
+        const rows: InlineButton[][] = [];
+        for (const d of drinks) {
+          rows.push([
+            {
+              text: `💵 ${d.name} (${formatCurrency(Number(d.priceUnit))})`,
+              callbackData: `rotiseria:bebida_sel:${d.id}`,
+            },
+          ]);
+        }
+        rows.push([{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }]);
+
+        return {
+          text: '🥤 *Seleccioná la bebida a la que querés cambiarle el precio:*',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 53. Bebida seleccionada: pedir nuevo precio
+      if (data.startsWith('rotiseria:bebida_sel:')) {
+        const prodId = data.slice('rotiseria:bebida_sel:'.length);
+        const prod = await products.findProductById(prodId, ctx.tenant.business.id);
+        if (!prod) {
+          return { text: 'Bebida no encontrada o inactiva.', parseMode: 'Markdown' };
+        }
+
+        if (conversations) {
+          await conversations.upsert({
+            businessId: ctx.tenant.business.id,
+            userId: ctx.actorUserId,
+            phase: 'COLLECTING',
+            actionName: 'gestionar_bebidas',
+            data: {
+              _awaitingDrinkPriceId: prod.id,
+              productName: prod.name,
+              currentPrice: Number(prod.priceUnit),
+            },
+            expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+            updatedAt: ctx.now,
+          });
+        }
+
+        return {
+          text: `Ingresá el nuevo precio unitario para *${esc(prod.name)}* (Precio actual: *${formatCurrency(Number(prod.priceUnit))}*):`,
+          parseMode: 'Markdown',
+        };
+      }
+
+      // 54. Listar bebidas para eliminar / desactivar
+      if (data === 'rotiseria:bebidas_borrar') {
+        if (ctx.tenant.membership.role !== 'OWNER') {
+          return {
+            text: '⛔ Solo el dueño del negocio puede eliminar o desactivar bebidas.',
+            parseMode: 'Markdown',
+          };
+        }
+        const drinks = await products.listProducts(ctx.tenant.business.id, { category: 'bebidas', limit: 100 });
+        if (drinks.length === 0) {
+          return {
+            text: 'No hay bebidas activas para eliminar.',
+            parseMode: 'Markdown',
+            inlineKeyboard: [[{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }]],
+          };
+        }
+        const rows: InlineButton[][] = [];
+        for (const d of drinks) {
+          rows.push([
+            {
+              text: `❌ Borrar ${d.name.slice(0, 24)}`,
+              callbackData: `rotiseria:bebida_deactivate:${d.id}`,
+            },
+          ]);
+        }
+        rows.push([{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }]);
+
+        return {
+          text: '🗑️ *Seleccioná la bebida que querés eliminar:*',
+          parseMode: 'Markdown',
+          inlineKeyboard: rows,
+        };
+      }
+
+      // 55. Confirmar desactivación de bebida
+      if (data.startsWith('rotiseria:bebida_deactivate:')) {
+        if (ctx.tenant.membership.role !== 'OWNER') {
+          return {
+            text: '⛔ Solo el dueño del negocio puede eliminar o desactivar bebidas.',
+            parseMode: 'Markdown',
+          };
+        }
+        const prodId = data.slice('rotiseria:bebida_deactivate:'.length);
+        const deactivated = await products.deactivateProduct(prodId, ctx.tenant.business.id);
+        if (audit) {
+          await audit.log({
+            businessId: ctx.tenant.business.id,
+            actorUserId: ctx.actorUserId,
+            action: 'drink.deactivated',
+            entityType: 'rotiseria_product',
+            entityId: deactivated.id,
+            metadata: { name: deactivated.name },
+          });
+        }
+        return {
+          text: `✅ Bebida '${esc(deactivated.name)}' eliminada correctamente.`,
+          parseMode: 'Markdown',
+          inlineKeyboard: [[{ text: '↩️ Volver a Bebidas', callbackData: 'rotiseria:bebidas_menu' }]],
         };
       }
 
