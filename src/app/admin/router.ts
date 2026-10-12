@@ -94,9 +94,22 @@ function passwordMatches(submitted: string, expected: string): boolean {
 /** POST solo desde el mismo host (Origin o Referer), además de SameSite=Strict. */
 function sameOrigin(req: Request): boolean {
   const source = req.headers.origin ?? req.headers.referer;
-  if (!source) return true;
+  if (!source || typeof source !== 'string') return true;
   try {
-    return new URL(source).host === (req.headers.host ?? '');
+    const sourceHost = new URL(source).host.toLowerCase();
+    const candidateHosts = [
+      req.get('host'),
+      typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'] : undefined,
+      typeof req.headers.host === 'string' ? req.headers.host : undefined,
+    ]
+      .filter((h): h is string => Boolean(h))
+      .flatMap((h) => h.split(','))
+      .map((h) => h.trim().toLowerCase());
+
+    if (candidateHosts.length === 0) return true;
+
+    const sourceWithoutPort = sourceHost.split(':')[0];
+    return candidateHosts.some((h) => h === sourceHost || h.split(':')[0] === sourceWithoutPort);
   } catch {
     return false;
   }

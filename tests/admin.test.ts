@@ -300,6 +300,19 @@ describe('admin: guard y login', () => {
     expect((await res.json()).error).toBe('FORBIDDEN');
   });
 
+  it('POST con X-Forwarded-Host detrás de proxy es aceptado', async () => {
+    const app = await startApp();
+    const res = await post(
+      `${app.base}/admin/login`,
+      { password: PASSWORD },
+      formHeaders(app.base, {
+        Origin: 'https://mi-dominio.onrender.com',
+        'X-Forwarded-Host': 'mi-dominio.onrender.com',
+      })
+    );
+    expect(res.status).toBe(302);
+  });
+
   it('POST con sesión pero sin CSRF → 403', async () => {
     const app = await startApp();
     const { cookie } = await login(app.base, PASSWORD);
