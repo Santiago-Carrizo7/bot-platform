@@ -94,25 +94,53 @@ function passwordMatches(submitted: string, expected: string): boolean {
 /** POST solo desde el mismo host (Origin o Referer), además de SameSite=Strict. */
 function sameOrigin(req: Request): boolean {
   const source = req.headers.origin ?? req.headers.referer;
-  if (!source || typeof source !== 'string') return true;
+  if (!source || typeof source !== 'string' || source === 'null') return true;
+
+  let sourceHost: string;
   try {
-    const sourceHost = new URL(source).host.toLowerCase();
-    const candidateHosts = [
-      req.get('host'),
-      typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'] : undefined,
-      typeof req.headers.host === 'string' ? req.headers.host : undefined,
-    ]
-      .filter((h): h is string => Boolean(h))
-      .flatMap((h) => h.split(','))
-      .map((h) => h.trim().toLowerCase());
-
-    if (candidateHosts.length === 0) return true;
-
-    const sourceWithoutPort = sourceHost.split(':')[0];
-    return candidateHosts.some((h) => h === sourceHost || h.split(':')[0] === sourceWithoutPort);
+    sourceHost = new URL(source).host.toLowerCase();
   } catch {
-    return false;
+    return true;
   }
+
+  // En Render (cloud hosting), admitir el dominio oficial del servicio
+  if (sourceHost.endsWith('.onrender.com')) return true;
+
+  const candidateHosts = [
+    req.get('host'),
+    req.hostname,
+    typeof req.headers['x-forwarded-host'] === 'string' ? req.headers['x-forwarded-host'] : undefined,
+    typeof req.headers.host === 'string' ? req.headers.host : undefined,
+    typeof req.headers['x-original-host'] === 'string' ? req.headers['x-original-host'] : undefined,
+    process.env.RENDER_EXTERNAL_HOSTNAME,
+  ]
+    .filter((h): h is string => Boolean(h))
+    .flatMap((h) => h.split(','))
+    .map((h) => h.trim().toLowerCase());
+
+  if (process.env.TELEGRAM_WEBHOOK_URL) {
+    try {
+      candidateHosts.push(new URL(process.env.TELEGRAM_WEBHOOK_URL).host.toLowerCase());
+    } catch {
+      // ignore
+    }
+  }
+
+  if (process.env.RENDER_EXTERNAL_URL) {
+    try {
+      candidateHosts.push(new URL(process.env.RENDER_EXTERNAL_URL).host.toLowerCase());
+    } catch {
+      // ignore
+    }
+  }
+
+  if (candidateHosts.length === 0) return true;
+
+  const sourceWithoutPort = sourceHost.split(':')[0];
+  return candidateHosts.some((h) => {
+    const hWithoutPort = h.split(':')[0];
+    return h === sourceHost || hWithoutPort === sourceWithoutPort;
+  });
 }
 
 function parseDateInput(raw: unknown): Date | null {
