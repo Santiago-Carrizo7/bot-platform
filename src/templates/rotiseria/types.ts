@@ -3,6 +3,7 @@ export interface CreateProductData {
   name: string;
   priceUnit: number;
   priceDozen?: number;
+  priceHalfDozen?: number | null;
   category?: string;
 }
 
@@ -10,7 +11,19 @@ export interface UpdateProductData {
   name?: string;
   priceUnit?: number;
   priceDozen?: number | null;
+  priceHalfDozen?: number | null;
   category?: string;
+}
+
+export interface ProductItem {
+  id: string;
+  businessId: string;
+  name: string;
+  priceUnit: number;
+  priceDozen?: number | null;
+  priceHalfDozen?: number | null;
+  category: string;
+  isActive: boolean;
 }
 
 export interface CreatePromoData {

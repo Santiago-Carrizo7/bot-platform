@@ -287,6 +287,7 @@ model RotiseriaProduct {
   name        String
   priceUnit   Decimal             @db.Decimal(12, 2)
   priceDozen  Decimal?            @db.Decimal(12, 2)
+  priceHalfDozen Decimal?         @db.Decimal(12, 2)
   category    String              @default("empanadas")
   isActive    Boolean             @default(true)
   createdAt   DateTime            @default(now())

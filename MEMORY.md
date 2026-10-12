@@ -15,13 +15,7 @@
   templates como módulos estáticos; IA con dispatch + Zod; confirmación en escrituras;
   trial 10 días desde 1ª escritura → `READ_ONLY`; tablas tipadas, sin `Record` genérico.
 
-- Kiosco: 'ventas' y 'gastos' continuos; audios de voz siempre van a `registrar_lote` (confirmación previa y edición interactiva; concepto y categoría en líneas separadas; no deja tanda abierta).
-  RBAC Kiosco: `consultar_resumen` (`roles: ['OWNER']`), callbacks `stats:*` bloqueados para `EMPLOYEE`,
-  menú inline y teclado persistente reemplazan estadísticas por `📋 Movimientos` para empleados.
-  `/invitar`: menú interactivo (🤝 Socio vs 👤 Empleado). Multi-dueño nativo (`OWNER` múltiple).
-  Calculadora: asesor de recargo vs margen espaciado y resolutivo (sin preguntas abiertas).
-- Rotiseria: docenas por tarifa; turno 00-05 AM; anulación interactiva; RBAC EMPLOYEE.
-- IA en cascada (`FallbackAIProvider`): Groq (GPT-OSS 120B) -> OpenRouter -> Gemini.
+
 
 ## Gotchas
 - Telegram Markdown V1 rompe con `_` en URLs: enlaces deep link deben enviarse sin `parseMode: 'Markdown'`.

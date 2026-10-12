@@ -60,13 +60,21 @@ function newStore(): RotiseriaStore {
 class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
   constructor(private readonly s: RotiseriaStore) {}
 
-  async createProduct(data: { businessId: string; name: string; priceUnit: number; priceDozen?: number; category?: string }) {
+  async createProduct(data: {
+    businessId: string;
+    name: string;
+    priceUnit: number;
+    priceDozen?: number;
+    priceHalfDozen?: number | null;
+    category?: string;
+  }) {
     const p: RotiseriaProduct = {
       id: nid('prod'),
       businessId: data.businessId,
       name: data.name.trim(),
       priceUnit: data.priceUnit as unknown as RotiseriaProduct['priceUnit'],
       priceDozen: (data.priceDozen ?? null) as unknown as RotiseriaProduct['priceDozen'],
+      priceHalfDozen: (data.priceHalfDozen ?? null) as unknown as RotiseriaProduct['priceHalfDozen'],
       category: data.category?.trim() || 'empanadas',
       isActive: true,
       createdAt: NOW,
@@ -102,13 +110,20 @@ class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
   async updateProduct(
     id: string,
     _b: string,
-    data: { name?: string; priceUnit?: number; priceDozen?: number | null; category?: string }
+    data: {
+      name?: string;
+      priceUnit?: number;
+      priceDozen?: number | null;
+      priceHalfDozen?: number | null;
+      category?: string;
+    }
   ) {
     const p = this.s.products.find((x) => x.id === id);
     if (!p) throw new Error('no encontrado');
     if (data.name !== undefined) p.name = data.name.trim();
     if (data.priceUnit !== undefined) p.priceUnit = data.priceUnit as unknown as RotiseriaProduct['priceUnit'];
     if (data.priceDozen !== undefined) p.priceDozen = data.priceDozen as unknown as RotiseriaProduct['priceDozen'];
+    if (data.priceHalfDozen !== undefined) p.priceHalfDozen = data.priceHalfDozen as unknown as RotiseriaProduct['priceHalfDozen'];
     if (data.category !== undefined) p.category = data.category.trim();
     return p;
   }
@@ -3057,6 +3072,111 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       expect(resStatsPeriod.text).toContain(`Más vendida: 🥇 *${esc('Coca-Cola 1.5L')}* (*4* u.)`);
       const flatStatsBtns = resStatsPeriod.inlineKeyboard?.flat() ?? [];
       expect(flatStatsBtns.some((b) => b.callbackData === 'rotiseria:stats_bebidas:esta_semana')).toBe(true);
+    });
+
+    it('Vista previa detallada en Envíos: configurar_envios_lote.summarize desglosa zonas y precios', async () => {
+      const { products, sales, deliveryZones } = setupServices();
+      const bundle = createRotiseriaTemplate({
+        db: {} as any,
+        products,
+        sales,
+        deliveryZones,
+      });
+      const action = bundle.template.actions.find((a) => a.name === 'configurar_envios_lote');
+      expect(action).toBeDefined();
+      expect(action?.summarize).toBeDefined();
+
+      const summary = action!.summarize!({
+        zonas: [
+          { nombre: 'Centro', precio: 1500, barrios: ['macrocentro', 'plaza 9 de julio'] },
+          { nombre: 'San Lorenzo', precio: 2500, barrios: [] },
+          { nombre: 'Microcentro', precio: 0, barrios: ['casco histórico'] },
+        ],
+      });
+
+      expect(summary).toContain('🛵 *Zonas y tarifas detectadas:*');
+      expect(summary).toContain('• *Centro*: *$ 1.500* [macrocentro, plaza 9 de julio]');
+      expect(summary).toContain('• *San Lorenzo*: *$ 2.500*');
+      expect(summary).toContain('• *Microcentro*: *¡GRATIS! ($0)* [casco histórico]');
+      expect(summary).toContain('¿Confirmás guardar estas zonas?');
+    });
+
+    it('Creación de producto con 3 precios (unidad, media docena y docena)', async () => {
+      const f = setupFlow(
+        [
+          {
+            action: 'crear_producto',
+            params: {
+              nombre: 'Empanada de Atún',
+              precio_unitario: 1300,
+              precio_media_docena: 6000,
+              precio_docena: 20000,
+              categoria: 'empanadas',
+            },
+          },
+        ],
+        'OWNER'
+      );
+
+      const crearProdAction = f.deps.template.actions.find((a) => a.name === 'crear_producto');
+      expect(crearProdAction?.summarize).toBeDefined();
+
+      const preview = crearProdAction!.summarize!({
+        nombre: 'Empanada de Atún',
+        precio_unitario: 1300,
+        precio_media_docena: 6000,
+        precio_docena: 20000,
+        categoria: 'empanadas',
+      });
+      expect(preview).toContain('• Precio unitario: *$ 1.300*');
+      expect(preview).toContain('• Media docena: *$ 6.000*');
+      expect(preview).toContain('• Precio docena: *$ 20.000*');
+
+      // Crear el producto en el repo y verificar persistencia
+      const created = await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Empanada de Atún',
+        priceUnit: 1300,
+        priceHalfDozen: 6000,
+        priceDozen: 20000,
+        category: 'empanadas',
+      });
+
+      expect(Number(created.priceUnit)).toBe(1300);
+      expect(Number(created.priceHalfDozen)).toBe(6000);
+      expect(Number(created.priceDozen)).toBe(20000);
+    });
+
+    it('Algoritmo de precios: soporte de media docena (6 u. a $6.000 y 19 u. a 1 docena + 1 media docena + 1 suelta)', async () => {
+      const store = newStore();
+      const productRepo = new FakeRotiseriaProductRepo(store) as unknown as ProductRepository;
+      const products = new ProductService(productRepo);
+
+      await products.createProduct({
+        businessId: BIZ,
+        name: 'Empanada de Atún',
+        priceUnit: 1300,
+        priceHalfDozen: 6000,
+        priceDozen: 20000,
+        category: 'empanadas',
+      });
+
+      const catalog = {
+        findProduct: (name: string) => store.products.find((p) => p.name.toLowerCase() === name.toLowerCase()),
+        findPromo: () => undefined,
+      };
+
+      // 1. Pedido de 6 empanadas -> exactamente $6.000 (y no 6 x $1.300 = $7.800)
+      const res6 = calculatePricing([{ name: 'Empanada de Atún', quantity: 6 }], catalog);
+      expect(res6.total).toBe(6000);
+      expect(res6.breakdown.some((b) => b.includes('1x Media Docena') && b.includes('$ 6.000'))).toBe(true);
+
+      // 2. Pedido de 19 empanadas -> 1 docena ($20.000) + 1 media docena ($6.000) + 1 suelta ($1.300) = $27.300
+      const res19 = calculatePricing([{ name: 'Empanada de Atún', quantity: 19 }], catalog);
+      expect(res19.total).toBe(27300);
+      expect(res19.breakdown.some((b) => b.includes('1x Docena') && b.includes('$ 20.000'))).toBe(true);
+      expect(res19.breakdown.some((b) => b.includes('1x Media Docena') && b.includes('$ 6.000'))).toBe(true);
+      expect(res19.breakdown.some((b) => b.includes('1x') && b.includes('suelta') && b.includes('$ 1.300'))).toBe(true);
     });
   });
 });
