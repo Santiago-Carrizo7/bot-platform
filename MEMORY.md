@@ -20,6 +20,8 @@
   con confirmación numerada y corrección interactiva. Al confirmar lote se lista el detalle + total.
   Estadísticas usan timezone 'America/Argentina/Buenos_Aires', navegación entre meses
   (`stats:mes:<offset>`) y desglose de semanas contables dentro del mes (`stats:semanas:<offset>`).
+  Botonera '📊 Estadísticas' normaliza input a 'menu'. Sanitizado de pausas ('...') y
+  soporte de multiplicadores ('mil', 'k', 'lucas') en lotes con notas de productos.
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
 - Rotiseria: docenas por tarifa extrayendo primero docenas puras completas por sabor; turno operativo 00-05 AM;
   anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas; matcher por sabor raíz;
@@ -35,8 +37,8 @@
 - Telegram 64-byte limit en callback_data: usar índices numéricos (`rotiseria:precio_item:${idx}`).
 - En Windows usar `pnpm.cmd` por soporte de OS.
 - Zod schemas: campos auxiliares deben declararse `.nullable().optional()` para no invalidar `safeParse`.
+- Regex de palabras con tilde (ej: vendí, gasté): usar `(?:\s+|$|\b)` en vez de `\b` (límite ASCII).
 
 ## Próximos pasos
-- [ ] Push de la rama y deploy de migraciones en Supabase/Render.
-- [ ] Configurar `TELEGRAM_BOT_TOKEN_ROTISERIA` en el entorno de staging.
-- [ ] Probar interacciones en Telegram de los 3 bots (gastos, kiosco y rotisería).
+- [ ] Verificar deploy automático en Render de los cambios de `main`.
+- [ ] Probar interacciones en Telegram en vivo del bot Kiosco (audios y estadísticas).
