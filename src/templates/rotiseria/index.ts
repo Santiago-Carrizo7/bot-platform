@@ -3,6 +3,8 @@ import type {
   BotReply,
   CommandDef,
   InlineButton,
+  MenuItem,
+  ReplyMenuItem,
   TemplateDefinition,
 } from '../../core/actions/registry.js';
 import { ProductRepository } from './persistence/product.repo.js';
@@ -138,6 +140,60 @@ export function parseBebidasBatchText(
   }
 
   return result;
+}
+
+export function getRotiseriaReplyMenu(role?: string): ReplyMenuItem[] {
+  if (role === 'EMPLOYEE') {
+    return [
+      { label: '📝 Registrar venta', action: 'registrar_venta' },
+      { label: '↩️ Anular venta', action: 'anular_venta' },
+      { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
+      { label: '🛵 Envíos', action: 'gestionar_envios' },
+    ];
+  }
+  return [
+    { label: '📝 Registrar venta', action: 'registrar_venta' },
+    { label: '📅 Control de días', action: 'control_dias' },
+    { label: '📈 Estadísticas', action: 'menu_estadisticas' },
+    { label: '↩️ Anular venta', action: 'anular_venta' },
+    { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
+  ];
+}
+
+export function getRotiseriaReplyMenuLayout(role?: string): number[] {
+  if (role === 'EMPLOYEE') {
+    return [2, 2];
+  }
+  return [1, 2, 2];
+}
+
+export function getRotiseriaMenu(role?: string): MenuItem[] {
+  if (role === 'EMPLOYEE') {
+    return [
+      { label: '📝 Registrar venta', action: 'registrar_venta' },
+      { label: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
+      { label: '↩️ Anular última venta', action: 'anular_venta' },
+      { label: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
+      { label: '🛵 Envíos', action: 'gestionar_envios' },
+      { label: '🥤 Bebidas', action: 'gestionar_bebidas' },
+      { label: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
+      { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
+      { label: '➕ Crear comida', action: 'crear_producto' },
+    ];
+  }
+  return [
+    { label: '📝 Registrar venta', action: 'registrar_venta' },
+    { label: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
+    { label: '📅 Control de días recientes', action: 'control_dias' },
+    { label: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
+    { label: '↩️ Anular última venta', action: 'anular_venta' },
+    { label: '🏷️ Modificar precios de la carta', action: 'cambiar_precio' },
+    { label: '🛵 Envíos', action: 'gestionar_envios' },
+    { label: '🥤 Bebidas', action: 'gestionar_bebidas' },
+    { label: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
+    { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
+    { label: '➕ Crear comida', action: 'crear_producto' },
+  ];
 }
 
 export interface RotiseriaTemplateDeps {
@@ -603,7 +659,9 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       { label: '↩️ Anular venta', action: 'anular_venta' },
       { label: '🏷️ Cambiar precio', action: 'cambiar_precio' },
     ],
+    getReplyMenu: (role?: string) => getRotiseriaReplyMenu(role),
     replyMenuLayout: [1, 2, 2],
+    getReplyMenuLayout: (role?: string) => getRotiseriaReplyMenuLayout(role),
     menu: [
       { label: '📝 Registrar venta', action: 'registrar_venta' },
       { label: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
@@ -617,6 +675,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
       { label: '➕ Crear comida', action: 'crear_producto' },
     ],
+    getMenu: (role?: string) => getRotiseriaMenu(role),
     menuCommands: [
       { command: 'venta', description: '📝 Registrar venta' },
       { command: 'promo', description: '🎁 Gestionar promociones' },
@@ -889,6 +948,26 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         };
       }
 
+      // Control de roles (RBAC): solo OWNER puede consultar métricas de recaudación, turnos y estadísticas
+      if (
+        data.startsWith('rotiseria:stats') ||
+        data.startsWith('rotiseria:estadisticas') ||
+        data.startsWith('rotiseria:catmenu:') ||
+        data.startsWith('rotiseria:catdetail:') ||
+        data.startsWith('rotiseria:envios_stats') ||
+        data.startsWith('rotiseria:ver_dia:') ||
+        data.startsWith('rotiseria:control_dias') ||
+        data.startsWith('rotiseria:dias:') ||
+        data.startsWith('rotiseria:turnos:')
+      ) {
+        if (ctx.tenant.membership.role === 'EMPLOYEE') {
+          return {
+            text: '⛔ Acceso denegado: solo el dueño puede consultar la recaudación.',
+            parseMode: 'Markdown',
+          };
+        }
+      }
+
       // 6. Nivel 1: Menú selector de períodos
       if (data === 'rotiseria:stats_menu') {
         return {
@@ -932,7 +1011,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         };
       }
 
-      // 8. Nivel 2: Métricas + Top 3 + Categorías
+      // 8. Nivel 2: Métricas + Top 3 + Categorías + Bebidas
       if (data.startsWith('rotiseria:stats:')) {
         const period = data.slice('rotiseria:stats:'.length);
         const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
@@ -978,7 +1057,22 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           );
         }
 
+        if (st.drinksSummary && st.drinksSummary.totalQuantity > 0) {
+          lines.push('', '🥤 *Bebidas vendidas:*');
+          lines.push(
+            `Total: *${formatQty(st.drinksSummary.totalQuantity)}* u. (*${formatCurrency(st.drinksSummary.totalAmount)}*)`
+          );
+          if (st.drinksSummary.topDrink) {
+            lines.push(
+              `Más vendida: 🥇 *${esc(st.drinksSummary.topDrink.name)}* (*${formatQty(st.drinksSummary.topDrink.quantity)}* u.)`
+            );
+          }
+        }
+
         const buttons: InlineButton[][] = [];
+        if (st.drinksSummary && st.drinksSummary.totalQuantity > 0) {
+          buttons.push([{ text: '🥤 Ver ranking de bebidas', callbackData: `rotiseria:stats_bebidas:${period}` }]);
+        }
         if (st.categories.length > 0) {
           buttons.push([{ text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${period}` }]);
         }
@@ -989,6 +1083,46 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
           text: lines.filter(Boolean).join('\n'),
           parseMode: 'Markdown',
           inlineKeyboard: buttons,
+        };
+      }
+
+      // 8b. Estadísticas detalladas de bebidas
+      if (data.startsWith('rotiseria:stats_bebidas:')) {
+        const period = data.slice('rotiseria:stats_bebidas:'.length);
+        const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
+        const st = await sales.getStatsSummary(ctx.tenant.business.id, period, ctx.now, tz);
+        const drinksSummary = st.drinksSummary;
+
+        const lines: string[] = [
+          `🥤 *Estadísticas de Bebidas — ${esc(st.periodLabel)}*`,
+          '',
+        ];
+
+        if (!drinksSummary || drinksSummary.totalQuantity === 0) {
+          lines.push('_Sin ventas de bebidas registradas en este período._');
+        } else {
+          lines.push(`💰 Total recaudado: *${formatCurrency(drinksSummary.totalAmount)}*`);
+          lines.push(`📦 Total unidades vendidas: *${formatQty(drinksSummary.totalQuantity)}* u.`);
+          if (drinksSummary.topDrink) {
+            lines.push(`🏆 Bebida más vendida: *${esc(drinksSummary.topDrink.name)}* (*${formatQty(drinksSummary.topDrink.quantity)}* u.)`);
+          }
+          lines.push('', '📋 *Ranking de bebidas vendidas:*');
+          const medals = ['🥇', '🥈', '🥉'];
+          drinksSummary.drinks.forEach((d, idx) => {
+            const medal = idx < 3 ? `${medals[idx]} ` : '';
+            lines.push(
+              `${idx + 1}. ${medal}*${esc(d.name)}:* ${formatQty(d.quantity)} u. — ${formatCurrency(d.subtotal)}`
+            );
+          });
+        }
+
+        return {
+          text: lines.join('\n'),
+          parseMode: 'Markdown',
+          inlineKeyboard: [
+            [{ text: '⬅️ Volver a Estadísticas', callbackData: `rotiseria:stats:${period}` }],
+            [{ text: '🔄 Cambiar período', callbackData: 'rotiseria:stats_menu' }],
+          ],
         };
       }
 

@@ -523,6 +523,12 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     kind: 'read',
     input: ControlDiasInput,
     handler: async (ctx, input) => {
+      if (ctx.tenant.membership.role !== 'OWNER') {
+        return {
+          reply: '⛔ Esta función está reservada únicamente para el dueño del negocio.',
+        };
+      }
+
       const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
 
       if (input.fecha) {
@@ -583,45 +589,69 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     kind: 'read',
     input: ConsultarEstadisticasInput,
     handler: async (ctx, input) => {
+      if (ctx.tenant.membership.role !== 'OWNER') {
+        return {
+          reply: '⛔ Esta función está reservada únicamente para el dueño del negocio.',
+        };
+      }
+
       const stats = await sales.getStatsSummary(ctx.tenant.business.id, input.periodo, ctx.now);
-  
-  const lines: string[] = [
-    `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
-    '', 
-    `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
-    `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
-    // Si la condición se cumple, inyecta la línea; si no, expande un array vacío y no agrega nada
-    ...(stats.cancelledCount > 0 ? [`↩️ Pedidos anulados: *${stats.cancelledCount}*`] : []), 
-  ]; // Ya no necesitas ningún .filter() al final
 
-  if (stats.top3Products.length > 0) {
-    lines.push('', '', '🏆 *Top 3 productos más vendidos:*');
-    for (const p of stats.top3Products) {
-      lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
-    }
-  }
-
-  if (stats.categories.length > 0) {
-    lines.push('', '', '📊 *Desglose por categorías:*');
-    for (const c of stats.categories) {
-      lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
-    }
-  }
-
-  if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
-    lines.push('', '🎁 *Promos vendidas:*');
-    for (const pr of stats.promosSummary.promos) {
-      lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
-    }
-    lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
-  }
-
-      const buttons = [
-        [
-          { text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${input.periodo || 'esta_semana'}` },
-          { text: '🔄 Cambiar período', callbackData: 'rotiseria:stats_menu' },
-        ],
+      const lines: string[] = [
+        `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
+        '',
+        `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
+        `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
+        ...(stats.cancelledCount > 0 ? [`↩️ Pedidos anulados: *${stats.cancelledCount}*`] : []),
       ];
+
+      if (stats.top3Products.length > 0) {
+        lines.push('', '', '🏆 *Top 3 productos más vendidos:*');
+        for (const p of stats.top3Products) {
+          lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
+        }
+      }
+
+      if (stats.categories.length > 0) {
+        lines.push('', '', '📊 *Desglose por categorías:*');
+        for (const c of stats.categories) {
+          lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
+        }
+      }
+
+      if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
+        lines.push('', '🎁 *Promos vendidas:*');
+        for (const pr of stats.promosSummary.promos) {
+          lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
+        }
+        lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
+      }
+
+      if (stats.drinksSummary && stats.drinksSummary.totalQuantity > 0) {
+        lines.push('', '🥤 *Bebidas vendidas:*');
+        lines.push(
+          `Total: *${formatQty(stats.drinksSummary.totalQuantity)}* u. (*${formatCurrency(stats.drinksSummary.totalAmount)}*)`
+        );
+        if (stats.drinksSummary.topDrink) {
+          lines.push(
+            `Más vendida: 🥇 *${esc(stats.drinksSummary.topDrink.name)}* (*${formatQty(stats.drinksSummary.topDrink.quantity)}* u. — *${formatCurrency(stats.drinksSummary.topDrink.subtotal)}*)`
+          );
+        }
+      }
+
+      const buttons: InlineButton[][] = [];
+      const periodParam = input.periodo || 'esta_semana';
+      if (stats.drinksSummary && stats.drinksSummary.totalQuantity > 0) {
+        buttons.push([
+          { text: '🥤 Detalle de bebidas', callbackData: `rotiseria:stats_bebidas:${periodParam}` },
+          { text: '🔍 Por categoría', callbackData: `rotiseria:catmenu:${periodParam}` },
+        ]);
+      } else {
+        buttons.push([
+          { text: '🔍 Ver productos por categoría', callbackData: `rotiseria:catmenu:${periodParam}` },
+        ]);
+      }
+      buttons.push([{ text: '🔄 Cambiar período', callbackData: 'rotiseria:stats_menu' }]);
 
       return { reply: lines.join('\n'), inlineKeyboard: buttons };
     },
@@ -632,7 +662,13 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     description: 'Menú interactivo de estadísticas de la rotisería por períodos.',
     kind: 'read',
     input: EmptyInput,
-    handler: async () => {
+    handler: async (ctx) => {
+      if (ctx.tenant.membership.role !== 'OWNER') {
+        return {
+          reply: '⛔ Esta función está reservada únicamente para el dueño del negocio.',
+        };
+      }
+
       return {
         reply: '📈 *Estadísticas del Negocio*\n\nSeleccioná el período que querés consultar:',
         inlineKeyboard: [
@@ -893,8 +929,8 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
     description: 'Muestra las funcionalidades disponibles y guía rápida de uso del bot.',
     kind: 'read',
     input: EmptyInput,
-    handler: async () => ({
-      reply: ROTISERIA_MENU_HELP_TEXT,
+    handler: async (ctx) => ({
+      reply: ctx.tenant?.membership?.role === 'EMPLOYEE' ? ROTISERIA_MENU_HELP_TEXT_EMPLOYEE : ROTISERIA_MENU_HELP_TEXT,
     }),
   };
 
@@ -1158,10 +1194,34 @@ export const ROTISERIA_MENU_HELP_TEXT = [
   '• /precio — Para actualizar los precios rápido.',
   '• /comida — Para sumar un plato o producto nuevo.',
   '• /promo — Para armar combos especiales.',
+  '• /bebidas — Para consultar bebidas y refrescos.',
   '',
   '📊 *Cuentas y números:*',
   '• /dias — Para ver cómo viene el turno o el cierre de anoche.',
   '• /stats — Para ver cuánto se vendió en la semana y qué fue lo que más salió.',
+  '',
+  '👇 *Tip:* Para lo más importante del día a día, tenés los botones rápidos acá abajo en la pantalla sin tener que escribir nada.',
+].join('\n');
+
+export const ROTISERIA_MENU_HELP_TEXT_EMPLOYEE = [
+  '✨ *¿Qué podemos hacer juntos?*',
+  '',
+  'Acá tenés a mano todo lo que podés pedirme en el día a día para que no tengas que hacer cuentas en la cabeza:',
+  '',
+  '🥟 *Ventas y pedidos:*',
+  '• Mandame un audio o mensaje con el pedido del cliente y te saco el total al toque (calculando docenas y promos solo).',
+  '• /ventas — Para mirar los últimos pedidos que fuimos cobrando.',
+  '• /anular — Por si hubo una equivocación y necesitás cancelar una venta.',
+  '',
+  '🛵 *Envíos a domicilio:*',
+  '• /envios — Para configurar o ver los precios por barrio o zona de delivery.',
+  '',
+  '📋 *Tu carta:*',
+  '• /carta — Para ver las comidas y promos con sus precios actuales.',
+  '• /precio — Para actualizar los precios rápido.',
+  '• /comida — Para sumar un plato o producto nuevo.',
+  '• /promo — Para armar combos especiales.',
+  '• /bebidas — Para consultar bebidas y refrescos.',
   '',
   '👇 *Tip:* Para lo más importante del día a día, tenés los botones rápidos acá abajo en la pantalla sin tener que escribir nada.',
 ].join('\n');

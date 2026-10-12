@@ -18,7 +18,13 @@ import { getShiftDate, formatShiftLabel } from '../src/templates/rotiseria/domai
 import { formatRealDateWithDay, esc } from '../src/templates/rotiseria/format.js';
 import { applyModification, parseModificationText } from '../src/templates/rotiseria/domain/modification.js';
 import { calculatePricing } from '../src/templates/rotiseria/domain/pricing.js';
-import { createRotiseriaTemplate, parseBebidasBatchText } from '../src/templates/rotiseria/index.js';
+import {
+  createRotiseriaTemplate,
+  parseBebidasBatchText,
+  getRotiseriaReplyMenu,
+  getRotiseriaMenu,
+  getRotiseriaReplyMenuLayout,
+} from '../src/templates/rotiseria/index.js';
 import type { ProductRepository } from '../src/templates/rotiseria/persistence/product.repo.js';
 import type { SaleRepository, RotiseriaSaleWithItems } from '../src/templates/rotiseria/persistence/sale.repo.js';
 import type { DeliveryZoneRepository } from '../src/templates/rotiseria/persistence/delivery-zone.repo.js';
@@ -729,7 +735,10 @@ describe('rotiseria: catálogo base idempotente', () => {
   });
 });
 
-function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
+function setupFlow(
+  queue: Array<{ action: string; params: Record<string, unknown> }>,
+  role: 'OWNER' | 'EMPLOYEE' = 'OWNER'
+) {
   const store = newStore();
   const { products, sales, deliveryZones } = setupServices(store);
   const bundle = createRotiseriaTemplate({
@@ -750,7 +759,7 @@ function setupFlow(queue: Array<{ action: string; params: Record<string, unknown
     id: 'mem-rotiseria',
     businessId: BIZ,
     userId: ACTOR,
-    role: 'EMPLOYEE' as const,
+    role,
     lastUsedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -2868,6 +2877,186 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       expect(resEmpty.text).toContain('Pedido cancelado al haberse quitado todos los productos');
       const convEmpty = await f.conversations.get(BIZ, ACTOR);
       expect(convEmpty).toBeNull();
+    });
+
+    it('RBAC: EMPLOYEE intentando consultar estadísticas o control de días es bloqueado', async () => {
+      const f = setupFlow(
+        [
+          { action: 'consultar_estadisticas', params: {} },
+          { action: 'control_dias', params: {} },
+          { action: 'menu_estadisticas', params: {} },
+        ],
+        'EMPLOYEE'
+      );
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await f.sales.createSale(BIZ, ACTOR, [{ name: 'Empanada de Carne', quantity: 12 }], undefined, NOW);
+
+      // 1. /stats o consultar_estadisticas
+      const resStats = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '/stats',
+        now: NOW,
+      });
+      expect(resStats.text).toContain('⛔ Esta función está reservada únicamente para el dueño del negocio.');
+      expect(resStats.text).not.toContain('Facturación neta');
+      expect(resStats.text).not.toContain('Total facturado');
+
+      // 2. /dias o control_dias
+      const resDias = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '/dias',
+        now: NOW,
+      });
+      expect(resDias.text).toContain('⛔ Esta función está reservada únicamente para el dueño del negocio.');
+      expect(resDias.text).not.toContain('Últimos 7 turnos');
+
+      // 3. Callbacks interactivos bloqueados para EMPLOYEE
+      const resCbStats = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:stats_menu',
+        now: NOW,
+      });
+      expect(resCbStats.text).toContain('⛔ Acceso denegado: solo el dueño puede consultar la recaudación.');
+
+      const resCbVerDia = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:ver_dia:2026-10-08',
+        now: NOW,
+      });
+      expect(resCbVerDia.text).toContain('⛔ Acceso denegado: solo el dueño puede consultar la recaudación.');
+    });
+
+    it('RBAC: OWNER puede consultar estadísticas y control de días normalmente', async () => {
+      const f = setupFlow(
+        [
+          { action: 'consultar_estadisticas', params: {} },
+          { action: 'control_dias', params: {} },
+        ],
+        'OWNER'
+      );
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+      await f.sales.createSale(BIZ, ACTOR, [{ name: 'Empanada de Carne', quantity: 12 }], undefined, NOW);
+
+      // 1. /stats
+      const resStats = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '/stats',
+        now: NOW,
+      });
+      expect(resStats.text).toContain('Estadísticas del Negocio');
+      expect(resStats.text).not.toContain('⛔');
+
+      const resStatsDetail = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:stats:esta_semana',
+        now: NOW,
+      });
+      expect(resStatsDetail.text).toContain('Facturación neta: *$ 15.000*');
+      expect(resStatsDetail.text).not.toContain('⛔');
+
+      // 2. /dias
+      const resDias = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: '/dias',
+        now: NOW,
+      });
+      expect(resDias.text).toContain('Control de días recientes');
+      expect(resDias.text).not.toContain('⛔');
+    });
+
+    it('RBAC: menú y teclado generado para EMPLOYEE no incluye estadísticas ni control de días', async () => {
+      const empReplyMenu = getRotiseriaReplyMenu('EMPLOYEE');
+      expect(empReplyMenu.some((m) => m.action === 'menu_estadisticas')).toBe(false);
+      expect(empReplyMenu.some((m) => m.action === 'control_dias')).toBe(false);
+      expect(empReplyMenu.map((m) => m.action)).toEqual([
+        'registrar_venta',
+        'anular_venta',
+        'cambiar_precio',
+        'gestionar_envios',
+      ]);
+
+      const empMenu = getRotiseriaMenu('EMPLOYEE');
+      expect(empMenu.some((m) => m.action === 'menu_estadisticas')).toBe(false);
+      expect(empMenu.some((m) => m.action === 'control_dias')).toBe(false);
+      expect(empMenu.some((m) => m.action === 'registrar_venta')).toBe(true);
+
+      const ownerReplyMenu = getRotiseriaReplyMenu('OWNER');
+      expect(ownerReplyMenu.some((m) => m.action === 'menu_estadisticas')).toBe(true);
+      expect(ownerReplyMenu.some((m) => m.action === 'control_dias')).toBe(true);
+
+      const ownerMenu = getRotiseriaMenu('OWNER');
+      expect(ownerMenu.some((m) => m.action === 'menu_estadisticas')).toBe(true);
+      expect(ownerMenu.some((m) => m.action === 'control_dias')).toBe(true);
+    });
+
+    it('Estadísticas de Bebidas: informa recaudación de bebidas y cuál fue la más vendida', async () => {
+      const f = setupFlow([], 'OWNER');
+      await f.products.createProduct({ businessId: BIZ, name: 'Coca-Cola 1.5L', priceUnit: 3500, category: 'bebidas' });
+      await f.products.createProduct({ businessId: BIZ, name: 'Sprite 1.5L', priceUnit: 3500, category: 'bebidas' });
+      await f.products.createProduct({ businessId: BIZ, name: 'Empanada de Carne', priceUnit: 1500, priceDozen: 15000 });
+
+      // Registrar 2 ventas con bebidas:
+      // Venta 1: 3 Coca-Cola 1.5L ($10.500) + 12 empanadas ($15.000)
+      await f.sales.createSale(
+        BIZ,
+        ACTOR,
+        [
+          { name: 'Coca-Cola 1.5L', quantity: 3 },
+          { name: 'Empanada de Carne', quantity: 12 },
+        ],
+        undefined,
+        NOW
+      );
+
+      // Venta 2: 1 Coca-Cola 1.5L ($3.500) + 2 Sprite 1.5L ($7.000)
+      await f.sales.createSale(
+        BIZ,
+        ACTOR,
+        [
+          { name: 'Coca-Cola 1.5L', quantity: 1 },
+          { name: 'Sprite 1.5L', quantity: 2 },
+        ],
+        undefined,
+        NOW
+      );
+
+      // 1. StatsSummary desde servicio
+      const stats = await f.sales.getStatsSummary(BIZ, 'esta_semana', NOW);
+      expect(stats.drinksSummary).toBeDefined();
+      expect(stats.drinksSummary?.totalQuantity).toBe(6);
+      expect(stats.drinksSummary?.totalAmount).toBe(21000);
+      expect(stats.drinksSummary?.topDrink?.name).toBe('Coca-Cola 1.5L');
+      expect(stats.drinksSummary?.topDrink?.quantity).toBe(4);
+
+      // 2. Consulta interactiva vía callback rotiseria:stats_bebidas:esta_semana
+      const resDrinksCb = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:stats_bebidas:esta_semana',
+        now: NOW,
+      });
+
+      expect(resDrinksCb.text).toContain('🥤 *Estadísticas de Bebidas');
+      expect(resDrinksCb.text).toContain('Total recaudado: *$ 21.000*');
+      expect(resDrinksCb.text).toContain('Total unidades vendidas: *6* u.');
+      expect(resDrinksCb.text).toContain(`Bebida más vendida: *${esc('Coca-Cola 1.5L')}* (*4* u.)`);
+      expect(resDrinksCb.text).toContain(`1. 🥇 *${esc('Coca-Cola 1.5L')}:* 4 u. — $ 14.000`);
+      expect(resDrinksCb.text).toContain(`2. 🥈 *${esc('Sprite 1.5L')}:* 2 u. — $ 7.000`);
+
+      // Botón volver presente
+      const flatBtns = resDrinksCb.inlineKeyboard?.flat() ?? [];
+      expect(flatBtns.some((b) => b.callbackData === 'rotiseria:stats:esta_semana')).toBe(true);
+
+      // 3. Menú de estadísticas incluye botón directo al ranking de bebidas
+      const resStatsPeriod = await handleCallback(f.deps, {
+        resolution: f.resolution,
+        data: 'rotiseria:stats:esta_semana',
+        now: NOW,
+      });
+      expect(resStatsPeriod.text).toContain('🥤 *Bebidas vendidas:*');
+      expect(resStatsPeriod.text).toContain('Total: *6* u. (*$ 21.000*)');
+      expect(resStatsPeriod.text).toContain(`Más vendida: 🥇 *${esc('Coca-Cola 1.5L')}* (*4* u.)`);
+      const flatStatsBtns = resStatsPeriod.inlineKeyboard?.flat() ?? [];
+      expect(flatStatsBtns.some((b) => b.callbackData === 'rotiseria:stats_bebidas:esta_semana')).toBe(true);
     });
   });
 });

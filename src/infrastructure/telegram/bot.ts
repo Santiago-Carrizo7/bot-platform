@@ -35,11 +35,16 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
   const { token, templateId, flowDeps, resolver, sttService, visionService } = deps;
   const bot = new Bot<BotContext>(token);
   const limiter = new InMemoryRateLimiter();
-  // Barra persistente de atajos del template (respeta replyMenuLayout si existe, o 2 por fila).
-  const quickRows = layoutToRows(
-    (flowDeps.template.replyMenu ?? []).map((m) => m.label),
-    flowDeps.template.replyMenuLayout
-  );
+  const getQuickRows = (ctx: BotContext): string[][] => {
+    const role = ctx.resolution?.tenant?.membership?.role;
+    const items = flowDeps.template.getReplyMenu
+      ? flowDeps.template.getReplyMenu(role)
+      : flowDeps.template.replyMenu ?? [];
+    const layout = flowDeps.template.getReplyMenuLayout
+      ? flowDeps.template.getReplyMenuLayout(role)
+      : flowDeps.template.replyMenuLayout;
+    return layoutToRows(items.map((m) => m.label), layout);
+  };
 
   // Identidad + tenant en cada update, antes que cualquier handler.
   bot.use(async (ctx, next) => {
@@ -80,7 +85,7 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
           firstName: ctx.from?.first_name,
           now: new Date(),
         }),
-      quickRows
+      getQuickRows(ctx)
     );
   });
 
@@ -95,7 +100,7 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
           firstName: ctx.from?.first_name,
           now: new Date(),
         }),
-      quickRows
+      getQuickRows(ctx)
     );
   });
 
@@ -401,7 +406,7 @@ export function createBot(deps: CreateBotDeps): Bot<BotContext> {
         }
       }
 
-      await replySafely(ctx, async () => reply, quickRows);
+      await replySafely(ctx, async () => reply, getQuickRows(ctx));
     } catch (error) {
       if (error instanceof AIProviderError) {
         logger.warn('Error de IA en callback', { error: error.message });

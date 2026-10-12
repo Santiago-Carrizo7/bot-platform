@@ -1,5 +1,5 @@
 import type { SaleRepository, RotiseriaSaleWithItems } from '../persistence/sale.repo.js';
-import type { CategorySummary, DeliveryStatsSummary, PromosSummary, StatsSummary } from '../types.js';
+import type { CategorySummary, DeliveryStatsSummary, DrinksStatsSummary, PromosSummary, StatsSummary } from '../types.js';
 import { formatDateOnly, round2 } from '../format.js';
 import { getShiftDate } from './shift.js';
 
@@ -169,6 +169,18 @@ export class StatsService {
       };
     }
 
+    let drinksSummary: DrinksStatsSummary | undefined;
+    const drinksList = formattedProductsByCategory['bebidas'] || [];
+    const drinksCatTotal = categoryTotals['bebidas'];
+    if (drinksCatTotal && drinksCatTotal.quantity > 0) {
+      drinksSummary = {
+        totalQuantity: drinksCatTotal.quantity,
+        totalAmount: drinksCatTotal.subtotal,
+        topDrink: drinksList[0],
+        drinks: drinksList,
+      };
+    }
+
     return {
       periodLabel,
       periodKey,
@@ -183,6 +195,7 @@ export class StatsService {
       categories,
       productsByCategory: formattedProductsByCategory,
       promosSummary,
+      drinksSummary,
     };
 
   }
