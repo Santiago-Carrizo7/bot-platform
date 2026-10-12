@@ -81,8 +81,13 @@ function md(text: string): BotReply {
   return { text, parseMode: 'Markdown' };
 }
 
-export function menuKeyboard(template: TemplateDefinition): InlineButton[][] {
-  return template.menu.map((item) => [{ text: item.label, callbackData: `menu:${item.action}` }]);
+export function menuKeyboard(template: TemplateDefinition, role?: string): InlineButton[][] {
+  const items = template.getMenu
+    ? template.getMenu(role)
+    : (role === 'EMPLOYEE'
+        ? template.menu.filter((m) => m.action !== 'menu_estadisticas' && m.action !== 'control_dias')
+        : template.menu);
+  return items.map((item) => [{ text: item.label, callbackData: `menu:${item.action}` }]);
 }
 
 export function confirmKeyboard(): InlineButton[][] {
@@ -522,7 +527,7 @@ async function handleCommand(
     const hintText = hint ? `\n\n${hint}` : '';
     return {
       ...md(`${deps.template.welcome(tenant.business.name, firstName)}${reminder ? '\n\n⚠️ _Recordá que tenés un pago pendiente._' : ''}${hintText}`),
-      inlineKeyboard: menuKeyboard(deps.template),
+      inlineKeyboard: menuKeyboard(deps.template, tenant.membership.role),
     };
   }
   if (name === 'invitar') {

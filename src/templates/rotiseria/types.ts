@@ -133,6 +133,19 @@ export interface PromosSummary {
   totalAmount: number;
 }
 
+export interface DrinkStatItem {
+  name: string;
+  quantity: number;
+  subtotal: number;
+}
+
+export interface DrinksStatsSummary {
+  totalQuantity: number;
+  totalAmount: number;
+  topDrink?: DrinkStatItem;
+  drinks: DrinkStatItem[];
+}
+
 export interface StatsSummary {
   periodLabel: string;
   periodKey: string;
@@ -147,6 +160,7 @@ export interface StatsSummary {
   categories: CategorySummary[];
   productsByCategory: Record<string, Array<{ name: string; quantity: number; subtotal: number }>>;
   promosSummary?: PromosSummary;
+  drinksSummary?: DrinksStatsSummary;
 }
 
 export interface DeliveryZoneStat {

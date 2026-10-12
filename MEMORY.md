@@ -22,11 +22,12 @@
   (`stats:mes:<offset>`) y desglose de semanas contables dentro del mes (`stats:semanas:<offset>`).
   Calculadora: atajo determinístico y asesor de 3 escenarios (+30%, +50%, +75%) si no pasa %.
 - Rotiseria: docenas por tarifa extrayendo primero docenas puras completas por sabor; turno operativo 00-05 AM;
-  anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas descartando alturas de calle;
-  matcher por sabor raíz y variantes carne vacuna; prompts con alcance estricto de docenas y extracción exhaustiva;
-  reset de borrador congelado en `CONFIRMING` ante nueva comanda si no está activo `_awaitingModification`;
-  `parseModificationText` con soporte para números en palabras, docenas y limpieza de muletillas/warnings viejos.
-- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`).
+  anulación interactiva con audit `sale.cancelled`; auto-registro seguro de zonas; matcher por sabor raíz;
+  reset de borrador ante nueva comanda; parseModification con palabras numéricas y docenas;
+  módulo de bebidas (`/bebidas`) en `rotiseria_products` (`category: 'bebidas'`); botones `rotiseria:quitar_linea:<idx>`;
+  RBAC para `EMPLOYEE` (bloquea `/stats`, `/dias`, `/invitar` y callbacks de recaudación, omite del menú);
+  estadísticas con desglose y ranking de bebidas (`rotiseria:stats_bebidas:<period>`).
+- Confirmación rotisería: 4 botones (`confirm:yes`, `confirm:no`, `rotiseria:modificar`, `rotiseria:fecha`) + botones para quitar ítems en modificación o con precio $0.
 
 - IA en cascada (`FallbackAIProvider`): Groq (GPT-OSS 120B) -> OpenRouter -> Gemini.
 

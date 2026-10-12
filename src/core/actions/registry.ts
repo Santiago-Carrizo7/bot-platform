@@ -140,11 +140,17 @@ export interface TemplateDefinition {
    * acciones más usadas en lenguaje del usuario. Si no se define, no hay barra.
    */
   replyMenu?: ReplyMenuItem[];
+  /** Generador dinámico de atajos del teclado persistente según el rol del usuario. */
+  getReplyMenu?: (role?: string) => ReplyMenuItem[];
   /**
    * Distribución de filas para el teclado persistente (ej: [1, 2, 2]).
    * Si no se define, se agrupan de a 2 por fila.
    */
   replyMenuLayout?: number[];
+  /** Generador dinámico de distribución de filas según el rol del usuario. */
+  getReplyMenuLayout?: (role?: string) => number[];
+  /** Generador dinámico de menú inline según el rol del usuario. */
+  getMenu?: (role?: string) => MenuItem[];
   /** Comandos que aparecen en el botón Menú de Telegram (base + template). */
   menuCommands?: { command: string; description: string }[];
   /**
