@@ -328,6 +328,29 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
         const items = Array.isArray(currentData.items) ? (currentData.items as Array<any>) : [];
         if (items.length === 0) return { text: 'No hay ítems para corregir.', parseMode: 'Markdown' };
 
+        if (items.length === 1) {
+          if (conversations && activeState) {
+            await conversations.upsert({
+              ...activeState,
+              data: {
+                ...currentData,
+                _editingItemIndex: 0,
+              },
+              updatedAt: ctx.now,
+            });
+          }
+          return {
+            text: `✏️ *Ingresá el nuevo importe (actual: ${formatCurrency(items[0].monto)}):*\n\nPodés escribir el número directamente (ej: *950000*).`,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [
+                { text: '🗑️ Borrar', callbackData: 'kiosco:del_item:0' },
+                { text: '⬅️ Volver', callbackData: 'kiosco:show_summary' },
+              ],
+            ],
+          };
+        }
+
         const itemButtons: InlineButton[][] = [];
         for (let i = 0; i < items.length; i += 2) {
           const row: InlineButton[] = [];

@@ -24,19 +24,22 @@ REGLAS DE INTERPRETACIÓN:
 
 - VENTAS (dinero que entra):
   * "Vendí 5000", "Venta 3200", "Acabo de vender 7500" -> registrar_venta con monto.
-  * Audios o ráfagas con múltiples ventas: "Vendí 2500, 4000 y 3500", "12000, 3000 y 8000", "2000 y 3800" -> registrar_lote con items: [{ tipo: "VENTA", monto: 2500 }, { tipo: "VENTA", monto: 4000 }, { tipo: "VENTA", monto: 3500 }].
+  * Audios o ráfagas con una o varias ventas: "Vendí 5000" (audio) -> registrar_lote con items: [{ tipo: "VENTA", monto: 5000 }]. "Vendí 2500, 4000 y 3500", "12000, 3000 y 8000", "2000 y 3800" -> registrar_lote con items: [{ tipo: "VENTA", monto: 2500 }, { tipo: "VENTA", monto: 4000 }, { tipo: "VENTA", monto: 3500 }].
   * "Vendí dos alfajores por 3000" -> registrar_venta con monto: 3000, nota: "dos alfajores". NO inventes productos ni manejes stock.
 
 - GASTOS Y COMPRAS A PROVEEDORES (dinero que sale):
-  * "Gasté 3500 en Coca" -> registrar_gasto con monto: 3500, concepto: "Coca", categoria: "Mercadería".
-  * Audios o ráfagas con múltiples gastos: "Gasté 3000 en coca y 5000 en pan" -> registrar_lote con items: [{ tipo: "GASTO", monto: 3000, concepto: "coca" }, { tipo: "GASTO", monto: 5000, concepto: "pan" }].
-  * "Pagué 12000 al proveedor y 4500 de luz" -> registrar_lote con items: [{ tipo: "GASTO", monto: 12000, concepto: "proveedor" }, { tipo: "GASTO", monto: 4500, concepto: "luz" }].
+  * CONCEPTO PRECISO Y CONCISO: Inferí siempre un concepto breve, claro y sustantivo (ej: "Coca Cola", "Sueldo de empleado", "Luz", "Alquiler", "Pan", "Proveedor"). NO pongas oraciones completas, verbos conjugados ni texto de relleno innecesario (ej: poné "Sueldo de empleado", NO "le pagué el sueldo de un millón a un empleado").
+  * CATEGORÍA AUTOMÁTICA (EN SEGUNDO PLANO): Siempre inferí la categoría correspondiente para estadísticas internas de caja (Proveedores, Mercadería, Servicios, Alquiler, Sueldos, Impuestos, Transporte, Supermercado, Otros).
+  * "Gasté 3500 en Coca" (texto simple) -> registrar_gasto con monto: 3500, concepto: "Coca", categoria: "Mercadería".
+  * REGLA CLAVE PARA AUDIOS: Todo mensaje de voz (audio) que mencione gastos o compras (sea uno o varios) DEBE interpretarse SIEMPRE como registrar_lote con items: [{ tipo: "GASTO", monto, concepto, categoria }]. Esto permite mostrar la confirmación con botones de confirmación/edición y proteger al usuario de errores de transcripción.
+  * "Le pagué a un empleado el sueldo de un millón" (audio) -> registrar_lote con items: [{ tipo: "GASTO", monto: 1000000, concepto: "Sueldo de empleado", categoria: "Sueldos" }].
+  * Audios o ráfagas con múltiples gastos: "Gasté 3000 en coca y 5000 en pan" -> registrar_lote con items: [{ tipo: "GASTO", monto: 3000, concepto: "Coca", categoria: "Mercadería" }, { tipo: "GASTO", monto: 5000, concepto: "Pan", categoria: "Mercadería" }].
+  * "Pagué 12000 al proveedor y 4500 de luz" -> registrar_lote con items: [{ tipo: "GASTO", monto: 12000, concepto: "Proveedor", categoria: "Proveedores" }, { tipo: "GASTO", monto: 4500, concepto: "Luz", categoria: "Servicios" }].
   * "Pagué 150.000 de alquiler y que le pagué 1.200.000 al sueldo de un empleado" -> registrar_lote con items: [{ tipo: "GASTO", monto: 150000, concepto: "Alquiler", categoria: "Alquiler" }, { tipo: "GASTO", monto: 1200000, concepto: "Sueldo de empleado", categoria: "Sueldos" }].
-  * "Pagué 12000 al proveedor" o "Le pagué 25000 al proveedor" -> registrar_gasto con monto, concepto y categoria: "Proveedores".
+  * "Pagué 12000 al proveedor" o "Le pagué 25000 al proveedor" -> registrar_gasto con monto: 25000, concepto: "Proveedor", categoria: "Proveedores".
   * "Fui al mayorista y gasté 45000" -> registrar_gasto con monto: 45000, concepto: "Mayorista", categoria: "Proveedores".
   * "Pagué 15000 de luz" -> registrar_gasto con monto: 15000, concepto: "Luz", categoria: "Servicios".
   * "Gasté 5000 en el supermercado" -> registrar_gasto con monto: 5000, concepto: "Supermercado", categoria: "Supermercado".
-  * Categorías sugeridas: Proveedores, Mercadería, Servicios, Alquiler, Sueldos, Impuestos, Transporte, Supermercado, Otros.
 
 - CONSULTAS Y ESTADÍSTICAS:
   * "¿Cuánto vendí hoy?", "Resumen de hoy", "Caja de hoy", "¿Cuánto gané?" -> consultar_resumen con periodo: "hoy".

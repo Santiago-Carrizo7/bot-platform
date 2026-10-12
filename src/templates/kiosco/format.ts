@@ -29,18 +29,15 @@ export function esc(text: string): string {
   return escapeMarkdown(text);
 }
 
-/** Formatea concepto y categoría de gasto evitando duplicados tipo 'Alquiler [Alquiler]'. */
-export function formatExpenseConcept(concept: string, category?: string | null): string {
+/** Formatea concepto de gasto prolijo (sin exponer categoría en UI). */
+export function formatExpenseConcept(concept: string, _category?: string | null): string {
   const cleanConcept = concept.trim();
-  if (!category) return `*${esc(cleanConcept)}*`;
-  const cleanCategory = category.trim();
-  if (
-    cleanConcept.toLowerCase() === cleanCategory.toLowerCase() ||
-    cleanCategory.toLowerCase() === 'otros' ||
-    cleanConcept.toLowerCase().includes(cleanCategory.toLowerCase())
-  ) {
-    return `*${esc(cleanConcept)}*`;
-  }
-  return `*${esc(cleanConcept)}* [${esc(cleanCategory)}]`;
+  return `*${esc(cleanConcept)}*`;
+}
+
+/** Formatea concepto de gasto en línea limpia (sin exponer categoría en UI). */
+export function formatExpenseLines(concept: string, _category?: string | null): string[] {
+  const cleanConcept = concept.trim();
+  return [`Concepto: *${esc(cleanConcept)}*`];
 }
 

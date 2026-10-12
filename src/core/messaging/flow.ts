@@ -94,6 +94,51 @@ export function confirmKeyboard(): InlineButton[][] {
   return [[{ text: '✅ Confirmar', callbackData: 'confirm:yes' }, { text: '❌ Cancelar', callbackData: 'confirm:no' }]];
 }
 
+function maybeConvertToBatchIfVoice(
+  templateActions: ActionDef<unknown>[],
+  action: ActionDef<unknown>,
+  params: Record<string, unknown>,
+  isVoice?: boolean
+): { action: ActionDef<unknown>; params: Record<string, unknown> } {
+  if (!isVoice) return { action, params };
+  if (action.name !== 'registrar_gasto' && action.name !== 'registrar_venta') {
+    return { action, params };
+  }
+  const loteAction = templateActions.find((a) => a.name === 'registrar_lote');
+  if (!loteAction) return { action, params };
+
+  if (action.name === 'registrar_gasto') {
+    return {
+      action: loteAction,
+      params: {
+        origen: 'audio',
+        items: [
+          {
+            tipo: 'GASTO',
+            monto: Number(params.monto),
+            concepto: params.concepto ? String(params.concepto) : undefined,
+            categoria: params.categoria ? String(params.categoria) : undefined,
+          },
+        ],
+      },
+    };
+  }
+
+  return {
+    action: loteAction,
+    params: {
+      origen: 'audio',
+      items: [
+        {
+          tipo: 'VENTA',
+          monto: Number(params.monto),
+          nota: params.nota ? String(params.nota) : undefined,
+        },
+      ],
+    },
+  };
+}
+
 export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotReply> {
   const { resolution, text, now } = input;
   const trimmed = text.trim();
@@ -181,8 +226,14 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
       if (directFresh) {
         const directAction = deps.template.actions.find((a) => a.name === directFresh.actionName);
         if (directAction) {
+          const { action: targetAction, params: targetParams } = maybeConvertToBatchIfVoice(
+            deps.template.actions,
+            directAction,
+            directFresh.params,
+            input.isVoice
+          );
           await deps.conversations.clear(tenant.business.id, resolution.user.id);
-          return proceedWithAction(deps, tenant, resolution.user.id, directAction, directFresh.params, now, access, {
+          return proceedWithAction(deps, tenant, resolution.user.id, targetAction, targetParams, now, access, {
             freshStart: true,
             isVoice: input.isVoice,
           });
@@ -207,8 +258,14 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
             provider: deps.aiProviderName,
             model: deps.aiModel,
           });
+          const { action: targetAction, params: targetParams } = maybeConvertToBatchIfVoice(
+            deps.template.actions,
+            interpretedFresh.action,
+            interpretedFresh.params,
+            input.isVoice
+          );
           await deps.conversations.clear(tenant.business.id, resolution.user.id);
-          return proceedWithAction(deps, tenant, resolution.user.id, interpretedFresh.action, interpretedFresh.params, now, access, {
+          return proceedWithAction(deps, tenant, resolution.user.id, targetAction, targetParams, now, access, {
             freshStart: true,
             isVoice: input.isVoice,
           });
@@ -294,11 +351,17 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   if (direct) {
     const directAction = deps.template.actions.find((a) => a.name === direct.actionName);
     if (directAction) {
+      const { action: targetAction, params: targetParams } = maybeConvertToBatchIfVoice(
+        deps.template.actions,
+        directAction,
+        direct.params,
+        input.isVoice
+      );
       const baseData =
-        active?.phase === 'COLLECTING' && active.actionName === directAction.name ? active.data : {};
-      const merged = mergeData(baseData, direct.params);
-      return proceedWithAction(deps, tenant, resolution.user.id, directAction, merged, now, access, {
-        freshStart: !active || active.actionName !== directAction.name,
+        active?.phase === 'COLLECTING' && active.actionName === targetAction.name ? active.data : {};
+      const merged = mergeData(baseData, targetParams);
+      return proceedWithAction(deps, tenant, resolution.user.id, targetAction, merged, now, access, {
+        freshStart: !active || active.actionName !== targetAction.name,
         isVoice: input.isVoice,
       });
     }
@@ -337,13 +400,19 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
     model: deps.aiModel,
   });
 
+  const { action: targetAction, params: targetParams } = maybeConvertToBatchIfVoice(
+    deps.template.actions,
+    interpreted.action,
+    interpreted.params,
+    input.isVoice
+  );
   const baseData =
-    active?.phase === 'COLLECTING' && active.actionName === interpreted.action.name ? active.data : {};
-  const merged = mergeData(baseData, interpreted.params);
+    active?.phase === 'COLLECTING' && active.actionName === targetAction.name ? active.data : {};
+  const merged = mergeData(baseData, targetParams);
 
   // Si el mensaje apunta a otra acción, se abandona la anterior.
-  return proceedWithAction(deps, tenant, resolution.user.id, interpreted.action, merged, now, access, {
-    freshStart: !active || active.actionName !== interpreted.action.name,
+  return proceedWithAction(deps, tenant, resolution.user.id, targetAction, merged, now, access, {
+    freshStart: !active || active.actionName !== targetAction.name,
     isVoice: input.isVoice,
   });
 }

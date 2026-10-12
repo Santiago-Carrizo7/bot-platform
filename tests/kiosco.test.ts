@@ -264,7 +264,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     const res = await handleText(f.deps, { resolution: f.resolution, text: 'Gasté 3500 en Coca Cola', now: NOW });
     expect(res.text).toContain('🔴 Gasto registrado: *$ 3.500*');
     expect(res.text).toContain('Coca Cola');
-    expect(res.text).toContain('Mercadería');
+    expect(res.text).not.toContain('Mercadería');
     expect(res.inlineKeyboard).toEqual([
       [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
     ]);
@@ -309,9 +309,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     // Caso 1: sin tipo especificado -> pide aclaración pedagógica
     const f1 = setupFlow([{ action: 'calcular_precio', params: { costo_total: 18000, cantidad: 30, porcentaje: 40 } }]);
     const askType = await handleText(f1.deps, { resolution: f1.resolution, text: 'compré 30 alfajores por 18000 y quiero ganar 40%', now: NOW });
-    expect(askType.text).toContain('¿Querés calcular usando *margen* o *recargo*');
-    expect(askType.text).toContain('Recargo / Markup');
-    expect(askType.text).toContain('Margen');
+    expect(askType.text).toContain('Si calculás con Recargo (sobre el costo)');
+    expect(askType.text).toContain('Si calculás con Margen (sobre la venta)');
+    expect(askType.text).toContain('Precio sugerido: *$ 840* c/u');
+    expect(askType.text).toContain('Precio sugerido: *$ 1.000* c/u');
 
     // Caso 2: con margen especificado -> cálculo matemático
     const f2 = setupFlow([{ action: 'calcular_precio', params: { costo_unitario: 600, porcentaje: 40, tipo: 'margen', cantidad: 30 } }]);
@@ -570,8 +571,9 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       text: 'compré 30 alfajores a 18000 a cuánto lo vendo para ganar 40%',
       now: NOW,
     });
-    expect(res.text).toContain('¿Querés calcular usando *margen* o *recargo* para ganar *40%*?');
-    expect(res.text).toContain('Costo unitario: *$ 600*');
+    expect(res.text).toContain('Si calculás con Recargo (sobre el costo)');
+    expect(res.text).toContain('Si calculás con Margen (sobre la venta)');
+    expect(res.text).toContain('*Costo unitario:* *$ 600*');
     expect(f.repo.movements).toHaveLength(0); // NUNCA se registra como gasto
     expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
   });
@@ -652,9 +654,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     });
     // Gasto individual directo
     expect(res.text).toContain('$ 150.000');
-    expect(res.text.toLowerCase()).toContain('concepto: *alquiler*');
+    expect(res.text.toLowerCase()).toContain('- alquiler');
     expect(res.text).not.toContain('alquiler [Alquiler]');
     expect(res.text).not.toContain('Alquiler [Alquiler]');
+    expect(res.text).not.toContain('Categoría:');
   });
 
   it('lote confirmado cierra la sesión limpia sin botones residuales de deshacer/finalizar', async () => {
@@ -1004,6 +1007,105 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
     expect(res.text).toContain('3. 🟢 *$ 30.000* (golosinas)');
     expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
+
+  it('audio en modo libre con un solo gasto entra en confirmación registrar_lote con concepto y categoría en líneas separadas sin guardar antes', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // 1. Debe mostrar resumen claro con monto y concepto en 1 línea, sin categoría visible
+    expect(res.text).toContain('🎤 *Gasto detectado en el audio:*');
+    expect(res.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(res.text).not.toContain('Categoría:');
+    expect(res.inlineKeyboard).toBeDefined();
+    expect(res.inlineKeyboard?.[0]?.[0]?.callbackData).toBe('confirm:yes');
+    expect(res.inlineKeyboard?.[1]?.[0]?.callbackData).toBe('kiosco:correct_prompt');
+
+    // 2. NO debe haber mutado la base de datos todavía
+    expect(f.repo.movements).toHaveLength(0);
+
+    // 3. Confirmar mediante botón
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('✅ *Gasto registrado con éxito:*');
+    expect(confirmed.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(confirmed.text).not.toContain('Categoría:');
+
+    // 4. Se persistió el movimiento y la conversación quedó limpia (sin modo continuo)
+    expect(f.repo.movements).toHaveLength(1);
+    expect(f.repo.movements[0]).toMatchObject({
+      kind: 'OUT',
+      amount: 1000000,
+      concept: 'sueldo de empleado',
+      category: 'Sueldos',
+    });
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('audio en modo libre que devuelve registrar_gasto se convierte automáticamente a registrar_lote', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_gasto',
+        params: { monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // Debe haberse interceptado y solicitado confirmación
+    expect(res.text).toContain('🎤 *Gasto detectado en el audio:*');
+    expect(res.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(res.text).not.toContain('Categoría:');
+    expect(f.repo.movements).toHaveLength(0);
+  });
+
+  it('corrección natural "es 900000" en lote de un solo ítem actualiza el monto', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // Corregir mediante texto natural
+    const corrected = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'es 900000',
+      now: NOW,
+    });
+    expect(corrected.text).toContain('🔴 *$ 900.000* - sueldo de empleado');
   });
 });
 

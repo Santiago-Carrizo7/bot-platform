@@ -16,7 +16,7 @@ import {
   type RegistrarVentaInput as RegistrarVenta,
   type RegistrarLoteInput as RegistrarLote,
 } from './schemas.js';
-import { esc, formatCurrency, formatDateTime, formatExpenseConcept } from './format.js';
+import { esc, formatCurrency, formatDateTime, formatExpenseConcept, formatExpenseLines } from './format.js';
 import type { PeriodSummary } from './types.js';
 
 export interface KioscoActionDeps {
@@ -342,6 +342,25 @@ export function parseBatchItemCorrection<T extends { monto: number }>(
 ): T[] | null {
   const trimmed = raw.trim();
 
+  // 0. Caso especial cuando hay un solo ítem en el lote:
+  if (items.length === 1) {
+    if (/^(?:borrar|eliminar|sacar|quitar|cancelar)$/i.test(trimmed)) {
+      return [];
+    }
+    const singleMatch = trimmed.match(
+      /^(?:cambiar\s+(?:a|por)?\s*)?(?:no,?\s+)?(?:es|era|=|a|por|de|son)?\s*\$?([\d.,]+)(?:\s+(mil|lucas?|[kK])\b)?$/i
+    );
+    if (singleMatch) {
+      const fullExpr = singleMatch[1] + (singleMatch[2] ? ` ${singleMatch[2]}` : '');
+      const parsed = parseAmountAndNote(fullExpr);
+      if (parsed && parsed.amount > 0) {
+        const copy = [...items];
+        copy[0] = { ...copy[0], monto: parsed.amount };
+        return copy;
+      }
+    }
+  }
+
   // 1. Borrar ítem: "borrar 2", "eliminar 2", "sacar 2", "quitar el 2"
   const delMatch = trimmed.match(/^(?:borrar|eliminar|sacar|quitar)\s+(?:el\s+|[ií]tem\s+)?(\d+)$/i);
   if (delMatch) {
@@ -487,7 +506,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       // 1. Detectar si envió audio o texto con lista/ráfaga de números (ej. "3200 2800 2500" o "12000, 3000 y 8000")
       const multiple = parseAmountsList(text);
-      if (multiple && multiple.length > 1) {
+      if (multiple && (multiple.length > 1 || (ctx.isVoice && multiple.length > 0))) {
         return {
           reply: { text: 'Entendido. Preparando confirmación...' },
           switchToConfirming: {
@@ -514,6 +533,23 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
             inlineKeyboard: [
               [{ text: '🏁 Finalizar', callbackData: 'continuous:fin' }, { text: '❌ Cancelar', callbackData: 'continuous:cancel' }],
             ],
+          },
+        };
+      }
+
+      if (ctx.isVoice) {
+        return {
+          reply: { text: 'Entendido. Preparando confirmación...' },
+          switchToConfirming: {
+            actionName: 'registrar_lote',
+            data: {
+              origen: 'audio',
+              items: [{
+                tipo: 'VENTA',
+                monto: parsed.amount,
+                nota: parsed.note,
+              }],
+            },
           },
         };
       }
@@ -565,10 +601,10 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           categoria: category,
           fecha: ctx.now,
         });
+        const conceptPart = concept ? ` - ${esc(concept)}` : '';
         return {
           reply: [
-            `🔴 Gasto registrado: *${formatCurrency(amount)}*`,
-            `Concepto: ${formatExpenseConcept(concept, movement.category)}`,
+            `🔴 Gasto registrado: *${formatCurrency(amount)}*${conceptPart}`,
             `_Total acumulado: ${formatCurrency(amount)} (1)_`,
             '',
             'Podés seguir enviando gastos para sumar a esta tanda o tocar Finalizar.',
@@ -658,9 +694,10 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         const nextData: Record<string, unknown> = { ...data, count, total, lastMovementId: movement.id };
         delete nextData._pendingExpenseAmount;
 
+        const conceptPart = concept ? ` - ${esc(concept)}` : '';
         return {
           reply: {
-            text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: ${formatExpenseConcept(concept, movement.category)}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+            text: `🔴 Gasto registrado: *${formatCurrency(amount)}*${conceptPart}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
             parseMode: 'Markdown',
             inlineKeyboard: [
               [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
@@ -670,9 +707,9 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
-      // 2. Ráfaga o audio con múltiples gastos (ej: "gasté 3000 en coca y 5000 en pan")
+      // 2. Ráfaga o audio con gastos (si es audio, pide confirmación siempre para prevenir errores de transcripción)
       const multiple = parseExpensesList(text);
-      if (multiple && multiple.length > 1) {
+      if (multiple && (multiple.length > 1 || (ctx.isVoice && multiple.length > 0))) {
         return {
           reply: { text: 'Entendido. Preparando confirmación...' },
           switchToConfirming: {
@@ -734,6 +771,23 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
+      if (ctx.isVoice) {
+        return {
+          reply: { text: 'Entendido. Preparando confirmación...' },
+          switchToConfirming: {
+            actionName: 'registrar_lote',
+            data: {
+              origen: 'audio',
+              items: [{
+                tipo: 'GASTO',
+                monto: amount,
+                concepto: concept,
+              }],
+            },
+          },
+        };
+      }
+
       const movement = await cash.recordExpense(ctx.tenant.business.id, ctx.actorUserId, {
         monto: amount,
         concepto: concept,
@@ -743,9 +797,10 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       const count = Number(data.count ?? 0) + 1;
       const total = Number(data.total ?? 0) + amount;
 
+      const conceptPart = concept ? ` - ${esc(concept)}` : '';
       return {
         reply: {
-          text: `🔴 Gasto registrado: *${formatCurrency(amount)}*\nConcepto: ${formatExpenseConcept(concept, movement.category)}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
+          text: `🔴 Gasto registrado: *${formatCurrency(amount)}*${conceptPart}\n_Total acumulado: ${formatCurrency(total)} (${count})_`,
           parseMode: 'Markdown',
           inlineKeyboard: [
             [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
@@ -856,21 +911,53 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       }
 
       if (!input.tipo) {
-        const costStr = unitCost !== undefined ? ` (costo unitario: *${formatCurrency(unitCost)}*)` : '';
+        if (!unitCost) {
+          return {
+            reply:
+              '¿Cuál es el costo del producto? Decime por ejemplo: *"Costo 4000 y quiero el 15%"* o *"Compré alfajores a 600"*.',
+          };
+        }
+
         const pct = input.porcentaje;
-        const ejMarkup = unitCost ? formatCurrency(unitCost * (1 + pct / 100)) : `costo + ${pct}%`;
-        const ejMargen =
-          unitCost && pct < 100 ? formatCurrency(unitCost / (1 - pct / 100)) : `costo / (1 - ${pct}%)`;
+        const rMarkup = Math.round(unitCost * (1 + pct / 100));
+        const gMarkup = rMarkup - unitCost;
+
+        const rMargen = pct < 100 ? Math.round(unitCost / (1 - pct / 100)) : null;
+        const gMargen = rMargen !== null ? rMargen - unitCost : null;
+
+        const qty = input.cantidad && input.cantidad > 1 ? input.cantidad : null;
+        const loteMarkup = qty ? ` (Lote: *${formatCurrency(gMarkup * qty)}*)` : '';
+        const loteMargen = qty && gMargen !== null ? ` (Lote: *${formatCurrency(gMargen * qty)}*)` : '';
+
+        const headerLote = qty
+          ? `📦 *Lote de ${qty} unidades* (Costo total: *${formatCurrency(input.costo_total ?? unitCost * qty)}*)\n`
+          : '';
+
+        const margenBlock =
+          rMargen !== null
+            ? [
+                `• *Si calculás con Margen (sobre la venta):*`,
+                `  El ${pct}% del total que cobra la caja es tu ganancia.`,
+                '',
+                `  👉 Precio sugerido: *${formatCurrency(rMargen)}*${qty ? ' c/u' : ''}`,
+                `  💰 Ganancia: *${formatCurrency(gMargen)}* por unidad${loteMargen}`,
+              ]
+            : [
+                `• *Margen (sobre la venta):*`,
+                `  El margen debe ser menor al 100% (no es posible ganar el 100% de la venta si el producto tuvo costo).`,
+              ];
 
         return {
           reply: [
-            `🧮 ${costStr ? `Costo unitario: *${formatCurrency(unitCost!)}*.\n\n` : ''}¿Querés calcular usando *margen* o *recargo* para ganar *${pct}%*?`,
+            `${headerLote}🧮 *Costo unitario:* *${formatCurrency(unitCost)}* _(para ganar ${pct}%)_`,
             '',
-            `• *Recargo / Markup* (sobre costo):\n  Precio = costo × (1 + ${pct}%)\n  👉 Precio: *${ejMarkup}*`,
+            `• *Si calculás con Recargo (sobre el costo):*`,
+            `  Le sumás el ${pct}% arriba de lo que pagaste.`,
             '',
-            `• *Margen* (sobre precio de venta final):\n  Precio = costo / (1 - ${pct}%)\n  👉 Precio: *${ejMargen}*`,
+            `  👉 Precio sugerido: *${formatCurrency(rMarkup)}*${qty ? ' c/u' : ''}`,
+            `  💰 Ganancia: *${formatCurrency(gMarkup)}* por unidad${loteMarkup}`,
             '',
-            'Respondé *"margen"* o *"recargo"*.',
+            ...margenBlock,
           ].join('\n'),
         };
       }
@@ -1222,39 +1309,61 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
       const isAudio = lote.origen === 'audio' || ctx?.isVoice === true;
 
       const header = isAudio
-        ? (isOnlyVentas
-            ? '🎤 *Ventas detectadas en el audio:*'
-            : isOnlyGastos
-              ? '🎤 *Gastos detectados en el audio:*'
-              : '🎤 *Movimientos detectados en el audio:*')
-        : (isOnlyVentas
-            ? '📋 *Confirmar ventas:*'
-            : isOnlyGastos
-              ? '📋 *Confirmar gastos:*'
-              : '📋 *Confirmar movimientos:*');
+        ? (items.length === 1
+            ? (isOnlyGastos ? '🎤 *Gasto detectado en el audio:*' : '🎤 *Venta detectada en el audio:*')
+            : (isOnlyVentas
+                ? '🎤 *Ventas detectadas en el audio:*'
+                : isOnlyGastos
+                  ? '🎤 *Gastos detectados en el audio:*'
+                  : '🎤 *Movimientos detectados en el audio:*'))
+        : (items.length === 1
+            ? (isOnlyGastos ? '📋 *Confirmar gasto:*' : '📋 *Confirmar venta:*')
+            : (isOnlyVentas
+                ? '📋 *Confirmar ventas:*'
+                : isOnlyGastos
+                  ? '📋 *Confirmar gastos:*'
+                  : '📋 *Confirmar movimientos:*'));
 
       const lines: string[] = [header, ''];
-      items.forEach((item, idx) => {
-        const icon = item.tipo === 'VENTA' ? '🟢' : '🔴';
-        const label = item.tipo === 'VENTA'
-          ? (item.nota ? ` (${esc(item.nota)})` : '')
-          : (item.concepto ? ` - ${esc(item.concepto)}` : '');
-        lines.push(`${idx + 1}. ${icon} *${formatCurrency(item.monto)}*${label}`);
-      });
 
-      lines.push('');
-      if (isOnlyVentas) {
-        lines.push(`• *Total:* *${formatCurrency(totalVentas)}* (${items.length} ${items.length === 1 ? 'venta' : 'ventas'})`);
-      } else if (isOnlyGastos) {
-        lines.push(`• *Total:* *${formatCurrency(totalGastos)}* (${items.length} ${items.length === 1 ? 'gasto' : 'gastos'})`);
+      if (items.length === 1) {
+        const item = items[0];
+        if (item.tipo === 'GASTO') {
+          const conceptPart = item.concepto?.trim() ? ` - ${esc(item.concepto.trim())}` : '';
+          lines.push(`🔴 *${formatCurrency(item.monto)}*${conceptPart}`);
+        } else {
+          const notePart = item.nota?.trim() ? ` (${esc(item.nota.trim())})` : '';
+          lines.push(`🟢 *${formatCurrency(item.monto)}*${notePart}`);
+        }
+        lines.push('');
+        lines.push('¿Confirmás el registro o querés corregir algo?');
+        lines.push('_(Podés tocar ✅ Confirmar registro, ✏️ Corregir un monto, o escribir ej: "es 900000")_');
       } else {
-        lines.push(`• *Total ventas:* ${formatCurrency(totalVentas)} (${ventas.length})`);
-        lines.push(`• *Total gastos:* ${formatCurrency(totalGastos)} (${gastos.length})`);
-      }
+        items.forEach((item, idx) => {
+          const icon = item.tipo === 'VENTA' ? '🟢' : '🔴';
+          if (item.tipo === 'VENTA') {
+            const label = item.nota ? ` (${esc(item.nota)})` : '';
+            lines.push(`${idx + 1}. ${icon} *${formatCurrency(item.monto)}*${label}`);
+          } else {
+            const cleanConcept = item.concepto?.trim() || 'Gasto';
+            lines.push(`${idx + 1}. ${icon} *${formatCurrency(item.monto)}* - ${esc(cleanConcept)}`);
+          }
+        });
 
-      lines.push('');
-      lines.push('¿Confirmás o querés corregir alguna?');
-      lines.push('_(Mandá un texto diciendo la opción que querés cambiar por el monto, ej: "el 2 es 4000" o "borrar 2", o usá el botón de corregir un monto que se encuentra debajo)_');
+        lines.push('');
+        if (isOnlyVentas) {
+          lines.push(`• *Total:* *${formatCurrency(totalVentas)}* (${items.length} ${items.length === 1 ? 'venta' : 'ventas'})`);
+        } else if (isOnlyGastos) {
+          lines.push(`• *Total:* *${formatCurrency(totalGastos)}* (${items.length} ${items.length === 1 ? 'gasto' : 'gastos'})`);
+        } else {
+          lines.push(`• *Total ventas:* ${formatCurrency(totalVentas)} (${ventas.length})`);
+          lines.push(`• *Total gastos:* ${formatCurrency(totalGastos)} (${gastos.length})`);
+        }
+
+        lines.push('');
+        lines.push('¿Confirmás o querés corregir alguna?');
+        lines.push('_(Mandá un texto diciendo la opción que querés cambiar por el monto, ej: "el 2 es 4000" o "borrar 2", o usá el botón de corregir un monto que se encuentra debajo)_');
+      }
 
       return lines.join('\n');
     },
@@ -1297,30 +1406,46 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       const resLines: string[] = [];
       if (isOnlyVentas) {
-        resLines.push(`✅ *${countVentas} ${countVentas === 1 ? 'venta registrada' : 'ventas registradas'} con éxito${targetLabel}:*`);
-        resLines.push('');
-        for (const item of input.items) {
+        if (countVentas === 1) {
+          const item = input.items[0];
           const notePart = item.nota?.trim() ? ` _(${esc(item.nota.trim())})_` : '';
-          resLines.push(`• *${formatCurrency(item.monto)}*${notePart}`);
+          resLines.push(`✅ *Venta registrada con éxito${targetLabel}:*`);
+          resLines.push('');
+          resLines.push(`🟢 Monto: *${formatCurrency(item.monto)}*${notePart}`);
+        } else {
+          resLines.push(`✅ *${countVentas} ventas registradas con éxito${targetLabel}:*`);
+          resLines.push('');
+          for (const item of input.items) {
+            const notePart = item.nota?.trim() ? ` _(${esc(item.nota.trim())})_` : '';
+            resLines.push(`• *${formatCurrency(item.monto)}*${notePart}`);
+          }
+          resLines.push('');
+          resLines.push(`*Total: ${formatCurrency(totalVentas)}*`);
         }
-        resLines.push('');
-        resLines.push(`*Total: ${formatCurrency(totalVentas)}*`);
       } else if (isOnlyGastos) {
-        resLines.push(`✅ *${countGastos} ${countGastos === 1 ? 'gasto registrado' : 'gastos registrados'} con éxito${targetLabel}:*`);
-        resLines.push('');
-        for (const item of input.items) {
-          const conceptPart = item.concepto?.trim() ? ` _(${esc(item.concepto.trim())})_` : '';
-          resLines.push(`• *${formatCurrency(item.monto)}*${conceptPart}`);
+        if (countGastos === 1) {
+          const item = input.items[0];
+          const conceptPart = item.concepto?.trim() ? ` - ${esc(item.concepto.trim())}` : '';
+          resLines.push(`✅ *Gasto registrado con éxito${targetLabel}:*`);
+          resLines.push('');
+          resLines.push(`🔴 *${formatCurrency(item.monto)}*${conceptPart}`);
+        } else {
+          resLines.push(`✅ *${countGastos} gastos registrados con éxito${targetLabel}:*`);
+          resLines.push('');
+          for (const item of input.items) {
+            const conceptPart = item.concepto?.trim() ? ` - ${esc(item.concepto.trim())}` : '';
+            resLines.push(`• 🔴 *${formatCurrency(item.monto)}*${conceptPart}`);
+          }
+          resLines.push('');
+          resLines.push(`*Total: ${formatCurrency(totalGastos)}*`);
         }
-        resLines.push('');
-        resLines.push(`*Total: ${formatCurrency(totalGastos)}*`);
       } else {
         resLines.push(`✅ *Lote registrado con éxito${targetLabel}:*`);
         resLines.push('');
         for (const item of input.items) {
-          const label = item.tipo === 'VENTA' ? 'Venta' : 'Gasto';
+          const label = item.tipo === 'VENTA' ? '🟢 Venta' : '🔴 Gasto';
           const detail = (item.tipo === 'VENTA' ? item.nota : item.concepto)?.trim();
-          const detailPart = detail ? ` _(${esc(detail)})_` : '';
+          const detailPart = detail ? ` - ${esc(detail)}` : '';
           resLines.push(`• ${label}: *${formatCurrency(item.monto)}*${detailPart}`);
         }
         resLines.push('');
