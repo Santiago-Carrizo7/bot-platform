@@ -26,6 +26,8 @@ REGLAS DE INTERPRETACIÓN:
   * "Vendí 5000", "Venta 3200", "Acabo de vender 7500" -> registrar_venta con monto.
   * Audios o ráfagas con una o varias ventas: "Vendí 5000" (audio) -> registrar_lote con items: [{ tipo: "VENTA", monto: 5000 }]. "Vendí 2500, 4000 y 3500", "12000, 3000 y 8000", "2000 y 3800" -> registrar_lote con items: [{ tipo: "VENTA", monto: 2500 }, { tipo: "VENTA", monto: 4000 }, { tipo: "VENTA", monto: 3500 }].
   * "Vendí dos alfajores por 3000" -> registrar_venta con monto: 3000, nota: "dos alfajores". NO inventes productos ni manejes stock.
+  * AGREGADOS COLOQUIALES (NO CORTAR LA LISTA): Frases como "Ah, y también vendí X", "ah me olvidaba de X", "sumale X", "y también X" son ventas adicionales que DEBEN incluirse en la lista. NUNCA des por terminada la lista antes de tiempo ni ignores importes después de un punto o conector.
+  * CONCEPTOS Y NOTAS CON SENTIDO REAL DE KIOSCO: Una nota o concepto debe ser un producto o motivo comercial vendible o gastable en un kiosco (ej: "alfajor", "coca", "cigarrillos", "pan", "luz"). NUNCA uses interjecciones, muletillas o conectores hablados como nota o concepto (ej: "Ah", "Eh", "Bueno", "Che", "Y", "También" NUNCA son notas ni conceptos; si no se menciona un producto claro, omití la nota).
 
 - GASTOS Y COMPRAS A PROVEEDORES (dinero que sale):
   * CONCEPTO PRECISO Y CONCISO: Inferí siempre un concepto breve, claro y sustantivo (ej: "Coca Cola", "Sueldo de empleado", "Luz", "Alquiler", "Pan", "Proveedor"). NO pongas oraciones completas, verbos conjugados ni texto de relleno innecesario (ej: poné "Sueldo de empleado", NO "le pagué el sueldo de un millón a un empleado").
@@ -61,7 +63,7 @@ REGLAS DE INTERPRETACIÓN:
   * "lucas" = miles: "dos lucas" -> 2000, "diez lucas" -> 10000, "cincuenta lucas" -> 50000, "tres lucas y media" -> 3500.
   * "k" = miles: "150k" -> 150000, "15k" -> 15000, "200k" -> 200000.
   * "quinientos mil" -> 500000, "ciento cincuenta mil" -> 150000.
-  * Separador de miles: En Argentina el punto o la coma en audios pueden aparecer como "1.200.000" o "150.000" (ciento cincuenta mil, NO ciento cincuenta). NUNCA confundas 1.200.000 o 1,2 millones con 1.2 pesos.
+  * Separador de miles: En Argentina el punto o la coma en audios y textos siempre representan miles cuando hay 3 dígitos detrás (ej: "1.200.000" = 1200000, "150.000" = 150000, "14.500" = 14500, "8.700" = 8700, "2.100" = 2100). En un kiosco NO existen importes con centavos ni ventas de $8 pesos. NUNCA trunques ceros ni interpretes como decimal cifras como "8.700" (es 8700, NUNCA 8.7).
 - Números en palabras: "cinco mil" -> 5000, "diez mil" -> 10000, "ochenta y cinco mil" -> 85000.
 - Fecha de referencia (hoy): ${referenceDateStr}.
 ${hints ? `Contexto adicional: ${hints}` : ''}`;
