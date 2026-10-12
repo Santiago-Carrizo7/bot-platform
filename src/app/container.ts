@@ -6,6 +6,7 @@ import { logger } from '../core/logging/logger.js';
 import type { TemplateDefinition } from '../core/actions/registry.js';
 import { ActionInterpreter } from '../core/ai/interpreter.js';
 import { AuditService } from '../core/audit/audit.service.js';
+import { PaymentService } from '../core/billing/payment.service.js';
 import { BusinessService } from '../core/tenant/business.service.js';
 import { UserService } from '../core/identity/user.service.js';
 import { MembershipService } from '../core/identity/membership.service.js';
@@ -21,6 +22,7 @@ import {
   PrismaConversationRepository,
   PrismaInvitationRepository,
   PrismaMembershipRepository,
+  PrismaPaymentRepository,
   PrismaUserRepository,
 } from '../infrastructure/persistence/core.repositories.js';
 import { OpenRouterProvider } from '../infrastructure/ai/openrouter.provider.js';
@@ -119,6 +121,7 @@ export interface CoreServices {
   stt: SpeechToTextService;
   vision: VisionService;
   audit: AuditService;
+  payments: PaymentService;
   flowBase: Omit<FlowDeps, 'template'>;
   apiSecret: string;
 }
@@ -132,12 +135,14 @@ export function buildCoreServices(config: AppConfig): CoreServices {
   const conversationRepo = new PrismaConversationRepository(prisma);
   const auditRepo = new PrismaAuditRepository(prisma);
   const aiUsageRepo = new PrismaAiUsageRepository(prisma);
+  const paymentRepo = new PrismaPaymentRepository(prisma);
 
   const audit = new AuditService(auditRepo);
   const users = new UserService(userRepo);
   const businesses = new BusinessService(businessRepo);
   const memberships = new MembershipService(membershipRepo);
-  const invitations = new InvitationService(invitationRepo, audit);
+  const invitations = new InvitationService(invitationRepo, auditRepo);
+  const payments = new PaymentService(paymentRepo);
   const resolver = new TenantResolver(users, memberships, membershipRepo, invitations);
 
   const { provider: aiProvider, modelDescription } = buildAIProvider(config);
@@ -174,7 +179,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
     aiModel: modelDescription,
   };
 
-  return { users, businesses, memberships, invitations, resolver, interpreter, stt, vision, audit, flowBase, apiSecret: config.API_SECRET };
+  return { users, businesses, memberships, invitations, resolver, interpreter, stt, vision, audit, payments, flowBase, apiSecret: config.API_SECRET };
 }
 
 export interface RunningBot {
@@ -271,6 +276,9 @@ export function buildAdminRouter(core: CoreServices, config: AppConfig, composit
     users: core.users,
     invitations: core.invitations,
     audit: core.audit,
+    payments: core.payments,
+    trialDaysDefault: config.TRIAL_DAYS,
+    graceDaysDefault: config.GRACE_DAYS,
     templates: composition.templates,
     seedBusiness: composition.seedBusiness,
     resolveBotUsername: composition.resolveBotUsername,

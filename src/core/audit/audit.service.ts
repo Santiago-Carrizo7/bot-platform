@@ -11,4 +11,8 @@ export class AuditService {
   async listByBusiness(businessId: string, limit = 50): Promise<AuditEntry[]> {
     return this.audit.listByBusiness(businessId, limit);
   }
+
+  async listRecent(limit = 50): Promise<AuditEntry[]> {
+    return this.audit.listRecent(limit);
+  }
 }

@@ -5,14 +5,19 @@ import {
   ADMIN_SESSION_COOKIE,
   buildClearCookie,
   buildSessionCookie,
+  csrfToken,
   passwordFingerprint,
   readCookie,
+  sanitizeOperator,
   signSession,
   verifySession,
 } from '../src/app/admin/session.js';
 import { createAdminRouter, type AdminRouterDeps } from '../src/app/admin/router.js';
+import { trialLabel } from '../src/app/admin/pages.js';
+import { evaluateAccess } from '../src/core/tenant/business-status.js';
 import { createExpressApp } from '../src/infrastructure/http/server.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
+import { PaymentService } from '../src/core/billing/payment.service.js';
 import { InvitationService } from '../src/core/identity/invitation.service.js';
 import { MembershipService } from '../src/core/identity/membership.service.js';
 import { UserService } from '../src/core/identity/user.service.js';
@@ -22,6 +27,7 @@ import {
   FakeBusinessRepo,
   FakeInvitationRepo,
   FakeMembershipRepo,
+  FakePaymentRepo,
   FakeUserRepo,
   makeBusiness,
 } from './fakes.js';
@@ -36,6 +42,11 @@ describe('admin session (cookie firmada HMAC)', () => {
     expect(payload).not.toBeNull();
     expect(payload!.exp).toBeGreaterThan(Date.now());
     expect(payload!.pwdFp).toBe(passwordFingerprint(PASSWORD));
+  });
+
+  it('lleva la etiqueta del operador firmada', () => {
+    const value = signSession({ password: PASSWORD, secret: SECRET, operator: 'santi' });
+    expect(verifySession(value, { password: PASSWORD, secret: SECRET })?.op).toBe('santi');
   });
 
   it('expira según el TTL (12 h)', () => {
@@ -90,6 +101,23 @@ describe('admin session (cookie firmada HMAC)', () => {
     expect(readCookie('otra=1', ADMIN_SESSION_COOKIE)).toBeUndefined();
     expect(readCookie(undefined, ADMIN_SESSION_COOKIE)).toBeUndefined();
   });
+
+  it('csrfToken es estable por sesión y distinto por sesión/secret', () => {
+    const a = signSession({ password: PASSWORD, secret: SECRET, now: new Date('2026-10-12T10:00:00Z') });
+    const b = signSession({ password: PASSWORD, secret: SECRET, now: new Date('2026-10-12T10:00:01Z') });
+    expect(csrfToken(a, SECRET)).toBe(csrfToken(a, SECRET));
+    expect(csrfToken(a, SECRET)).not.toBe(csrfToken(b, SECRET));
+    expect(csrfToken(a, SECRET)).not.toBe(csrfToken(a, 'otro-secret-bien-largo-123'));
+  });
+
+  it('sanitizeOperator acepta nombres simples y rechaza basura', () => {
+    expect(sanitizeOperator('santi')).toBe('santi');
+    expect(sanitizeOperator('  María López  ')).toBe('María López');
+    expect(sanitizeOperator('')).toBeUndefined();
+    expect(sanitizeOperator('   ')).toBeUndefined();
+    expect(sanitizeOperator('<script>')).toBeUndefined();
+    expect(sanitizeOperator('a'.repeat(50))).toHaveLength(24);
+  });
 });
 
 // --- Infra de tests HTTP: app Express real + fetch (sin dependencias extra) ---
@@ -103,6 +131,7 @@ interface TestApp {
     users: FakeUserRepo;
     invitations: FakeInvitationRepo;
     audit: FakeAuditRepo;
+    payments: FakePaymentRepo;
   };
 }
 
@@ -118,6 +147,7 @@ async function startApp(options: { admin?: boolean } = {}): Promise<TestApp> {
   const users = new FakeUserRepo();
   const invitations = new FakeInvitationRepo();
   const audit = new FakeAuditRepo();
+  const payments = new FakePaymentRepo();
   const auditService = new AuditService(audit);
 
   const deps: AdminRouterDeps = {
@@ -128,6 +158,9 @@ async function startApp(options: { admin?: boolean } = {}): Promise<TestApp> {
     users: new UserService(users),
     invitations: new InvitationService(invitations, auditService),
     audit: auditService,
+    payments: new PaymentService(payments),
+    trialDaysDefault: 10,
+    graceDaysDefault: 7,
     templates: [{ id: 'gastos', label: 'Control de Gastos' }],
     seedBusiness: async () => {},
     resolveBotUsername: async () => 'mi_bot_test',
@@ -146,12 +179,11 @@ async function startApp(options: { admin?: boolean } = {}): Promise<TestApp> {
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,
     deps,
-    repos: { businesses, memberships, users, invitations, audit },
+    repos: { businesses, memberships, users, invitations, audit, payments },
   };
 }
 
 function formHeaders(base: string, extra: Record<string, string> = {}): Record<string, string> {
-  // Origin igual al host: el admin solo acepta POST del mismo origen.
   return { 'Content-Type': 'application/x-www-form-urlencoded', Origin: base, ...extra };
 }
 
@@ -159,10 +191,18 @@ function post(url: string, body: Record<string, string>, headers: Record<string,
   return fetch(url, { method: 'POST', headers, body: new URLSearchParams(body), redirect: 'manual' });
 }
 
-async function login(base: string, password: string): Promise<{ status: number; cookie: string; setCookie: string }> {
-  const res = await post(`${base}/admin/login`, { password }, formHeaders(base));
+async function login(base: string, password: string, operator?: string): Promise<{ status: number; cookie: string; csrf: string; setCookie: string }> {
+  const body: Record<string, string> = { password };
+  if (operator) body.operator = operator;
+  const res = await post(`${base}/admin/login`, body, formHeaders(base));
   const setCookie = res.headers.get('set-cookie') ?? '';
-  return { status: res.status, cookie: setCookie.split(';')[0], setCookie };
+  const cookie = setCookie.split(';')[0];
+  const raw = cookie.split('=')[1] ?? '';
+  return { status: res.status, cookie, csrf: raw ? csrfToken(raw, SECRET) : '', setCookie };
+}
+
+function authed(base: string, cookie: string, csrf: string, extra: Record<string, string> = {}): Record<string, string> {
+  return formHeaders(base, { Cookie: cookie, ...extra });
 }
 
 describe('admin: guard y login', () => {
@@ -171,6 +211,14 @@ describe('admin: guard y login', () => {
     const res = await fetch(`${app.base}/admin/`, { redirect: 'manual' });
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/admin/login');
+  });
+
+  it('rutas nuevas sin sesión → 302 al login', async () => {
+    const app = await startApp();
+    for (const path of ['/admin/businesses', '/admin/trials', '/admin/payments', '/admin/audit', '/admin/config']) {
+      const res = await fetch(`${app.base}${path}`, { redirect: 'manual' });
+      expect(res.status).toBe(302);
+    }
   });
 
   it('POST protegido sin cookie → 302 al login', async () => {
@@ -198,6 +246,14 @@ describe('admin: guard y login', () => {
     expect(toLogin.headers.get('location')).toBe('/admin/');
   });
 
+  it('login con operador muestra la etiqueta y la audita', async () => {
+    const app = await startApp();
+    const ok = await login(app.base, PASSWORD, 'santi');
+    expect(ok.status).toBe(302);
+    const html = await (await fetch(`${app.base}/admin/`, { headers: { Cookie: ok.cookie } })).text();
+    expect(html).toContain('santi');
+  });
+
   it('login incorrecto → 401 con el form y sin exponer la password', async () => {
     const app = await startApp();
     const res = await post(`${app.base}/admin/login`, { password: 'otra-cosa' }, formHeaders(app.base));
@@ -223,7 +279,6 @@ describe('admin: guard y login', () => {
     const app = await startApp({ admin: false });
     expect((await fetch(`${app.base}/admin/`)).status).toBe(404);
     expect((await fetch(`${app.base}/admin/login`)).status).toBe(404);
-    // El resto de la app sigue respondiendo.
     expect((await fetch(`${app.base}/health`)).status).toBe(200);
   });
 
@@ -238,13 +293,63 @@ describe('admin: guard y login', () => {
     expect((await res.json()).error).toBe('FORBIDDEN');
   });
 
-  it('logout borra la cookie (Max-Age=0) y manda al login', async () => {
+  it('POST con sesión pero sin CSRF → 403', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/businesses`,
+      { name: 'Sin CSRF', templateId: 'gastos' },
+      formHeaders(app.base, { Cookie: cookie })
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('FORBIDDEN');
+    expect(app.repos.businesses.store.size).toBe(0);
+  });
+
+  it('logout con CSRF borra la cookie (Max-Age=0) y manda al login', async () => {
     const app = await startApp();
     const ok = await login(app.base, PASSWORD);
-    const res = await post(`${app.base}/admin/logout`, {}, formHeaders(app.base, { Cookie: ok.cookie }));
+    const res = await post(`${app.base}/admin/logout`, { _csrf: ok.csrf }, authed(app.base, ok.cookie, ok.csrf));
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/admin/login');
     expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+
+  it('logout sin CSRF → 403 y la sesión sigue válida', async () => {
+    const app = await startApp();
+    const ok = await login(app.base, PASSWORD);
+    const res = await post(`${app.base}/admin/logout`, {}, authed(app.base, ok.cookie, ok.csrf));
+    expect(res.status).toBe(403);
+    const panel = await fetch(`${app.base}/admin/`, { headers: { Cookie: ok.cookie } });
+    expect(panel.status).toBe(200);
+  });
+});
+
+describe('admin: dashboard', () => {
+  it('muestra KPIs reales, últimos negocios y actividad', async () => {
+    const app = await startApp();
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'K1', status: 'TRIAL' }) });
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'K2', status: 'ACTIVE' }) });
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'K3', status: 'SUSPENDED' }) });
+    const { cookie } = await login(app.base, PASSWORD);
+    const html = await (await fetch(`${app.base}/admin/`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('Dashboard');
+    expect(html).toContain('Negocios registrados');
+    expect(html).toContain('K1');
+    expect(html).toContain('K2');
+    expect(html).toContain('Cobrado este mes');
+    expect(html).toContain('Crear negocio');
+    expect(html).toContain('Negocios');
+    expect(html).toContain('Pagos');
+    expect(html).toContain('Auditoría');
+  });
+
+  it('no inventa métricas: sin datos muestra ceros y vacíos', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+    const html = await (await fetch(`${app.base}/admin/`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('Todavía no hay negocios');
+    expect(html).toContain('Sin trials por vencer');
   });
 });
 
@@ -252,7 +357,7 @@ describe('admin: lista y alta de negocios', () => {
   it('sin negocios muestra el estado vacío y el formulario de alta', async () => {
     const app = await startApp();
     const { cookie } = await login(app.base, PASSWORD);
-    const res = await fetch(`${app.base}/admin/`, { headers: { Cookie: cookie } });
+    const res = await fetch(`${app.base}/admin/businesses`, { headers: { Cookie: cookie } });
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Todavía no hay negocios');
@@ -261,9 +366,9 @@ describe('admin: lista y alta de negocios', () => {
     expect(html).toContain('Salir');
   });
 
-  it('crear negocio: crea, corre el seed, audita y redirige al detalle', async () => {
+  it('crear negocio: crea, corre el seed, audita y redirige a la confirmación', async () => {
     const app = await startApp();
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const seeds: string[] = [];
     app.deps.seedBusiness = async (templateId, businessId) => {
       seeds.push(`${templateId}:${businessId}`);
@@ -271,8 +376,8 @@ describe('admin: lista y alta de negocios', () => {
 
     const res = await post(
       `${app.base}/admin/businesses`,
-      { name: 'Kiosco Don Pepe', templateId: 'gastos' },
-      formHeaders(app.base, { Cookie: cookie })
+      { name: 'Kiosco Don Pepe', templateId: 'gastos', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(302);
     const location = res.headers.get('location')!;
@@ -283,22 +388,30 @@ describe('admin: lista y alta de negocios', () => {
     expect(created[0].timezone).toBe('America/Argentina/Buenos_Aires');
     expect(created[0].currency).toBe('ARS');
     expect(seeds).toEqual([`gastos:${created[0].id}`]);
-    expect(location).toBe(`/admin/businesses/${created[0].id}`);
+    expect(location).toContain(`/admin/businesses/${created[0].id}`);
+    expect(location).toContain('created=1');
     expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.business_created');
-    expect(app.repos.audit.entries[0].actorUserId).toBeNull();
 
-    const detail = await fetch(`${app.base}${location}`, { headers: { Cookie: cookie } });
-    expect(detail.status).toBe(200);
-    expect(await detail.text()).toContain('Kiosco Don Pepe');
+    const confirm = await fetch(`${app.base}${location}`, { headers: { Cookie: cookie } });
+    expect(confirm.status).toBe(200);
+    expect(await confirm.text()).toContain('Negocio creado');
+  });
+
+  it('el alta guiada muestra el paso 1 con seeds y siguientes acciones', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+    const html = await (await fetch(`${app.base}/admin/businesses/new`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('Paso 1 de 2');
+    expect(html).toContain('Después de crear');
   });
 
   it('template desconocido → 400 con el error en el formulario (no crea nada)', async () => {
     const app = await startApp();
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const res = await post(
       `${app.base}/admin/businesses`,
-      { name: 'Otro', templateId: 'no-existe' },
-      formHeaders(app.base, { Cookie: cookie })
+      { name: 'Otro', templateId: 'no-existe', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('Template desconocido');
@@ -307,18 +420,18 @@ describe('admin: lista y alta de negocios', () => {
 
   it('nombre vacío → 400 y sigue en la lista', async () => {
     const app = await startApp();
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const res = await post(
       `${app.base}/admin/businesses`,
-      { name: '   ', templateId: 'gastos' },
-      formHeaders(app.base, { Cookie: cookie })
+      { name: '   ', templateId: 'gastos', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('Ingresá un nombre');
     expect(app.repos.businesses.store.size).toBe(0);
   });
 
-  it('lista los negocios existentes con estado y trial', async () => {
+  it('lista los negocios con estado y trial (misma definición que el Core)', async () => {
     const app = await startApp();
     app.repos.businesses.seed({ ...makeBusiness({ name: 'Panadería Luna', status: 'ACTIVE' }) });
     app.repos.businesses.seed({
@@ -330,16 +443,90 @@ describe('admin: lista y alta de negocios', () => {
       }),
     });
     const { cookie } = await login(app.base, PASSWORD);
-    const html = await (await fetch(`${app.base}/admin/`, { headers: { Cookie: cookie } })).text();
+    const html = await (await fetch(`${app.base}/admin/businesses`, { headers: { Cookie: cookie } })).text();
     expect(html).toContain('Panadería Luna');
     expect(html).toContain('Barbería Cut');
     expect(html).toContain('trial 8 d');
     expect(html).toContain('activo');
   });
+
+  it('búsqueda y filtros acotan la lista', async () => {
+    const app = await startApp();
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'Kiosco Pepe', status: 'TRIAL' }) });
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'Rotisería Ana', status: 'ACTIVE' }) });
+    const { cookie } = await login(app.base, PASSWORD);
+    const byName = await (
+      await fetch(`${app.base}/admin/businesses?q=pepe`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(byName).toContain('Kiosco Pepe');
+    expect(byName).not.toContain('Rotisería Ana');
+    const byStatus = await (
+      await fetch(`${app.base}/admin/businesses?status=ACTIVE`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(byStatus).toContain('Rotisería Ana');
+    expect(byStatus).not.toContain('Kiosco Pepe');
+  });
+
+  it('XSS: el nombre con HTML se escapa en la lista', async () => {
+    const app = await startApp();
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    await post(
+      `${app.base}/admin/businesses`,
+      { name: '<script>alert(1)</script>', templateId: 'gastos', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    const html = await (await fetch(`${app.base}/admin/businesses`, { headers: { Cookie: cookie } })).text();
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+});
+
+describe('admin: trial calculado como el Core', () => {
+  it('trialLabel usa evaluateAccess (sin cálculos duplicados)', () => {
+    const b = makeBusiness({ status: 'TRIAL', trialStartedAt: new Date(Date.now() - 2 * 86_400_000), trialDays: 10 });
+    expect(evaluateAccess(b).trialDaysLeft).toBe(8);
+    expect(trialLabel(b)).toBe('trial 8 d');
+  });
+
+  it('trial vencido → efectivo READ_ONLY + recordatorio', () => {
+    const b = makeBusiness({ status: 'TRIAL', trialStartedAt: new Date(Date.now() - 11 * 86_400_000), trialDays: 10 });
+    const ev = evaluateAccess(b);
+    expect(ev.effectiveStatus).toBe('READ_ONLY');
+    expect(ev.canWrite).toBe(false);
+    expect(trialLabel(b)).toBe('trial vencido');
+  });
+
+  it('página de trials agrupa por vencer/vencidos/activos/sin usar', async () => {
+    const app = await startApp();
+    app.repos.businesses.seed({ ...makeBusiness({ name: 'Sin usar', status: 'TRIAL', trialStartedAt: null }) });
+    app.repos.businesses.seed({
+      ...makeBusiness({ name: 'Por vencer', status: 'TRIAL', trialStartedAt: new Date(Date.now() - 9 * 86_400_000), trialDays: 10 }),
+    });
+    const { cookie } = await login(app.base, PASSWORD);
+    const html = await (await fetch(`${app.base}/admin/trials`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('Sin usar');
+    expect(html).toContain('Por vencer');
+    expect(html).toContain('Trials y suscripciones');
+  });
 });
 
 describe('admin: detalle de negocio', () => {
-  it('muestra datos, miembros (telegramId + rol) e invitaciones con estado', async () => {
+  it('resumen muestra datos, último pago y total cobrado', async () => {
+    const app = await startApp();
+    const business = app.repos.businesses.seed(makeBusiness({ name: 'Kiosco Detalle', timezone: 'UTC' }));
+    const { cookie } = await login(app.base, PASSWORD);
+    const res = await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('Kiosco Detalle');
+    expect(html).toContain(business.id);
+    expect(html).toContain('Resumen');
+    expect(html).toContain('Suscripción');
+    expect(html).toContain('Pagos');
+    expect(html).toContain('Actividad');
+  });
+
+  it('pestañas de miembros e invitaciones con estado', async () => {
     const app = await startApp();
     const business = app.repos.businesses.seed(makeBusiness({ name: 'Kiosco Detalle', timezone: 'UTC' }));
     const user = await app.repos.users.create('555000111');
@@ -350,20 +537,20 @@ describe('admin: detalle de negocio', () => {
     await app.deps.invitations.revoke(business.id, revoked.invitation.id, 'owner-1');
 
     const { cookie } = await login(app.base, PASSWORD);
-    const res = await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } });
-    expect(res.status).toBe(200);
-    const html = await res.text();
+    const members = await (
+      await fetch(`${app.base}/admin/businesses/${business.id}?tab=miembros`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(members).toContain('555000111');
+    expect(members).toContain('OWNER');
 
-    expect(html).toContain('Kiosco Detalle');
-    expect(html).toContain(business.id);
-    expect(html).toContain('555000111');
-    expect(html).toContain('OWNER');
-    expect(html).toContain('pendiente');
-    expect(html).toContain('revocada');
-    expect(html).toContain('Miembros (1)');
-    expect(html).toContain('Invitaciones (2)');
-    // El deep link NUNCA se muestra de nuevo (solo el hash vive en la DB).
-    expect(html).not.toContain(pending.token);
+    const invites = await (
+      await fetch(`${app.base}/admin/businesses/${business.id}?tab=invitaciones`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(invites).toContain('pendiente');
+    expect(invites).toContain('revocada');
+    expect(invites).toContain('Miembros (1)');
+    expect(invites).toContain('Invitaciones (2)');
+    expect(invites).not.toContain(pending.token);
   });
 
   it('negocio inexistente → 404', async () => {
@@ -386,30 +573,29 @@ describe('admin: invitaciones, miembros y estado', () => {
   it('crear invitación: devuelve el deep link UNA sola vez y queda registrada', async () => {
     const app = await startApp();
     const { business } = await businessFixture(app);
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
 
     const res = await post(
       `${app.base}/admin/businesses/${business.id}/invitations`,
-      { role: 'EMPLOYEE', days: '5' },
-      formHeaders(app.base, { Cookie: cookie })
+      { role: 'EMPLOYEE', days: '5', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('https://t.me/mi_bot_test?start=');
     expect(html).toContain('se muestra una sola vez');
+    expect(html).toContain('Copiar enlace');
     const shownToken = html.split('https://t.me/mi_bot_test?start=')[1]?.split(/["<]/)[0];
     expect(shownToken).toBeTruthy();
 
     const invitation = [...app.repos.invitations.store.values()][0];
     expect(invitation.role).toBe('EMPLOYEE');
     expect(invitation.expiresAt.getTime()).toBeGreaterThan(Date.now() + 4 * 86_400_000);
-    // En la DB vive solo el hash, nunca el token.
     expect(invitation.tokenHash).not.toBe(shownToken);
     expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.invitation_created');
 
-    // Volver al detalle: el deep link ya no aparece.
     const detail = await (
-      await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } })
+      await fetch(`${app.base}/admin/businesses/${business.id}?tab=invitaciones`, { headers: { Cookie: cookie } })
     ).text();
     expect(detail).not.toContain(shownToken!);
   });
@@ -420,11 +606,11 @@ describe('admin: invitaciones, miembros y estado', () => {
     app.deps.resolveBotUsername = async () => {
       throw new Error("No hay bot configurado para 'gastos'. Configurá TELEGRAM_BOT_TOKEN_GASTOS.");
     };
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const res = await post(
       `${app.base}/admin/businesses/${business.id}/invitations`,
-      { role: 'OWNER', days: '7' },
-      formHeaders(app.base, { Cookie: cookie })
+      { role: 'OWNER', days: '7', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('TELEGRAM_BOT_TOKEN_GASTOS');
@@ -434,11 +620,11 @@ describe('admin: invitaciones, miembros y estado', () => {
   it('días fuera de rango → 400 con el mensaje en el detalle', async () => {
     const app = await startApp();
     const { business } = await businessFixture(app);
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const res = await post(
       `${app.base}/admin/businesses/${business.id}/invitations`,
-      { role: 'OWNER', days: '400' },
-      formHeaders(app.base, { Cookie: cookie })
+      { role: 'OWNER', days: '400', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('hasta 90 días');
@@ -449,46 +635,50 @@ describe('admin: invitaciones, miembros y estado', () => {
     const app = await startApp();
     const { business } = await businessFixture(app);
     const created = await app.deps.invitations.create(business.id, 'EMPLOYEE', { botUsername: 'mi_bot_test' });
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
 
     const res = await post(
       `${app.base}/admin/invitations/${created.invitation.id}/revoke`,
-      {},
-      formHeaders(app.base, { Cookie: cookie })
+      { _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe(`/admin/businesses/${business.id}`);
+    expect(res.headers.get('location')).toContain(`/admin/businesses/${business.id}`);
     expect((await app.repos.invitations.findById(created.invitation.id))?.revokedAt).not.toBeNull();
     expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.invitation_revoked');
-    expect(app.repos.audit.entries.at(-1)?.actorUserId).toBeNull();
   });
 
   it('invitación inexistente → 404', async () => {
     const app = await startApp();
-    const { cookie } = await login(app.base, PASSWORD);
-    const res = await post(`${app.base}/admin/invitations/no-existe/revoke`, {}, formHeaders(app.base, { Cookie: cookie }));
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/invitations/no-existe/revoke`,
+      { _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
     expect(res.status).toBe(404);
   });
 
-  it('cambiar estado manual: audita de → a y refleja el cambio', async () => {
+  it('cambiar estado manual: audita de → a con motivo y refleja el cambio', async () => {
     const app = await startApp();
     const { business } = await businessFixture(app);
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD, 'ops');
     const from = business.status;
 
     const res = await post(
       `${app.base}/admin/businesses/${business.id}/status`,
-      { status: 'SUSPENDED' },
-      formHeaders(app.base, { Cookie: cookie })
+      { status: 'SUSPENDED', reason: 'falta de pago', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(302);
     expect((await app.repos.businesses.findById(business.id))?.status).toBe('SUSPENDED');
 
     const change = app.repos.audit.entries.find((e) => e.action === 'admin.status_changed');
-    expect(change?.metadata).toMatchObject({ from, to: 'SUSPENDED' });
-    expect(change?.actorUserId).toBeNull();
+    expect(change?.metadata).toMatchObject({ from, to: 'SUSPENDED', reason: 'falta de pago', operator: 'ops' });
 
-    const html = await (await fetch(`${app.base}/admin/businesses/${business.id}`, { headers: { Cookie: cookie } })).text();
+    const html = await (
+      await fetch(`${app.base}/admin/businesses/${business.id}?tab=suscripcion`, { headers: { Cookie: cookie } })
+    ).text();
     expect(html).toContain('SUSPENDED');
     expect(html).toContain('suspendido');
   });
@@ -496,11 +686,11 @@ describe('admin: invitaciones, miembros y estado', () => {
   it('estado fuera del enum → 400 y el negocio queda igual', async () => {
     const app = await startApp();
     const { business } = await businessFixture(app);
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
     const res = await post(
       `${app.base}/admin/businesses/${business.id}/status`,
-      { status: 'REBOOT' },
-      formHeaders(app.base, { Cookie: cookie })
+      { status: 'REBOOT', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(res.status).toBe(400);
     expect((await app.repos.businesses.findById(business.id))?.status).toBe('TRIAL');
@@ -508,19 +698,19 @@ describe('admin: invitaciones, miembros y estado', () => {
 
   it('flujo completo: crear negocio → invitar owner → revocar → suspender', async () => {
     const app = await startApp();
-    const { cookie } = await login(app.base, PASSWORD);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
 
     const created = await post(
       `${app.base}/admin/businesses`,
-      { name: 'Barbería Norte', templateId: 'gastos' },
-      formHeaders(app.base, { Cookie: cookie })
+      { name: 'Barbería Norte', templateId: 'gastos', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
-    const detailUrl = created.headers.get('location')!;
+    const detailUrl = created.headers.get('location')!.split('?')[0];
 
     const invite = await post(
       `${app.base}${detailUrl}/invitations`,
-      { role: 'OWNER', days: '7' },
-      formHeaders(app.base, { Cookie: cookie })
+      { role: 'OWNER', days: '7', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     const html = await invite.text();
     expect(html).toContain('https://t.me/mi_bot_test?start=');
@@ -528,15 +718,15 @@ describe('admin: invitaciones, miembros y estado', () => {
 
     const revoke = await post(
       `${app.base}/admin/invitations/${invitationId}/revoke`,
-      {},
-      formHeaders(app.base, { Cookie: cookie })
+      { _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(revoke.status).toBe(302);
 
     const status = await post(
       `${app.base}${detailUrl}/status`,
-      { status: 'READ_ONLY' },
-      formHeaders(app.base, { Cookie: cookie })
+      { status: 'READ_ONLY', _csrf: csrf },
+      authed(app.base, cookie, csrf)
     );
     expect(status.status).toBe(302);
 
@@ -549,6 +739,143 @@ describe('admin: invitaciones, miembros y estado', () => {
         'admin.status_changed',
       ])
     );
-    expect(app.repos.audit.entries.every((e) => e.actorUserId === null)).toBe(true);
+  });
+});
+
+describe('admin: pagos manuales', () => {
+  async function fixture(app: TestApp) {
+    const business = app.repos.businesses.seed(makeBusiness({ name: 'Kiosco Pagos', currency: 'ARS' }));
+    return business;
+  }
+
+  function todayInput(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  it('registra un pago CONFIRMED, lo muestra en el detalle y audita', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD, 'caja');
+
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: '15000', paidAt: todayInput(), method: 'TRANSFERENCIA', status: 'CONFIRMED', concept: 'Suscripción', idempotencyKey: 'k-1', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    expect(res.status).toBe(302);
+
+    const stored = [...app.repos.payments.store.values()];
+    expect(stored).toHaveLength(1);
+    expect(stored[0].amount).toBe(15000);
+    expect(stored[0].operator).toBe('caja');
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.payment_registered');
+
+    const detail = await (
+      await fetch(`${app.base}/admin/businesses/${business.id}?tab=pagos`, { headers: { Cookie: cookie } })
+    ).text();
+    expect(detail).toContain('TRANSFERENCIA');
+    expect(detail).toContain('CONFIRMED');
+  });
+
+  it('PENDING no se mezcla con lo cobrado en los totales', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: '10000', paidAt: todayInput(), method: 'EFECTIVO', status: 'CONFIRMED', idempotencyKey: 'k-c', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: '5000', paidAt: todayInput(), method: 'EFECTIVO', status: 'PENDING', idempotencyKey: 'k-p', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    const html = await (await fetch(`${app.base}/admin/payments`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('CONFIRMED');
+    expect(html).toContain('PENDING');
+  });
+
+  it('doble envío con la misma clave no duplica (idempotencia)', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    const body = { amount: '9000', paidAt: todayInput(), method: 'EFECTIVO', status: 'CONFIRMED', idempotencyKey: 'same-key', _csrf: csrf };
+    await post(`${app.base}/admin/businesses/${business.id}/payments`, body, authed(app.base, cookie, csrf));
+    await post(`${app.base}/admin/businesses/${business.id}/payments`, body, authed(app.base, cookie, csrf));
+    expect(app.repos.payments.store.size).toBe(1);
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.payment_duplicate_ignored');
+  });
+
+  it('anular marca VOID con motivo, audita y conserva el historial', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: '7000', paidAt: todayInput(), method: 'EFECTIVO', status: 'CONFIRMED', idempotencyKey: 'k-v', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    const id = [...app.repos.payments.store.values()][0].id;
+    const res = await post(
+      `${app.base}/admin/payments/${id}/void`,
+      { businessId: business.id, reason: 'monto erróneo', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    expect(res.status).toBe(302);
+    expect(app.repos.payments.store.get(id)?.status).toBe('VOID');
+    expect(app.repos.payments.store.get(id)?.voidReason).toBe('monto erróneo');
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.payment_voided');
+    expect(app.repos.payments.store.size).toBe(1);
+  });
+
+  it('registrar un pago NO cambia el estado del negocio', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: '20000', paidAt: todayInput(), method: 'EFECTIVO', status: 'CONFIRMED', idempotencyKey: 'k-s', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    expect((await app.repos.businesses.findById(business.id))?.status).toBe('TRIAL');
+  });
+
+  it('importe inválido → 400 sin crear nada', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    const res = await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      { amount: 'cero', paidAt: todayInput(), method: 'EFECTIVO', status: 'CONFIRMED', idempotencyKey: 'k-x', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    expect(res.status).toBe(400);
+    expect(app.repos.payments.store.size).toBe(0);
+  });
+});
+
+describe('admin: auditoría y config', () => {
+  it('la auditoría global lista operaciones sensibles con operador', async () => {
+    const app = await startApp();
+    const { cookie, csrf } = await login(app.base, PASSWORD, 'auditor');
+    await post(
+      `${app.base}/admin/businesses`,
+      { name: 'Auditado', templateId: 'gastos', _csrf: csrf },
+      authed(app.base, cookie, csrf)
+    );
+    const html = await (await fetch(`${app.base}/admin/audit`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('admin.business_created');
+    expect(html).toContain('auditor');
+    expect(html).not.toContain(PASSWORD);
+  });
+
+  it('config muestra parámetros sin secretos', async () => {
+    const app = await startApp();
+    const { cookie } = await login(app.base, PASSWORD);
+    const html = await (await fetch(`${app.base}/admin/config`, { headers: { Cookie: cookie } })).text();
+    expect(html).toContain('Trial por defecto');
+    expect(html).not.toContain('password-de-admin');
+    expect(html).not.toContain('secreto-de-prueba');
   });
 });

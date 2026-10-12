@@ -15,8 +15,10 @@ import type {
   ILogAiUsageData,
   ILogAuditData,
   IMembershipRepository,
+  IPaymentRepository,
   IUserRepository,
   CreateBusinessData,
+  CreateManualPaymentData,
 } from '../../core/persistence/repositories.js';
 import type {
   AuditEntry,
@@ -24,6 +26,7 @@ import type {
   BusinessStatus,
   ConversationState,
   Invitation,
+  ManualPayment,
   Membership,
   MembershipWithBusiness,
   User,
@@ -33,6 +36,7 @@ import {
   toBusiness,
   toConversation,
   toInvitation,
+  toManualPayment,
   toMembership,
   toMembershipWithBusiness,
   toUser,
@@ -189,8 +193,11 @@ export class PrismaAuditRepository implements IAuditRepository {
     });
     return rows.map(toAuditEntry);
   }
+  async listRecent(limit = 50): Promise<AuditEntry[]> {
+    const rows = await this.db.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: limit });
+    return rows.map(toAuditEntry);
+  }
 }
-
 export class PrismaAiUsageRepository implements IAiUsageRepository {
   constructor(private readonly db: PrismaClient) {}
   async log(entry: ILogAiUsageData): Promise<void> {
@@ -209,5 +216,56 @@ export class PrismaAiUsageRepository implements IAiUsageRepository {
         OR: [{ provider: { startsWith: 'vision' } }, { model: { startsWith: 'vision' } }],
       },
     });
+  }
+}
+
+export class PrismaPaymentRepository implements IPaymentRepository {
+  constructor(private readonly db: PrismaClient) {}
+  async create(data: CreateManualPaymentData) {
+    return toManualPayment(
+      await this.db.manualPayment.create({
+        data: {
+          businessId: data.businessId,
+          amount: data.amount,
+          currency: data.currency,
+          paidAt: data.paidAt,
+          method: data.method,
+          periodFrom: data.periodFrom ?? null,
+          periodTo: data.periodTo ?? null,
+          concept: data.concept,
+          notes: data.notes ?? null,
+          operator: data.operator ?? null,
+          status: data.status,
+          idempotencyKey: data.idempotencyKey,
+        },
+      })
+    );
+  }
+  async findById(id: string) {
+    const row = await this.db.manualPayment.findUnique({ where: { id } });
+    return row ? toManualPayment(row) : null;
+  }
+  async findByIdempotency(businessId: string, idempotencyKey: string) {
+    const row = await this.db.manualPayment.findUnique({
+      where: { businessId_idempotencyKey: { businessId, idempotencyKey } },
+    });
+    return row ? toManualPayment(row) : null;
+  }
+  async listByBusiness(businessId: string, limit = 100) {
+    const rows = await this.db.manualPayment.findMany({
+      where: { businessId },
+      orderBy: { paidAt: 'desc' },
+      take: limit,
+    });
+    return rows.map(toManualPayment);
+  }
+  async listRecent(limit = 50) {
+    const rows = await this.db.manualPayment.findMany({ orderBy: { createdAt: 'desc' }, take: limit });
+    return rows.map(toManualPayment);
+  }
+  async voidPayment(id: string, reason: string, at: Date = new Date()) {
+    return toManualPayment(
+      await this.db.manualPayment.update({ where: { id }, data: { status: 'VOID', voidReason: reason, voidAt: at } })
+    );
   }
 }

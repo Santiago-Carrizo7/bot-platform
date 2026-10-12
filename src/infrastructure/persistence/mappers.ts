@@ -1,6 +1,7 @@
 import type {
   Business as PrismaBusiness,
   Invitation as PrismaInvitation,
+  ManualPayment as PrismaManualPayment,
   Membership as PrismaMembership,
   User as PrismaUser,
   ConversationState as PrismaConversation,
@@ -10,6 +11,7 @@ import type {
   Business,
   ConversationState,
   Invitation,
+  ManualPayment,
   Membership,
   MembershipWithBusiness,
   User,
@@ -94,5 +96,27 @@ export function toAuditEntry(row: PrismaAuditLog): AuditEntry {
     entityId: row.entityId,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
     createdAt: row.createdAt,
+  };
+}
+
+export function toManualPayment(row: PrismaManualPayment): ManualPayment {
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    amount: Number(row.amount),
+    currency: row.currency,
+    paidAt: row.paidAt,
+    method: row.method as ManualPayment['method'],
+    periodFrom: row.periodFrom,
+    periodTo: row.periodTo,
+    concept: row.concept,
+    notes: row.notes,
+    operator: row.operator,
+    status: row.status as ManualPayment['status'],
+    idempotencyKey: row.idempotencyKey,
+    voidReason: row.voidReason,
+    voidAt: row.voidAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
