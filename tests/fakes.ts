@@ -75,6 +75,25 @@ export class FakeBusinessRepo implements IBusinessRepository {
     // Copia, como Prisma: una referencia vieja no se entera del cambio.
     if (b) this.store.set(id, { ...b, status });
   }
+  async updateSubscription(
+    id: string,
+    data: {
+      status?: BusinessStatus;
+      subscriptionExpiresAt?: Date | null;
+      activatedAt?: Date | null;
+    }
+  ): Promise<Business> {
+    const b = this.store.get(id);
+    if (!b) throw new Error('Business not found');
+    const updated = {
+      ...b,
+      ...(data.status !== undefined ? { status: data.status } : {}),
+      ...(data.subscriptionExpiresAt !== undefined ? { subscriptionExpiresAt: data.subscriptionExpiresAt } : {}),
+      ...(data.activatedAt !== undefined ? { activatedAt: data.activatedAt } : {}),
+    };
+    this.store.set(id, updated);
+    return updated;
+  }
   seed(b: Business) {
     this.store.set(b.id, b);
     return b;

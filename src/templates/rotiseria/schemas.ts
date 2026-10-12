@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+const MAX_MONEY = 999_999_999.99;
+const MAX_MONEY_MSG = 'El monto supera el límite permitido';
+
 const VentaItemSchema = z.preprocess((val: any) => {
   if (typeof val === 'object' && val !== null) {
     return {
@@ -12,7 +15,7 @@ const VentaItemSchema = z.preprocess((val: any) => {
 }, z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre del producto o promo'),
   cantidad: z.number().positive('La cantidad debe ser mayor a 0').default(1),
-  precio_unitario: z.number().min(0).nullable().optional(),
+  precio_unitario: z.number().min(0).max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),
 }));
 
 const NoReconocidoSchema = z.object({
@@ -26,7 +29,7 @@ export const RegistrarVentaInput = z
     items: z.array(VentaItemSchema).default([]),
     no_reconocidos: z.array(NoReconocidoSchema).optional(),
     zona_envio: z.string().trim().nullable().optional(),
-    flete_monto: z.number().min(0).nullable().optional(),
+    flete_monto: z.number().min(0).max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),
     zona_no_reconocida: z.string().trim().nullable().optional(),
     nota: z.string().trim().nullable().optional(),
     fecha: z.string().trim().optional(), // 'YYYY-MM-DD'
@@ -79,7 +82,7 @@ export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
 export const CrearEditarPromoInput = z.object({
   promo_id: z.string().trim().optional(),
   nombre: z.string().trim().optional(),
-  precio: z.number().positive().optional(),
+  precio: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   descripcion: z.string().trim().optional(),
 });
 export type CrearEditarPromoInput = z.infer<typeof CrearEditarPromoInput>;
@@ -94,9 +97,9 @@ export const CambiarPrecioInput = z
   .object({
     product_id: z.string().trim().optional(),
     nombre: z.string().trim().optional(),
-    precio_unitario: z.number().positive('El precio debe ser mayor a 0').optional(),
-    precio_docena: z.number().positive('El precio de la docena debe ser mayor a 0').optional(),
-    precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').optional(),
+    precio_unitario: z.number().positive('El precio debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
+    precio_docena: z.number().positive('El precio de la docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
+    precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   })
   .refine(
     (v) =>
@@ -123,16 +126,16 @@ export type ConsultarEstadisticasInput = z.infer<typeof ConsultarEstadisticasInp
 
 export const CrearProductoInput = z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre del producto'),
-  precio_unitario: z.number().positive('El precio unitario debe ser mayor a 0'),
-  precio_docena: z.number().positive('El precio de docena debe ser mayor a 0').optional(),
-  precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').optional(),
+  precio_unitario: z.number().positive('El precio unitario debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
+  precio_docena: z.number().positive('El precio de docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
+  precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   categoria: z.string().trim().default('empanadas'),
 });
 export type CrearProductoInput = z.infer<typeof CrearProductoInput>;
 
 export const CrearPromoInput = z.object({
   nombre: z.string().trim().min(1, 'Falta el nombre de la promo'),
-  precio: z.number().positive('El precio debe ser mayor a 0'),
+  precio: z.number().positive('El precio debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
   descripcion: z.string().trim().optional(),
 });
 export type CrearPromoInput = z.infer<typeof CrearPromoInput>;
@@ -152,7 +155,7 @@ export type EmptyInput = z.infer<typeof EmptyInput>;
 
 export const ZonaEnvioLoteItemSchema = z.object({
   nombre: z.string().trim().min(1, 'El nombre de la zona es obligatorio'),
-  precio: z.number().min(0, 'El precio no puede ser negativo'),
+  precio: z.number().min(0, 'El precio no puede ser negativo').max(MAX_MONEY, MAX_MONEY_MSG),
   barrios: z.array(z.string().trim().toLowerCase()).default([]),
 });
 export type ZonaEnvioLoteItemSchema = z.infer<typeof ZonaEnvioLoteItemSchema>;
@@ -164,13 +167,13 @@ export type ConfigurarEnviosLoteInput = z.infer<typeof ConfigurarEnviosLoteInput
 
 export const GestionarEnviosInput = z.object({
   zone_id: z.string().trim().optional(),
-  nuevo_precio: z.number().min(0).optional(),
+  nuevo_precio: z.number().min(0).max(MAX_MONEY, MAX_MONEY_MSG).optional(),
 });
 export type GestionarEnviosInput = z.infer<typeof GestionarEnviosInput>;
 
 export const BebidaLoteItemSchema = z.object({
   nombre: z.string().trim().min(1, 'El nombre de la bebida es obligatorio'),
-  precio: z.number().positive('El precio debe ser mayor a 0'),
+  precio: z.number().positive('El precio debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
 });
 export type BebidaLoteItemSchema = z.infer<typeof BebidaLoteItemSchema>;
 
@@ -181,7 +184,7 @@ export type ConfigurarBebidasLoteInput = z.infer<typeof ConfigurarBebidasLoteInp
 
 export const GestionarBebidasInput = z.object({
   product_id: z.string().trim().optional(),
-  nuevo_precio: z.number().positive().optional(),
+  nuevo_precio: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
 });
 export type GestionarBebidasInput = z.infer<typeof GestionarBebidasInput>;
 

@@ -143,7 +143,7 @@ export function buildCoreServices(config: AppConfig): CoreServices {
   const memberships = new MembershipService(membershipRepo);
   const invitations = new InvitationService(invitationRepo, auditRepo);
   const payments = new PaymentService(paymentRepo);
-  const resolver = new TenantResolver(users, memberships, membershipRepo, invitations);
+  const resolver = new TenantResolver(users, memberships, membershipRepo, invitations, businesses);
 
   const { provider: aiProvider, modelDescription } = buildAIProvider(config);
   const interpreter = new ActionInterpreter(aiProvider);
@@ -289,7 +289,8 @@ export function buildHttpApp(
   core: CoreServices,
   templateRouters: TemplateRouter[] = [],
   extraRoutes: ExtraRoute[] = [],
-  adminRouter?: Router
+  adminRouter?: Router,
+  healthCheck?: () => Promise<void | boolean>
 ): Express {
   return createExpressApp({
     memberships: core.memberships,
@@ -298,5 +299,10 @@ export function buildHttpApp(
     templateRouters,
     extraRoutes,
     adminRouter,
+    healthCheck:
+      healthCheck ??
+      (async () => {
+        await prisma.$queryRaw`SELECT 1`;
+      }),
   });
 }

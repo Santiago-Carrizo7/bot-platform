@@ -49,7 +49,12 @@ export function evaluateAccess(business: Business, now: Date = new Date()): Acce
   }
 
   // ACTIVE
-  if (business.subscriptionExpiresAt && now.getTime() > business.subscriptionExpiresAt.getTime()) {
+  if (!business.subscriptionExpiresAt) {
+    // Sin vencimiento cargado: permite operar pero activa advertencia/recordatorio comercial
+    return { canRead: true, canWrite: true, effectiveStatus: 'ACTIVE', trialDaysLeft: null, subscriptionReminder: true };
+  }
+
+  if (now.getTime() > business.subscriptionExpiresAt.getTime()) {
     const daysOverdue = (now.getTime() - business.subscriptionExpiresAt.getTime()) / DAY_MS;
     if (daysOverdue <= business.graceDays) {
       return { canRead: true, canWrite: true, effectiveStatus: 'ACTIVE', trialDaysLeft: null, subscriptionReminder: true };

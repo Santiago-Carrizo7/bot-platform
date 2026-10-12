@@ -5,3 +5,5 @@ dist/
 coverage/
 repomix-output.md
 repomix-output.xml
+*-context.xml
+bot-platform-context.xml

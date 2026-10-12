@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
+const MAX_MONEY = 999_999_999.99;
+const MAX_MONEY_MSG = 'El monto supera el límite permitido';
+
 export const RegistrarVentaInput = z.object({
-  monto: z.number().positive('El monto debe ser mayor a 0').optional(),
+  monto: z.number().positive('El monto debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   nota: z.string().trim().optional(),
   fecha: z.string().trim().optional(),
   ventas: z
     .array(
       z.object({
-        monto: z.number().positive('El monto debe ser mayor a 0'),
+        monto: z.number().positive('El monto debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
         nota: z.string().trim().optional(),
       })
     )
@@ -17,14 +20,14 @@ export const RegistrarVentaInput = z.object({
 export type RegistrarVentaInput = z.infer<typeof RegistrarVentaInput>;
 
 export const RegistrarGastoInput = z.object({
-  monto: z.number().positive('El monto debe ser mayor a 0').optional(),
+  monto: z.number().positive('El monto debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   concepto: z.string().trim().optional(),
   categoria: z.string().trim().optional(),
   fecha: z.string().trim().optional(),
   gastos: z
     .array(
       z.object({
-        monto: z.number().positive('El monto debe ser mayor a 0'),
+        monto: z.number().positive('El monto debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
         concepto: z.string().trim().min(1, 'Falta la descripción del gasto'),
         categoria: z.string().trim().optional(),
       })
@@ -35,9 +38,9 @@ export const RegistrarGastoInput = z.object({
 export type RegistrarGastoInput = z.infer<typeof RegistrarGastoInput>;
 
 export const CalcularPrecioInput = z.object({
-  costo_total: z.number().positive().optional(),
+  costo_total: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   cantidad: z.number().positive().optional(),
-  costo_unitario: z.number().positive().optional(),
+  costo_unitario: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   porcentaje: z.number().min(0, 'El porcentaje no puede ser negativo').optional(),
   tipo: z.enum(['margen', 'recargo']).optional(),
 });
@@ -62,7 +65,7 @@ export const RegistrarLoteInput = z.object({
     .array(
       z.object({
         tipo: z.enum(['VENTA', 'GASTO']),
-        monto: z.number().positive('El monto debe ser mayor a 0'),
+        monto: z.number().positive('El monto debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG),
         concepto: z.string().trim().optional(),
         categoria: z.string().trim().optional(),
         nota: z.string().trim().optional(),

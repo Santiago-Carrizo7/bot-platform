@@ -87,6 +87,24 @@ export class PrismaBusinessRepository implements IBusinessRepository {
   async setStatus(id: string, status: BusinessStatus): Promise<void> {
     await this.db.business.update({ where: { id }, data: { status } });
   }
+  async updateSubscription(
+    id: string,
+    data: {
+      status?: BusinessStatus;
+      subscriptionExpiresAt?: Date | null;
+      activatedAt?: Date | null;
+    }
+  ): Promise<Business> {
+    const updated = await this.db.business.update({
+      where: { id },
+      data: {
+        ...(data.status !== undefined ? { status: data.status } : {}),
+        ...(data.subscriptionExpiresAt !== undefined ? { subscriptionExpiresAt: data.subscriptionExpiresAt } : {}),
+        ...(data.activatedAt !== undefined ? { activatedAt: data.activatedAt } : {}),
+      },
+    });
+    return toBusiness(updated);
+  }
 }
 
 export class PrismaMembershipRepository implements IMembershipRepository {

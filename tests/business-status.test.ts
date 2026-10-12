@@ -43,6 +43,12 @@ describe('evaluateAccess', () => {
     expect(r).toMatchObject({ canRead: true, canWrite: false, subscriptionReminder: true });
   });
 
+  it('ACTIVE sin subscriptionExpiresAt: recordatorio comercial activado (no pase libre infinito)', () => {
+    const b = makeBusiness({ status: 'ACTIVE', subscriptionExpiresAt: null });
+    const r = evaluateAccess(b, NOW);
+    expect(r).toMatchObject({ canRead: true, canWrite: true, subscriptionReminder: true });
+  });
+
   it('READ_ONLY: lee, no escribe', () => {
     const r = evaluateAccess(makeBusiness({ status: 'READ_ONLY' }), NOW);
     expect(r).toMatchObject({ canRead: true, canWrite: false });

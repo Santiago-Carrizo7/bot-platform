@@ -731,6 +731,27 @@ export function createAdminRouter(deps: AdminRouterDeps): Router {
         operator: ctx.operator ?? 'anónimo',
       },
     });
+
+    if (result.payment.status === 'CONFIRMED' && periodTo) {
+      await deps.businesses.updateSubscription(businessId, {
+        status: 'ACTIVE',
+        subscriptionExpiresAt: periodTo,
+        activatedAt: business.activatedAt ?? new Date(),
+      });
+      await deps.audit.log({
+        businessId,
+        actorUserId: null,
+        action: 'admin.subscription_extended',
+        entityType: 'business',
+        entityId: businessId,
+        metadata: {
+          subscriptionExpiresAt: periodTo.toISOString(),
+          paymentId: result.payment.id,
+          operator: ctx.operator ?? 'anónimo',
+        },
+      });
+    }
+
     return result;
   }
 

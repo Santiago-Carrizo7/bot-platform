@@ -206,6 +206,13 @@ function authed(base: string, cookie: string, csrf: string, extra: Record<string
 }
 
 describe('admin: guard y login', () => {
+  it('incluye cabeceras de seguridad HTTP básicas de helmet (X-Content-Type-Options, etc.)', async () => {
+    const app = await startApp();
+    const res = await fetch(`${app.base}/health`);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+
   it('sin cookie → 302 a /admin/login', async () => {
     const app = await startApp();
     const res = await fetch(`${app.base}/admin/`, { redirect: 'manual' });
@@ -829,7 +836,7 @@ describe('admin: pagos manuales', () => {
     expect(app.repos.payments.store.size).toBe(1);
   });
 
-  it('registrar un pago NO cambia el estado del negocio', async () => {
+  it('registrar un pago CONFIRMED sin periodTo NO cambia el estado del negocio', async () => {
     const app = await startApp();
     const business = await fixture(app);
     const { cookie, csrf } = await login(app.base, PASSWORD);
@@ -839,6 +846,30 @@ describe('admin: pagos manuales', () => {
       authed(app.base, cookie, csrf)
     );
     expect((await app.repos.businesses.findById(business.id))?.status).toBe('TRIAL');
+  });
+
+  it('registrar un pago CONFIRMED con periodTo activa el negocio y actualiza subscriptionExpiresAt', async () => {
+    const app = await startApp();
+    const business = await fixture(app);
+    const { cookie, csrf } = await login(app.base, PASSWORD);
+    await post(
+      `${app.base}/admin/businesses/${business.id}/payments`,
+      {
+        amount: '20000',
+        paidAt: todayInput(),
+        periodTo: '2026-12-31',
+        method: 'TRANSFERENCIA',
+        status: 'CONFIRMED',
+        idempotencyKey: 'k-active',
+        _csrf: csrf,
+      },
+      authed(app.base, cookie, csrf)
+    );
+    const updated = await app.repos.businesses.findById(business.id);
+    expect(updated?.status).toBe('ACTIVE');
+    expect(updated?.subscriptionExpiresAt).toEqual(new Date('2026-12-31T12:00:00'));
+    expect(updated?.activatedAt).toBeInstanceOf(Date);
+    expect(app.repos.audit.entries.map((e) => e.action)).toContain('admin.subscription_extended');
   });
 
   it('importe inválido → 400 sin crear nada', async () => {

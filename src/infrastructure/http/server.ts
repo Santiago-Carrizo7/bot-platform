@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type RequestHan
 
 export type { Router };
 import cors from 'cors';
+import helmet from 'helmet';
 import { ZodError } from 'zod';
 import { AppError } from '../../core/errors/errors.js';
 import { logger } from '../../core/logging/logger.js';
@@ -49,6 +50,7 @@ export interface CreateAppDeps {
   /** Router del admin web interno (montado en /admin). Sin él, la ruta es 404. */
   adminRouter?: Router;
   corsOrigins?: string[];
+  healthCheck?: () => Promise<void | boolean>;
 }
 
 export function createAuthMiddleware(memberships: MembershipService, apiSecret: string) {
@@ -76,6 +78,19 @@ export function createAuthMiddleware(memberships: MembershipService, apiSecret: 
 
 export function createExpressApp(deps: CreateAppDeps): Express {
   const app = express();
+  app.set('trust proxy', 1);
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:', 'https:'],
+        },
+      },
+    })
+  );
   app.use(cors(deps.corsOrigins ? { origin: deps.corsOrigins } : undefined));
   app.use(express.json());
 
@@ -84,8 +99,22 @@ export function createExpressApp(deps: CreateAppDeps): Express {
     next();
   });
 
-  app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
+  app.get('/health', async (_req, res) => {
+    if (deps.healthCheck) {
+      try {
+        await deps.healthCheck();
+      } catch (err) {
+        logger.error('[HTTP] Health check falló al verificar base de datos', err);
+        res.status(503).json({ status: 'error', database: 'disconnected' });
+        return;
+      }
+    }
+    res.json({
+      status: 'ok',
+      database: deps.healthCheck ? 'connected' : 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
   });
 
   const auth = createAuthMiddleware(deps.memberships, deps.apiSecret);

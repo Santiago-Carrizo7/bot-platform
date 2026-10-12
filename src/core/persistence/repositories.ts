@@ -33,6 +33,14 @@ export interface IBusinessRepository {
   create(data: CreateBusinessData): Promise<Business>;
   markTrialStarted(id: string, at: Date): Promise<void>;
   setStatus(id: string, status: BusinessStatus): Promise<void>;
+  updateSubscription(
+    id: string,
+    data: {
+      status?: BusinessStatus;
+      subscriptionExpiresAt?: Date | null;
+      activatedAt?: Date | null;
+    }
+  ): Promise<Business>;
 }
 
 export interface IUserRepository {

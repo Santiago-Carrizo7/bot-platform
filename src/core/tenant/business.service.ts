@@ -24,4 +24,15 @@ export class BusinessService {
   async setStatus(id: string, status: BusinessStatus): Promise<void> {
     await this.businesses.setStatus(id, status);
   }
+
+  async updateSubscription(
+    id: string,
+    data: {
+      status?: BusinessStatus;
+      subscriptionExpiresAt?: Date | null;
+      activatedAt?: Date | null;
+    }
+  ): Promise<Business> {
+    return this.businesses.updateSubscription(id, data);
+  }
 }

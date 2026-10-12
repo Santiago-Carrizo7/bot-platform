@@ -63,6 +63,10 @@ export class InvitationService {
     return this.invitations.findById(id);
   }
 
+  async findByToken(token: string): Promise<Invitation | null> {
+    return this.invitations.findByHash(hashInvitationToken(token));
+  }
+
   /** Valida y consume (un solo uso). Lanza si expiró, ya se usó o fue revocada. */  async consume(token: string, userId: string, now: Date = new Date()): Promise<Invitation> {
     const invitation = await this.invitations.findByHash(hashInvitationToken(token));
     if (!invitation) {

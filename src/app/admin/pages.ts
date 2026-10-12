@@ -744,10 +744,13 @@ ${csrf}
 <div><label for="pstatus">Estado *</label><select id="pstatus" name="status"><option value="CONFIRMED">CONFIRMED (cobrado)</option><option value="PENDING">PENDING (pendiente)</option></select></div>
 <div><label for="concept">Concepto</label><input id="concept" name="concept" maxlength="80" value="Suscripción"></div>
 <div><label for="periodFrom">Período desde</label><input id="periodFrom" name="periodFrom" type="date"></div>
-<div><label for="periodTo">Período hasta</label><input id="periodTo" name="periodTo" type="date"></div>
+<div>
+  <label for="periodTo">Período hasta (vigencia) <button type="button" class="btn ghost small" style="padding:0.1rem 0.4rem;font-size:0.75rem" onclick="const d = new Date(); d.setDate(d.getDate() + 30); document.getElementById('periodTo').value = d.toISOString().slice(0, 10);">+30 días</button></label>
+  <input id="periodTo" name="periodTo" type="date">
+</div>
 <div><label for="notes">Notas internas</label><input id="notes" name="notes" maxlength="200" placeholder="opcional"></div>
 </div>
-<p><button type="submit">Registrar pago</button> <span class="faint">No activa el negocio ni renueva períodos automáticamente.</span></p>
+<p><button type="submit">Registrar pago</button> <span class="faint">Al confirmar un pago con "Período hasta", el negocio pasa a ACTIVE y su vigencia se actualiza automáticamente.</span></p>
 </form>`;
 
   const audit =
@@ -916,9 +919,14 @@ ${errBox(d.error)}${flashBox(d.flash)}
 <div><label for="nmethod">Método *</label><select id="nmethod" name="method"><option>EFECTIVO</option><option>TRANSFERENCIA</option><option>MERCADO_PAGO</option><option>OTRO</option></select></div>
 <div><label for="nstatus">Estado *</label><select id="nstatus" name="status"><option value="CONFIRMED">CONFIRMED (cobrado)</option><option value="PENDING">PENDING (pendiente)</option></select></div>
 <div><label for="nconcept">Concepto</label><input id="nconcept" name="concept" maxlength="80" value="Suscripción"></div>
+<div><label for="nperiodFrom">Período desde</label><input id="nperiodFrom" name="periodFrom" type="date"></div>
+<div>
+  <label for="nperiodTo">Período hasta (vigencia) <button type="button" class="btn ghost small" style="padding:0.1rem 0.4rem;font-size:0.75rem" onclick="const d = new Date(); d.setDate(d.getDate() + 30); document.getElementById('nperiodTo').value = d.toISOString().slice(0, 10);">+30 días</button></label>
+  <input id="nperiodTo" name="periodTo" type="date">
+</div>
 </div>
 <p><button type="submit">Registrar pago</button></p>
-<p class="faint">Anti doble-envío por clave única. Anular nunca borra: marca VOID con motivo.</p>
+<p class="faint">Al confirmar un pago con "Período hasta", el negocio pasa a ACTIVE y su vigencia se actualiza automáticamente. Anti doble-envío por clave única. Anular nunca borra: marca VOID con motivo.</p>
 </form></div>`;
   return layout('Pagos', body, {
     showNav: true,

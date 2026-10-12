@@ -1,8 +1,14 @@
 import { z } from 'zod';
 
+const MAX_MONEY = 999_999_999.99;
+const MAX_MONEY_MSG = 'El monto supera el límite permitido';
+
 /** Contrato de lo que la IA debe extraer para registrar un gasto. */
 export const RegistrarGastoInput = z.object({
-  amount: z.number({ invalid_type_error: 'El monto debe ser un número' }).positive('El monto debe ser mayor a 0'),
+  amount: z
+    .number({ invalid_type_error: 'El monto debe ser un número' })
+    .positive('El monto debe ser mayor a 0')
+    .max(MAX_MONEY, MAX_MONEY_MSG),
   description: z.string({ invalid_type_error: 'La descripción debe ser texto' }).trim().min(1, 'Falta la descripción'),
   category: z.string().trim().toLowerCase().min(1).default('otros'),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'La fecha debe estar en formato YYYY-MM-DD').optional(),
@@ -14,7 +20,10 @@ export type RegistrarGastoInput = z.infer<typeof RegistrarGastoInput>;
 
 export const FijarPresupuestoInput = z.object({
   category: z.string().trim().toLowerCase().min(1, 'Falta la categoría'),
-  amount: z.number({ invalid_type_error: 'El monto debe ser un número' }).positive('El monto debe ser mayor a 0'),
+  amount: z
+    .number({ invalid_type_error: 'El monto debe ser un número' })
+    .positive('El monto debe ser mayor a 0')
+    .max(MAX_MONEY, MAX_MONEY_MSG),
   currency: z.string().trim().toUpperCase().default('ARS'),
 });
 
