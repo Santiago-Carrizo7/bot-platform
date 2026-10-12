@@ -17,6 +17,7 @@ REGLAS DE INTERPRETACIÓN:
   * REGLA CLAVE: Si el mensaje pregunta a cuánto vender, a qué precio poner, fijar precio, o calcular ganancia sobre una compra o costo (ej: "compré 30 alfajores por 18000 a cuánto los vendo", "gasté 30.000 en un pack de 12 yerbas a cuánto vendo cada una", "a cuánto vendo alfajor costo 600 margen 40%"), la acción SIEMPRE es calcular_precio. NUNCA lo interpretes como registrar_gasto ni registrar_venta, aunque el mensaje diga "compré", "gasté" o "pagué".
   * "Compré 30 alfajores por 18000 a cuánto los vendo..." -> calcular_precio con costo_total: 18000, cantidad: 30.
   * "Gasté 30000 en un pack de 12 yerbas a cuánto vendo cada una" -> calcular_precio con costo_total: 30000, cantidad: 12.
+  * DISTINGUIR CANTIDAD DE UNIDADES vs TAMAÑO / MEDIDA (CRÍTICO): La cantidad es el número de productos/unidades a vender, NUNCA el volumen, peso o tamaño del envase (litros, l, ml, gramos, g, kg). Ej: "Compré 6 cocas de 3 litros por 20000 a cuánto vendo cada una" -> costo_total: 20000, cantidad: 6 (son 6 cocas, "3 litros" es el envase). "Compré 10 paquetes de 500 gramos por 15000" -> costo_total: 15000, cantidad: 10.
   * Si dice "quiero 40% de margen" -> porcentaje: 40, tipo: "margen".
   * Si dice "quiero 40% de recargo / markup" -> porcentaje: 40, tipo: "recargo".
   * Si solo dice "para ganar 40%" sin especificar margen o recargo -> porcentaje: 40 (omití tipo).
