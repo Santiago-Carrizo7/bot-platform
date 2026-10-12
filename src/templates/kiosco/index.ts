@@ -122,8 +122,9 @@ export function interpretDirectlyKiosco(
 
   // 5. DETECCIÓN DE MONTOS MÚLTIPLES (ANTES QUE NÚMERO ÚNICO)
   // 5.A. Gastos múltiples: "gasté 3000 en coca y 5000 en pan", "pagué 12000 al proveedor y 4500 de luz"
-  const isExplicitExpense = /^(?:gast[eé]|pagu[eé]|compr[eé]|gastos?|pago)\b/i.test(trimmed);
-  if (isExplicitExpense || trimmed.includes(' en ') || trimmed.includes(' al ') || trimmed.includes(' de ')) {
+  const isExplicitSale = /^(?:vend[ií]|venta|cobr[eé])(?:\s+|$|\b)/i.test(trimmed);
+  const isExplicitExpense = /^(?:gast[eé]|pagu[eé]|compr[eé]|gastos?|pago)(?:\s+|$|\b)/i.test(trimmed);
+  if (!isExplicitSale && (isExplicitExpense || trimmed.includes(' en ') || trimmed.includes(' al ') || trimmed.includes(' de '))) {
     const multiGastos = parseExpensesList(trimmed);
     if (multiGastos && multiGastos.length > 1) {
       return {
@@ -139,7 +140,7 @@ export function interpretDirectlyKiosco(
     }
   }
 
-  // 5.B. Ventas múltiples: "vendí 5000 y vendí 12000", "vendí 3000 y 12000", "3200 2800 2500", "2000 y 3800"
+  // 5.B. Ventas múltiples: "vendí 5000 y vendí 12000", "vendí 3000 y 12000", "3200 2800 2500", "2000 y 3800", "vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa"
   if (!isExplicitExpense) {
     const multiAmounts = parseAmountsList(trimmed);
     if (multiAmounts && multiAmounts.length > 1) {
@@ -158,25 +159,34 @@ export function interpretDirectlyKiosco(
 
   // 6. PATRONES DE MONTO INDIVIDUAL
   // 6.A. Gasto individual (solo si NO tiene conectores de múltiples cláusulas o jerga)
-  const isComplex = /\s+y\s+|mill[oó]n|palo|lucas?|\b[kK]\b|sueldo/i.test(trimmed);
+  const isComplex = /\s+y\s+|mill[oó]n|palo|sueldo/i.test(trimmed);
   const gastoMatch = !isComplex
-    ? trimmed.match(/^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i)
+    ? trimmed.match(/^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(mil|lucas?|[kK])\b)?(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i)
     : null;
   if (gastoMatch) {
-    const num = parseAmountAndNote(gastoMatch[1]);
+    const fullExpr = gastoMatch[1] + (gastoMatch[2] ? ` ${gastoMatch[2]}` : '') + (gastoMatch[3] ? ` ${gastoMatch[3]}` : '');
+    const num = parseAmountAndNote(fullExpr);
     if (num) {
-      const concepto = (gastoMatch[2] || '').trim() || 'Gasto';
+      const concepto = num.note || 'Gasto';
       return { actionName: 'registrar_gasto', params: { monto: num.amount, concepto } };
     }
   }
 
-  // 6.B. Venta individual
-  const ventaPrefixMatch = trimmed.match(/^(?:vend[ií]|venta)\s+\$?([\d.,]+)(?:\s+(.*))?$/i);
-  if (ventaPrefixMatch) {
-    const num = parseAmountAndNote(ventaPrefixMatch[1]);
-    if (num) {
-      const nota = (ventaPrefixMatch[2] || '').trim() || undefined;
-      return { actionName: 'registrar_venta', params: { monto: num.amount, nota } };
+  // 6.B. Venta individual (solo si NO contiene conectores o múltiples números)
+  if (!isComplex) {
+    const ventaPrefixMatch = trimmed.match(
+      /^(?:vend[ií]|venta|cobr[eé])\s+\$?([\d.,]+)(?:\s+(mil|lucas?|[kK])\b)?(?:\s+(?:pesos\b)?)?(?:\s+(.*))?$/i
+    );
+    if (ventaPrefixMatch) {
+      const notaRaw = (ventaPrefixMatch[3] || '').trim();
+      const hasMoreNumbersOrParts = /,\s*|\s+y\s+|\b\d{3,}\b/i.test(notaRaw);
+      if (!hasMoreNumbersOrParts) {
+        const fullExpr = ventaPrefixMatch[1] + (ventaPrefixMatch[2] ? ` ${ventaPrefixMatch[2]}` : '') + (notaRaw ? ` ${notaRaw}` : '');
+        const num = parseAmountAndNote(fullExpr);
+        if (num) {
+          return { actionName: 'registrar_venta', params: { monto: num.amount, nota: num.note } };
+        }
+      }
     }
   }
 

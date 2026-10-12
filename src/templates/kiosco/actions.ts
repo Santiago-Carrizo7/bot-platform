@@ -23,14 +23,22 @@ export interface KioscoActionDeps {
   cash: CashService;
 }
 
-/** Parsea un texto con monto y concepto/nota opcional para el modo continuo. */
+export function sanitizeSpeech(text: string): string {
+  return text
+    .replace(/\.{2,}/g, ' ')
+    .replace(/,\s*,+/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Parsea un texto con monto y concepto/nota opcional para el modo continuo. */
 export function parseAmountAndNote(raw: string): { amount: number; note?: string } | null {
-  const trimmed = raw.trim();
-  const match = trimmed.match(/^\$?\s*([\d.,]+)(?:\s+(.*))?$/);
+  const sanitized = sanitizeSpeech(raw);
+  const match = sanitized.match(/^\$?\s*([\d.,]+)\s*(mil|lucas?|[kK])?(?:\s+pesos)?(?:\s+(.*))?$/i);
   if (!match) return null;
   const numStr = match[1];
-  const note = match[2]?.trim() || undefined;
+  const unit = match[2]?.toLowerCase();
+  let note = match[3]?.trim() || undefined;
 
   let clean = numStr;
   if (clean.includes('.') && clean.includes(',')) {
@@ -63,58 +71,65 @@ export function parseAmountAndNote(raw: string): { amount: number; note?: string
     }
   }
 
-  const amount = parseFloat(clean);
+  let amount = parseFloat(clean);
   if (isNaN(amount) || amount <= 0) return null;
+
+  if (unit === 'mil' || unit === 'k' || unit === 'luca' || unit === 'lucas') {
+    if (amount < 1000) {
+      amount = Math.round(amount * 1000);
+    }
+  }
+
+  if (note) {
+    note = note.replace(/^(?:pesos|en|de|a|al|por)\s+/i, '').trim();
+    note = note.replace(/^(?:en|de|a|al|por)\s+/i, '').trim();
+    if (!note) note = undefined;
+  }
+
   return { amount: Math.round(amount * 100) / 100, note };
 }
 
 /**
- * Parsea un ítem individual dentro de una lista de montos (ej: "2000", "una de 2.000", "otra de 3.800 puchos").
+ * Parsea un ítem individual dentro de una lista de montos (ej: "2000", "una de 2.000", "otra de 3.800 puchos", "vendí 8000 pesos en coca").
  */
 function parseListItem(part: string): { amount: number; note?: string } | null {
-  const trimmed = part.trim();
-  if (!trimmed) return null;
+  const sanitized = sanitizeSpeech(part);
+  if (!sanitized) return null;
 
   // Si ya es un número directo (con o sin nota)
-  const direct = parseAmountAndNote(trimmed);
+  const direct = parseAmountAndNote(sanitized);
   if (direct) return direct;
 
   // Limpiar prefijos comunes de lenguaje natural en audios o texto:
-  // "una de 2.000", "otra de 3.800", "venta de 1500", "primera de 2000", "otra de 3500 puchos"
-  const match = trimmed.match(
-    /^(?:(?:hice|hubo|registré|tuvimos|vendí|vendi|cobré|cobre)\s+)?(?:(?:una|otra|un|otro|primera|segunda|tercera)\s+)?(?:ventas?|operaci[oó]n)?\s*(?:de\s+|por\s+)?\$?\s*([\d.,]+)(?:\s+(.*))?$/i
+  // "una de 2.000", "otra de 3.800", "venta de 1500", "primera de 2000", "otra de 3500 puchos", "vendí 8000 pesos en coca"
+  const match = sanitized.match(
+    /^(?:(?:hice|hubo|registré|tuvimos|vendí|vendi|cobré|cobre)\s+)?(?:(?:una|otra|un|otro|primera|segunda|tercera)\s+)?(?:ventas?|operaci[oó]n)?\s*(?:de\s+|por\s+)?(.*)$/i
   );
-  if (match) {
+  if (match && match[1]) {
     const parsed = parseAmountAndNote(match[1]);
-    if (parsed) {
-      let note = match[2]?.trim() || undefined;
-      if (note) {
-        note = note.replace(/^(?:de|en|por)\s+/i, '').trim() || undefined;
-      }
-      return { amount: parsed.amount, note };
-    }
+    if (parsed) return parsed;
   }
 
   return null;
 }
 
 /**
- * Parsea múltiples ventas de un texto o transcripción de audio (ej: "3200, 2800, 2500", "2000 y 3800", "vendí 5000 y vendí 12000").
+ * Parsea múltiples ventas de un texto o transcripción de audio (ej: "3200, 2800, 2500", "2000 y 3800", "vendí 5000 y vendí 12000", "vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa").
  */
 export function parseAmountsList(raw: string): Array<{ amount: number; note?: string }> | null {
-  const trimmed = raw.trim();
+  const sanitized = sanitizeSpeech(raw);
 
   // Si contiene modismos complejos o frases largas con palabras de jerga, dejar al LLM
   if (
-    /(?:palo|lucas?|\b[kK]\b|mill[oó]n|millones)/i.test(trimmed) ||
-    trimmed.split(/\s+/).length > 12
+    /(?:palo|mill[oó]n|millones|sueldo|empleado)/i.test(sanitized) ||
+    sanitized.split(/\s+/).length > 30
   ) {
     return null;
   }
 
   // Caso A: Separados por comas, saltos de línea o "y"
-  if (trimmed.includes(',') || trimmed.includes('\n') || /\s+y\s+/i.test(trimmed)) {
-    const parts = trimmed
+  if (sanitized.includes(',') || sanitized.includes('\n') || /\s+y\s+/i.test(sanitized)) {
+    const parts = sanitized
       .split(/[\n]|(?:\s+y\s+)|(?:,(?!\d{3}\b))/i)
       .map((p) => p.trim())
       .filter(Boolean);
@@ -131,7 +146,7 @@ export function parseAmountsList(raw: string): Array<{ amount: number; note?: st
   }
 
   // Caso B: Ráfaga de números separados solo por espacios (ej: "3200 2800 2500 8000")
-  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const tokens = sanitized.split(/\s+/).filter(Boolean);
   if (tokens.length > 1) {
     const numbers: Array<{ amount: number; note?: string }> = [];
     let allNumbers = true;
@@ -156,21 +171,21 @@ export function parseAmountsList(raw: string): Array<{ amount: number; note?: st
  * Parsea múltiples gastos de un texto (ej: "gasté 3000 en coca y 5000 en pan", "pagué 12000 al proveedor y 4500 de luz").
  */
 export function parseExpensesList(raw: string): Array<{ amount: number; concepto: string }> | null {
-  const trimmed = raw.trim();
+  const sanitized = sanitizeSpeech(raw);
   // Si contiene modismos complejos o frases largas con verbos o millones, dejarlo al LLM
   if (
-    /(?:palo|lucas?|\b[kK]\b|mill[oó]n|millones|sueldo|empleado)/i.test(trimmed) ||
-    trimmed.split(/\s+/).length > 12
+    /(?:palo|mill[oó]n|millones|sueldo|empleado)/i.test(sanitized) ||
+    sanitized.split(/\s+/).length > 30
   ) {
     return null;
   }
 
-  if (!trimmed.includes(',') && !trimmed.includes('\n') && !/\s+y\s+/i.test(trimmed)) {
+  if (!sanitized.includes(',') && !sanitized.includes('\n') && !/\s+y\s+/i.test(sanitized)) {
     return null;
   }
 
   // Dividir por saltos de línea, 'y' o comas que NO sean separadores numéricos (ej: no dividir '1,200,000')
-  const parts = trimmed
+  const parts = sanitized
     .split(/[\n]|(?:\s+y\s+)|(?:,(?!\d{3}\b))/i)
     .map((p) => p.trim())
     .filter(Boolean);
@@ -186,7 +201,7 @@ export function parseExpensesList(raw: string): Array<{ amount: number; concepto
       )
       .trim();
 
-    // 1. Caso monto primero: "3000 en coca", "3000 coca", "$5000 pan", "12000 al proveedor"
+    // 1. Caso monto primero: "3000 en coca", "3000 coca", "$5000 pan", "12000 al proveedor", "8 mil en coca"
     const parsedNum = parseAmountAndNote(cleaned);
     if (parsedNum && parsedNum.amount > 0) {
       let concepto = parsedNum.note?.trim() || '';
@@ -198,9 +213,10 @@ export function parseExpensesList(raw: string): Array<{ amount: number; concepto
     }
 
     // 2. Caso concepto primero o frase: "coca 3000", "coca por 3000", "proveedor 12000"
-    const matchInverted = cleaned.match(/^(.*?)\s+(?:por|a|en)?\s*\$?([\d.,]+)$/i);
+    const matchInverted = cleaned.match(/^(.*?)\s+(?:por|a|en)?\s*\$?([\d.,]+)(?:\s*(mil|lucas?|[kK])\b)?$/i);
     if (matchInverted) {
-      const num = parseAmountAndNote(matchInverted[2]);
+      const numExpr = matchInverted[2] + (matchInverted[3] ? ` ${matchInverted[3]}` : '');
+      const num = parseAmountAndNote(numExpr);
       let concepto = matchInverted[1].trim();
       concepto = concepto.replace(/^(?:en|de|al|a|por)\s+/i, '').trim();
       if (num && num.amount > 0 && concepto) {
@@ -962,7 +978,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     kind: 'read',
     input: ConsultarResumenInput,
     handler: async (ctx, input) => {
-      if (input.periodo === 'menu') {
+      const periodo = input?.periodo ?? 'menu';
+      if (periodo === 'menu') {
         return {
           reply: [
             '📊 *Estadísticas de tu negocio*',
@@ -972,7 +989,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
-      if (input.periodo === 'categorias') {
+      if (periodo === 'categorias') {
         const tz = ctx.tenant.business.timezone;
         const cats = await cash.getExpensesByCategory(ctx.tenant.business.id, ctx.now, tz);
         if (cats.length === 0) {
@@ -999,7 +1016,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
-      if (input.periodo === 'movimientos') {
+      if (periodo === 'movimientos') {
         const list = await cash.listRecent(ctx.tenant.business.id, 10);
         if (list.length === 0) {
           return {
@@ -1020,8 +1037,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
-      if (input.periodo.startsWith('semanas')) {
-        const parts = input.periodo.split(':');
+      if (periodo.startsWith('semanas')) {
+        const parts = periodo.split(':');
         const offset = parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
         const tz = ctx.tenant.business.timezone;
         const nowParts = getZonedParts(ctx.now, tz);
@@ -1071,8 +1088,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         };
       }
 
-      if (input.periodo.startsWith('mes')) {
-        const parts = input.periodo.split(':');
+      if (periodo.startsWith('mes')) {
+        const parts = periodo.split(':');
         const offset = parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
         const tz = ctx.tenant.business.timezone;
         const nowParts = getZonedParts(ctx.now, tz);
@@ -1115,11 +1132,11 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
 
       let summary: PeriodSummary;
       const tz = ctx.tenant.business.timezone;
-      if (input.periodo === 'ayer') {
+      if (periodo === 'ayer') {
         const ayer = new Date(ctx.now.getTime() - 24 * 60 * 60 * 1000);
         summary = await cash.getDaySummary(ctx.tenant.business.id, ayer, tz);
         summary.periodLabel = 'ayer';
-      } else if (input.periodo === 'semana') {
+      } else if (periodo === 'semana') {
         summary = await cash.getWeekSummary(ctx.tenant.business.id, ctx.now, tz);
       } else {
         summary = await cash.getDaySummary(ctx.tenant.business.id, ctx.now, tz);
@@ -1146,7 +1163,7 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
         ]
           .filter(Boolean)
           .join('\n'),
-        inlineKeyboard: periodNavKeyboard(summary.periodLabel === 'ayer' ? 'ayer' : input.periodo),
+        inlineKeyboard: periodNavKeyboard(summary.periodLabel === 'ayer' ? 'ayer' : periodo),
       };
     },
   };

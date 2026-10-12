@@ -862,5 +862,64 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     });
     expect(resSemanas.text).toContain('Semanas de Octubre 2026');
   });
+
+  it('botón de la botonera persistente "📊 Estadísticas" abre el menú de estadísticas sin error', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '📊 Estadísticas',
+      now: NOW,
+    });
+    expect(res.text).toContain('Estadísticas de tu negocio');
+    expect(res.inlineKeyboard).toBeDefined();
+    const flat = res.inlineKeyboard!.flat();
+    expect(flat.some((b) => b.callbackData === 'stats:hoy')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:ayer')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:semana')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:mes:0')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:categorias')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:movimientos')).toBe(true);
+  });
+
+  it('audio con silencios/pausas y multiplicadores: "vendí 8... mil pesos en coca cola y 15 mil en papa"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 8... mil pesos en coca cola y 15 mil en papa',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (coca cola)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('Total:* *$ 23.000* (2 ventas)');
+  });
+
+  it('audio de ventas múltiples con productos: "vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (Coca Cola)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('3. 🟢 *$ 30.000* (gaseosa)');
+    expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
+
+  it('lote de ventas rápidas con productos sin verbo: "8000 gaseosa, 15000 papa, 30000 golosinas"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '8000 gaseosa, 15000 papa, 30000 golosinas',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (gaseosa)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('3. 🟢 *$ 30.000* (golosinas)');
+    expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
 });
 
