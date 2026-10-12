@@ -21,6 +21,12 @@ enum MembershipRole {
   EMPLOYEE
 }
 
+enum ManualPaymentStatus {
+  CONFIRMED
+  PENDING
+  VOID
+}
+
 enum ConversationPhase {
   IDLE
   COLLECTING
@@ -47,6 +53,7 @@ model Business {
   conversations         ConversationState[]
   auditLogs             AuditLog[]
   aiUsage               AiUsageLog[]
+  manualPayments        ManualPayment[]
   // Tablas del template gastos (referencia). Otros templates agregan las suyas.
   categories            Category[]
   expenses              Expense[]
@@ -147,6 +154,34 @@ model AiUsageLog {
 
   @@index([businessId, createdAt])
   @@map("ai_usage_logs")
+}
+
+// ==================== CORE: pagos manuales (admin interno) ====================
+
+model ManualPayment {
+  id             String              @id @default(uuid())
+  businessId     String
+  business       Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  amount         Decimal             @db.Decimal(12, 2)
+  currency       String              @default("ARS")
+  paidAt         DateTime
+  method         String              @default("EFECTIVO")
+  periodFrom     DateTime?
+  periodTo       DateTime?
+  concept        String              @default("Suscripción")
+  notes          String?
+  operator       String?
+  status         ManualPaymentStatus @default(CONFIRMED)
+  idempotencyKey String
+  voidReason     String?
+  voidAt         DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([businessId, idempotencyKey])
+  @@index([businessId, paidAt])
+  @@index([businessId, status])
+  @@map("manual_payments")
 }
 
 // ==================== TEMPLATE: gastos ====================

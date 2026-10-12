@@ -9,8 +9,10 @@ import type {
   IInvitationRepository,
   ILogAiUsageData,
   ILogAuditData,
+  IPaymentRepository,
   IUserRepository,
   CreateBusinessData,
+  CreateManualPaymentData,
 } from '../src/core/persistence/repositories.js';
 import type {
   AuditEntry,
@@ -18,6 +20,7 @@ import type {
   BusinessStatus,
   ConversationState,
   Invitation,
+  ManualPayment,
   Membership,
   MembershipWithBusiness,
   User,
@@ -208,6 +211,9 @@ export class FakeAuditRepo implements IAuditRepository {
   async listByBusiness(businessId: string, limit = 50) {
     return this.entries.filter((e) => e.businessId === businessId).slice(0, limit);
   }
+  async listRecent(limit = 50) {
+    return [...this.entries].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, limit);
+  }
 }
 
 export class FakeAiUsageRepo implements IAiUsageRepository {
@@ -224,5 +230,78 @@ export class FakeAiUsageRepo implements IAiUsageRepository {
   }
   async countVisionByBusinessSince(_businessId: string, _since: Date) {
     return this.visionCount;
+  }
+}
+
+export function makePayment(over: Partial<ManualPayment> = {}): ManualPayment {
+  const now = new Date();
+  return {
+    id: nid('pay'),
+    businessId: 'biz-1',
+    amount: 15000,
+    currency: 'ARS',
+    paidAt: now,
+    method: 'TRANSFERENCIA',
+    periodFrom: null,
+    periodTo: null,
+    concept: 'Suscripción mensual',
+    notes: null,
+    operator: 'ops-1',
+    status: 'CONFIRMED',
+    idempotencyKey: nid('idem'),
+    voidReason: null,
+    voidAt: null,
+    createdAt: now,
+    updatedAt: now,
+    ...over,
+  };
+}
+
+export class FakePaymentRepo implements IPaymentRepository {
+  readonly store = new Map<string, ManualPayment>();
+  async create(data: CreateManualPaymentData) {
+    const p = makePayment({
+      id: nid('pay'),
+      businessId: data.businessId,
+      amount: data.amount,
+      currency: data.currency,
+      paidAt: data.paidAt,
+      method: data.method,
+      periodFrom: data.periodFrom ?? null,
+      periodTo: data.periodTo ?? null,
+      concept: data.concept,
+      notes: data.notes ?? null,
+      operator: data.operator ?? null,
+      status: data.status,
+      idempotencyKey: data.idempotencyKey,
+    });
+    this.store.set(p.id, p);
+    return p;
+  }
+  async findById(id: string) {
+    return this.store.get(id) ?? null;
+  }
+  async findByIdempotency(businessId: string, idempotencyKey: string) {
+    return [...this.store.values()].find((p) => p.businessId === businessId && p.idempotencyKey === idempotencyKey) ?? null;
+  }
+  async listByBusiness(businessId: string, limit = 100) {
+    return [...this.store.values()]
+      .filter((p) => p.businessId === businessId)
+      .sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime())
+      .slice(0, limit);
+  }
+  async listRecent(limit = 50) {
+    return [...this.store.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, limit);
+  }
+  async voidPayment(id: string, reason: string, at: Date = new Date()) {
+    const p = this.store.get(id);
+    if (!p) throw new Error('Pago no encontrado');
+    const voided: ManualPayment = { ...p, status: 'VOID', voidReason: reason, voidAt: at, updatedAt: at };
+    this.store.set(id, voided);
+    return voided;
+  }
+  seed(p: ManualPayment) {
+    this.store.set(p.id, p);
+    return p;
   }
 }

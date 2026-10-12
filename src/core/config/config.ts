@@ -36,11 +36,11 @@ const configSchema = z.object({
   OPENROUTER_MODEL: z
     .string()
     .default(
-      'meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-24b-instruct-2501:free,qwen/qwen-2.5-72b-instruct:free'
+      'nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-31b-it:free,openrouter/free'
     ),
   // Groq Chat (ultra rápido, tier gratuito generoso: 30 RPM, 14.400 RPD)
   GROQ_API_KEY: z.string().optional(),
-  GROQ_MODEL: z.string().default('llama-3.3-70b-versatile'),
+  GROQ_MODEL: z.string().default('openai/gpt-oss-120b'),
   // Google AI Studio directo (gratuito: 15 RPM, 1.500 RPD)
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-2.0-flash'),

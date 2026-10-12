@@ -89,6 +89,18 @@ export function interpretDirectlyKiosco(
   if (lower === 'resumen ayer' || lower === 'caja ayer') {
     return { actionName: 'consultar_resumen', params: { periodo: 'ayer' } };
   }
+  if (lower === 'resumen semana' || lower === 'caja semana' || lower === 'esta semana') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'semana' } };
+  }
+  if (lower === 'resumen mes' || lower === 'caja mes' || lower === 'este mes') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'mes:0' } };
+  }
+  if (lower === 'mes anterior' || lower === 'mes pasado' || lower === 'resumen mes anterior' || lower === 'resumen mes pasado') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'mes:-1' } };
+  }
+  if (lower === 'semanas' || lower === 'semanas del mes' || lower === 'ver semanas') {
+    return { actionName: 'consultar_resumen', params: { periodo: 'semanas:0' } };
+  }
   if (lower === 'movimientos' || lower === 'ultimos movimientos' || lower === 'últimos movimientos') {
     return { actionName: 'consultar_movimientos', params: { limite: 10 } };
   }
@@ -110,8 +122,9 @@ export function interpretDirectlyKiosco(
 
   // 5. DETECCIÓN DE MONTOS MÚLTIPLES (ANTES QUE NÚMERO ÚNICO)
   // 5.A. Gastos múltiples: "gasté 3000 en coca y 5000 en pan", "pagué 12000 al proveedor y 4500 de luz"
-  const isExplicitExpense = /^(?:gast[eé]|pagu[eé]|compr[eé]|gastos?|pago)\b/i.test(trimmed);
-  if (isExplicitExpense || trimmed.includes(' en ') || trimmed.includes(' al ') || trimmed.includes(' de ')) {
+  const isExplicitSale = /^(?:vend[ií]|venta|cobr[eé])(?:\s+|$|\b)/i.test(trimmed);
+  const isExplicitExpense = /^(?:gast[eé]|pagu[eé]|compr[eé]|gastos?|pago)(?:\s+|$|\b)/i.test(trimmed);
+  if (!isExplicitSale && (isExplicitExpense || trimmed.includes(' en ') || trimmed.includes(' al ') || trimmed.includes(' de '))) {
     const multiGastos = parseExpensesList(trimmed);
     if (multiGastos && multiGastos.length > 1) {
       return {
@@ -127,7 +140,7 @@ export function interpretDirectlyKiosco(
     }
   }
 
-  // 5.B. Ventas múltiples: "vendí 5000 y vendí 12000", "vendí 3000 y 12000", "3200 2800 2500", "2000 y 3800"
+  // 5.B. Ventas múltiples: "vendí 5000 y vendí 12000", "vendí 3000 y 12000", "3200 2800 2500", "2000 y 3800", "vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa"
   if (!isExplicitExpense) {
     const multiAmounts = parseAmountsList(trimmed);
     if (multiAmounts && multiAmounts.length > 1) {
@@ -146,25 +159,34 @@ export function interpretDirectlyKiosco(
 
   // 6. PATRONES DE MONTO INDIVIDUAL
   // 6.A. Gasto individual (solo si NO tiene conectores de múltiples cláusulas o jerga)
-  const isComplex = /\s+y\s+|mill[oó]n|palo|lucas?|\b[kK]\b|sueldo/i.test(trimmed);
+  const isComplex = /\s+y\s+|mill[oó]n|palo|sueldo/i.test(trimmed);
   const gastoMatch = !isComplex
-    ? trimmed.match(/^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i)
+    ? trimmed.match(/^(?:gast[eé]|pagu[eé]|gasto)\s+\$?([\d.,]+)(?:\s+(mil|lucas?|[kK])\b)?(?:\s+(?:en\s+|a\s+|de\s+|al\s+)?(.*))?$/i)
     : null;
   if (gastoMatch) {
-    const num = parseAmountAndNote(gastoMatch[1]);
+    const fullExpr = gastoMatch[1] + (gastoMatch[2] ? ` ${gastoMatch[2]}` : '') + (gastoMatch[3] ? ` ${gastoMatch[3]}` : '');
+    const num = parseAmountAndNote(fullExpr);
     if (num) {
-      const concepto = (gastoMatch[2] || '').trim() || 'Gasto';
+      const concepto = num.note || 'Gasto';
       return { actionName: 'registrar_gasto', params: { monto: num.amount, concepto } };
     }
   }
 
-  // 6.B. Venta individual
-  const ventaPrefixMatch = trimmed.match(/^(?:vend[ií]|venta)\s+\$?([\d.,]+)(?:\s+(.*))?$/i);
-  if (ventaPrefixMatch) {
-    const num = parseAmountAndNote(ventaPrefixMatch[1]);
-    if (num) {
-      const nota = (ventaPrefixMatch[2] || '').trim() || undefined;
-      return { actionName: 'registrar_venta', params: { monto: num.amount, nota } };
+  // 6.B. Venta individual (solo si NO contiene conectores o múltiples números)
+  if (!isComplex) {
+    const ventaPrefixMatch = trimmed.match(
+      /^(?:vend[ií]|venta|cobr[eé])\s+\$?([\d.,]+)(?:\s+(mil|lucas?|[kK])\b)?(?:\s+(?:pesos\b)?)?(?:\s+(.*))?$/i
+    );
+    if (ventaPrefixMatch) {
+      const notaRaw = (ventaPrefixMatch[3] || '').trim();
+      const hasMoreNumbersOrParts = /,\s*|\s+y\s+|\b\d{3,}\b/i.test(notaRaw);
+      if (!hasMoreNumbersOrParts) {
+        const fullExpr = ventaPrefixMatch[1] + (ventaPrefixMatch[2] ? ` ${ventaPrefixMatch[2]}` : '') + (notaRaw ? ` ${notaRaw}` : '');
+        const num = parseAmountAndNote(fullExpr);
+        if (num) {
+          return { actionName: 'registrar_venta', params: { monto: num.amount, nota: num.note } };
+        }
+      }
     }
   }
 
@@ -211,20 +233,25 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
   const template: TemplateDefinition = {
     id: 'kiosco',
     label: 'Kiosco',
-    welcome: (businessName, firstName) =>
-      [
-        `👋 ¡Hola${firstName ? ` ${firstName}` : ''}! Administro la caja y finanzas de *${businessName}*.`,
+    welcome: (businessName, firstName, role) => {
+      const isEmployee = role === 'EMPLOYEE';
+      const statsOrMovementsLine = isEmployee
+        ? '• *📋 Movimientos:* Consultá los últimos cobros y gastos registrados.'
+        : '• *📊 Estadísticas:* Balance de caja de hoy, ayer, semana o mes.';
+      return [
+        `👋 ¡Hola${firstName ? ` ${firstName}` : ''}! Administro la caja${isEmployee ? '' : ' y finanzas'} de *${businessName}*.`,
         '',
         '• *💰 Ventas:* Ingresá los cobros del mostrador uno tras otro sin frenar.',
         '• *💸 Gastos:* Registrá compras a proveedores y servicios para controlar salidas.',
         '• *🧮 Calcular:* Calculadora de precios de venta sugeridos y márgenes.',
-        '• *📊 Estadísticas:* Balance de caja de hoy, ayer, semana o mes.',
+        statsOrMovementsLine,
         '• *↩️ Deshacer última acción:* Anulá el último movimiento si hubo un error.',
         '',
         '🎙️ *Audios:* Podés dictarme ventas o gastos como a un empleado. Te sugerimos mandar audios de menos de 1 minuto para que la respuesta sea instantánea.',
         '',
         '📌 Abajo tenés los botones directos, o tocá /menu para ver todo.',
-      ].join('\n'),
+      ].join('\n');
+    },
     systemPrompt: (businessName, referenceDate, hints) =>
       buildKioscoSystemPrompt(businessName, referenceDate, hints),
     interpretDirectly: interpretDirectlyKiosco,
@@ -237,7 +264,26 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
       { label: '🧮 Calcular', action: 'calcular_precio' },
       { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
     ],
+    getReplyMenu: (role?: string) => {
+      if (role === 'EMPLOYEE') {
+        return [
+          { label: '💰 Ventas', action: 'registrar_venta' },
+          { label: '💸 Gastos', action: 'registrar_gasto' },
+          { label: '📋 Movimientos', action: 'consultar_movimientos' },
+          { label: '🧮 Calcular', action: 'calcular_precio' },
+          { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+        ];
+      }
+      return [
+        { label: '💰 Ventas', action: 'registrar_venta' },
+        { label: '💸 Gastos', action: 'registrar_gasto' },
+        { label: '📊 Estadísticas', action: 'consultar_resumen' },
+        { label: '🧮 Calcular', action: 'calcular_precio' },
+        { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+      ];
+    },
     replyMenuLayout: [2, 2, 1],
+    getReplyMenuLayout: (_role?: string) => [2, 2, 1],
     menu: [
       { label: '💰 Registrar ventas', action: 'registrar_venta' },
       { label: '💸 Registrar gastos', action: 'registrar_gasto' },
@@ -246,11 +292,29 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
       { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
       { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
     ],
+    getMenu: (role?: string) => {
+      if (role === 'EMPLOYEE') {
+        return [
+          { label: '💰 Registrar ventas', action: 'registrar_venta' },
+          { label: '💸 Registrar gastos', action: 'registrar_gasto' },
+          { label: '🧮 Calcular precio', action: 'calcular_precio' },
+          { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
+          { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+        ];
+      }
+      return [
+        { label: '💰 Registrar ventas', action: 'registrar_venta' },
+        { label: '💸 Registrar gastos', action: 'registrar_gasto' },
+        { label: '📊 Estadísticas y resumen', action: 'consultar_resumen' },
+        { label: '🧮 Calcular precio', action: 'calcular_precio' },
+        { label: '📋 Últimos movimientos', action: 'consultar_movimientos' },
+        { label: '↩️ Deshacer última acción', action: 'deshacer_ultimo' },
+      ];
+    },
     menuCommands: [
       { command: 'ventas', description: '💰 Registrar ventas' },
       { command: 'gastos', description: '💸 Registrar gastos' },
       { command: 'estadisticas', description: '📊 Estadísticas y resumen' },
-      { command: 'resumen', description: '📊 Resumen de caja' },
       { command: 'movimientos', description: '📋 Últimos movimientos' },
       { command: 'calcular', description: '🧮 Calcular precio' },
       { command: 'deshacer', description: '↩️ Deshacer última acción' },
@@ -263,6 +327,29 @@ export function createKioscoTemplateWithCash(cash: CashService): KioscoTemplateB
         const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
         const items = Array.isArray(currentData.items) ? (currentData.items as Array<any>) : [];
         if (items.length === 0) return { text: 'No hay ítems para corregir.', parseMode: 'Markdown' };
+
+        if (items.length === 1) {
+          if (conversations && activeState) {
+            await conversations.upsert({
+              ...activeState,
+              data: {
+                ...currentData,
+                _editingItemIndex: 0,
+              },
+              updatedAt: ctx.now,
+            });
+          }
+          return {
+            text: `✏️ *Ingresá el nuevo importe (actual: ${formatCurrency(items[0].monto)}):*\n\nPodés escribir el número directamente (ej: *950000*).`,
+            parseMode: 'Markdown',
+            inlineKeyboard: [
+              [
+                { text: '🗑️ Borrar', callbackData: 'kiosco:del_item:0' },
+                { text: '⬅️ Volver', callbackData: 'kiosco:show_summary' },
+              ],
+            ],
+          };
+        }
 
         const itemButtons: InlineButton[][] = [];
         for (let i = 0; i < items.length; i += 2) {

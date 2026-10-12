@@ -80,6 +80,32 @@ export interface AuditEntry {
   createdAt: Date;
 }
 
+export type ManualPaymentStatus = 'CONFIRMED' | 'PENDING' | 'VOID';
+export type ManualPaymentMethod = 'EFECTIVO' | 'TRANSFERENCIA' | 'MERCADO_PAGO' | 'OTRO';
+
+/** Cobro manual registrado por un operador. El historial nunca se borra: se anula. */
+export interface ManualPayment {
+  id: string;
+  businessId: string;
+  amount: number;
+  currency: string;
+  /** Fecha efectiva del cobro (la que vale comercialmente). */
+  paidAt: Date;
+  method: ManualPaymentMethod;
+  /** Período que cubre (opcional, fechas inclusivas). */
+  periodFrom: Date | null;
+  periodTo: Date | null;
+  concept: string;
+  notes: string | null;
+  operator: string | null;
+  status: ManualPaymentStatus;
+  idempotencyKey: string;
+  voidReason: string | null;
+  voidAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface TenantContext {
   business: Business;
   membership: Membership;

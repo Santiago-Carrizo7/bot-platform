@@ -162,7 +162,7 @@ describe('VisionService & Procesamiento de Libretas', () => {
     // Ejecución
     const result = await registrarLote.handler(ctx, input);
     expect(result.reply).toContain('2 ventas');
-    expect(result.reply).toContain('1 gastos');
+    expect(result.reply).toContain('1 gasto');
     expect(result.audit?.action).toBe('kiosco.lote_registrado');
 
     // Verificación de movimientos en caja

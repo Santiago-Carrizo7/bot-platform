@@ -9,6 +9,9 @@ import type {
   BusinessStatus,
   ConversationState,
   Invitation,
+  ManualPayment,
+  ManualPaymentMethod,
+  ManualPaymentStatus,
   Membership,
   MembershipRole,
   MembershipWithBusiness,
@@ -88,6 +91,8 @@ export interface ILogAuditData {
 export interface IAuditRepository {
   log(entry: ILogAuditData): Promise<AuditEntry>;
   listByBusiness(businessId: string, limit?: number): Promise<AuditEntry[]>;
+  /** Actividad global reciente (solo admin interno). */
+  listRecent(limit?: number): Promise<AuditEntry[]>;
 }
 
 export interface ILogAiUsageData {
@@ -101,4 +106,29 @@ export interface IAiUsageRepository {
   log(entry: ILogAiUsageData): Promise<void>;
   countByBusinessSince(businessId: string, since: Date): Promise<number>;
   countVisionByBusinessSince(businessId: string, since: Date): Promise<number>;
+}
+
+export interface CreateManualPaymentData {
+  businessId: string;
+  amount: number;
+  currency: string;
+  paidAt: Date;
+  method: ManualPaymentMethod;
+  periodFrom?: Date | null;
+  periodTo?: Date | null;
+  concept: string;
+  notes?: string | null;
+  operator?: string | null;
+  status: ManualPaymentStatus;
+  idempotencyKey: string;
+}
+
+export interface IPaymentRepository {
+  create(data: CreateManualPaymentData): Promise<ManualPayment>;
+  findById(id: string): Promise<ManualPayment | null>;
+  findByIdempotency(businessId: string, idempotencyKey: string): Promise<ManualPayment | null>;
+  listByBusiness(businessId: string, limit?: number): Promise<ManualPayment[]>;
+  /** Historial global (solo admin interno, más recientes primero). */
+  listRecent(limit?: number): Promise<ManualPayment[]>;
+  voidPayment(id: string, reason: string, at?: Date): Promise<ManualPayment>;
 }

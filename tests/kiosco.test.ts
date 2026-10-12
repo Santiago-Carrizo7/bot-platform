@@ -199,7 +199,10 @@ describe('template kiosco: dominio financiero', () => {
 });
 
 describe('template kiosco: flujo por bot (Telegram)', () => {
-  function setupFlow(queue: Array<{ action: string; params: Record<string, unknown> }>) {
+  function setupFlow(
+    queue: Array<{ action: string; params: Record<string, unknown> }>,
+    role: 'OWNER' | 'EMPLOYEE' = 'OWNER'
+  ) {
     const { cash, repo } = setupServices();
     const { template } = createKioscoTemplateWithCash(cash);
     const businesses = new FakeBusinessRepo();
@@ -212,7 +215,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       id: 'mem-1',
       businessId: BIZ,
       userId: ACTOR,
-      role: 'EMPLOYEE' as const,
+      role,
       lastUsedAt: null,
       createdAt: NOW,
       updatedAt: NOW,
@@ -261,7 +264,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     const res = await handleText(f.deps, { resolution: f.resolution, text: 'Gasté 3500 en Coca Cola', now: NOW });
     expect(res.text).toContain('🔴 Gasto registrado: *$ 3.500*');
     expect(res.text).toContain('Coca Cola');
-    expect(res.text).toContain('Mercadería');
+    expect(res.text).not.toContain('Mercadería');
     expect(res.inlineKeyboard).toEqual([
       [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
     ]);
@@ -306,9 +309,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     // Caso 1: sin tipo especificado -> pide aclaración pedagógica
     const f1 = setupFlow([{ action: 'calcular_precio', params: { costo_total: 18000, cantidad: 30, porcentaje: 40 } }]);
     const askType = await handleText(f1.deps, { resolution: f1.resolution, text: 'compré 30 alfajores por 18000 y quiero ganar 40%', now: NOW });
-    expect(askType.text).toContain('¿Querés calcular usando *margen* o *recargo*');
-    expect(askType.text).toContain('Recargo / Markup');
-    expect(askType.text).toContain('Margen');
+    expect(askType.text).toContain('Si calculás con Recargo (sobre el costo)');
+    expect(askType.text).toContain('Si calculás con Margen (sobre la venta)');
+    expect(askType.text).toContain('Precio sugerido: *$ 840* c/u');
+    expect(askType.text).toContain('Precio sugerido: *$ 1.000* c/u');
 
     // Caso 2: con margen especificado -> cálculo matemático
     const f2 = setupFlow([{ action: 'calcular_precio', params: { costo_unitario: 600, porcentaje: 40, tipo: 'margen', cantidad: 30 } }]);
@@ -326,8 +330,8 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     const reply = await handleText(f.deps, { resolution: f.resolution, text: '¿Cuánto vendí hoy?', now: NOW });
     expect(reply.text).toContain('Ventas: *$ 20.000*');
     expect(reply.text).toContain('Gastos: *$ 5.000*');
-    expect(reply.text).toContain('Resultado registrado: +$ 15.000');
-    expect(reply.text).toContain('no la ganancia contable real');
+    expect(reply.text).toContain('Resultado en caja: +$ 15.000');
+    expect(reply.text).toContain('no deduce costos de mercadería');
   });
 
   it('tenant isolation: un negocio no ve ni anula movimientos de otro', async () => {
@@ -567,8 +571,9 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       text: 'compré 30 alfajores a 18000 a cuánto lo vendo para ganar 40%',
       now: NOW,
     });
-    expect(res.text).toContain('¿Querés calcular usando *margen* o *recargo* para ganar *40%*?');
-    expect(res.text).toContain('Costo unitario: *$ 600*');
+    expect(res.text).toContain('Si calculás con Recargo (sobre el costo)');
+    expect(res.text).toContain('Si calculás con Margen (sobre la venta)');
+    expect(res.text).toContain('*Costo unitario:* *$ 600*');
     expect(f.repo.movements).toHaveLength(0); // NUNCA se registra como gasto
     expect(f.deps.interpreter.interpret).not.toHaveBeenCalled();
   });
@@ -609,10 +614,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
 
     // 2. Tocar 'Hoy'
     const hoy = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:hoy', now: NOW });
-    expect(hoy.text).toContain('Resumen de hoy:');
+    expect(hoy.text).toContain('Resumen de hoy');
     expect(hoy.text).toContain('Ventas: *$ 30.000*');
     expect(hoy.text).toContain('Gastos: *$ 8.000*');
-    expect(hoy.text).toContain('Resultado registrado: +$ 22.000');
+    expect(hoy.text).toContain('Resultado en caja: +$ 22.000');
 
     // 3. Tocar 'Gastos por categoría'
     const cats = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:categorias', now: NOW });
@@ -649,9 +654,10 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     });
     // Gasto individual directo
     expect(res.text).toContain('$ 150.000');
-    expect(res.text.toLowerCase()).toContain('concepto: *alquiler*');
+    expect(res.text.toLowerCase()).toContain('- alquiler');
     expect(res.text).not.toContain('alquiler [Alquiler]');
     expect(res.text).not.toContain('Alquiler [Alquiler]');
+    expect(res.text).not.toContain('Categoría:');
   });
 
   it('lote confirmado cierra la sesión limpia sin botones residuales de deshacer/finalizar', async () => {
@@ -695,6 +701,411 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(res.text).toContain('1. 🔴 *$ 150.000* - Alquiler');
     expect(res.text).toContain('2. 🔴 *$ 1.200.000* - Sueldo de empleado');
     expect(res.text).toContain('Total:* *$ 1.350.000* (2 gastos)');
+  });
+
+  it('zona horaria de Argentina: movimiento registrado a las 21:09 hs de ayer (00:09 UTC) pertenece a ayer y no a hoy', async () => {
+    const f = setupFlow([]);
+    // 21:09 hs de Argentina el 10 de octubre de 2026 = 00:09 hs UTC del 11 de octubre de 2026
+    const fechaAyerNocheUtc = new Date('2026-10-11T00:09:00.000Z');
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 15000,
+      concept: 'Venta de noche',
+      date: fechaAyerNocheUtc,
+    });
+
+    // Ahora es el 11 de octubre a las 11:38 hs en Argentina (14:38 hs UTC)
+    const fechaHoyDiaUtc = new Date('2026-10-11T14:38:00.000Z');
+
+    // 1. Consultar resumen de "hoy" (no debe incluir la venta de las 21:09 de ayer)
+    const resHoy = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'caja hoy',
+      now: fechaHoyDiaUtc,
+    });
+    expect(resHoy.text).toContain('Ventas: *$ 0* (0 ventas)');
+    expect(resHoy.text).toContain('Resultado en caja: +$ 0');
+
+    // 2. Consultar resumen de "ayer" (SÍ debe incluir la venta de las 21:09)
+    const resAyer = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'resumen ayer',
+      now: fechaHoyDiaUtc,
+    });
+    expect(resAyer.text).toContain('Ventas: *$ 15.000* (1 venta)');
+    expect(resAyer.text).toContain('Resultado en caja: +$ 15.000');
+  });
+
+  it('navegación de meses: permite consultar este mes y navegar al mes anterior con botones interactivos', async () => {
+    const f = setupFlow([]);
+    // Venta en Septiembre 2026 (mes anterior)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 45000,
+      concept: 'Venta Septiembre',
+      date: new Date('2026-09-20T15:00:00Z'),
+    });
+    // Venta en Octubre 2026 (este mes)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 80000,
+      concept: 'Venta Octubre',
+      date: new Date('2026-10-05T15:00:00Z'),
+    });
+
+    const refOctubre = new Date('2026-10-11T14:00:00Z');
+
+    // 1. Consultar este mes (offset 0)
+    const resEsteMes = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:mes:0',
+      now: refOctubre,
+    });
+    expect(resEsteMes.text).toContain('Resumen de este mes (Octubre 2026)');
+    expect(resEsteMes.text).toContain('Ventas: *$ 80.000* (1 venta)');
+    expect(resEsteMes.inlineKeyboard).toBeDefined();
+
+    // Verificamos botones de navegación en mes actual:
+    const flatButtonsMes0 = resEsteMes.inlineKeyboard!.flat();
+    expect(flatButtonsMes0.find((b) => b.text.includes('Mes anterior'))?.callbackData).toBe('stats:mes:-1');
+    expect(flatButtonsMes0.find((b) => b.text.includes('Ver semanas del mes'))?.callbackData).toBe('stats:semanas:0');
+    // En mes actual no debe haber botón de "Mes siguiente"
+    expect(flatButtonsMes0.some((b) => b.text.includes('Mes siguiente'))).toBe(false);
+
+    // 2. Navegar al mes anterior (offset -1: Septiembre 2026)
+    const resMesAnt = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:mes:-1',
+      now: refOctubre,
+    });
+    expect(resMesAnt.text).toContain('Resumen de Septiembre 2026');
+    expect(resMesAnt.text).toContain('Ventas: *$ 45.000* (1 venta)');
+
+    // En mes anterior debe tener botón para volver al mes siguiente (Octubre) y al mes anterior (Agosto)
+    const flatButtonsMesAnt = resMesAnt.inlineKeyboard!.flat();
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Mes anterior'))?.callbackData).toBe('stats:mes:-2');
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Mes siguiente'))?.callbackData).toBe('stats:mes:0');
+    expect(flatButtonsMesAnt.find((b) => b.text.includes('Ver semanas del mes'))?.callbackData).toBe('stats:semanas:-1');
+  });
+
+  it('desglose de semanas contables: muestra semanas del mes particionadas de lunes a domingo y suma exacta', async () => {
+    const f = setupFlow([]);
+    // Semana 1 de Octubre (1 al 4 de oct)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 20000,
+      concept: 'Venta Semana 1',
+      date: new Date('2026-10-02T15:00:00Z'),
+    });
+    // Semana 2 de Octubre (5 al 11 de oct)
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'IN',
+      amount: 35000,
+      concept: 'Venta Semana 2',
+      date: new Date('2026-10-08T15:00:00Z'),
+    });
+    await f.repo.addMovement({
+      businessId: BIZ,
+      userId: ACTOR,
+      kind: 'OUT',
+      amount: 5000,
+      concept: 'Gasto Pan',
+      date: new Date('2026-10-08T16:00:00Z'),
+    });
+
+    const refOctubre = new Date('2026-10-11T14:00:00Z');
+
+    // Consultar semanas del mes actual (offset 0)
+    const resSemanas = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'stats:semanas:0',
+      now: refOctubre,
+    });
+
+    expect(resSemanas.text).toContain('Semanas de Octubre 2026');
+    expect(resSemanas.text).toContain('Semana 1 (1 al 4 de oct)');
+    expect(resSemanas.text).toContain('Ventas: *$ 20.000* (1)');
+    expect(resSemanas.text).toContain('Semana 2 (5 al 11 de oct)');
+    expect(resSemanas.text).toContain('Ventas: *$ 35.000* (1) | 💸 Gastos: *$ 5.000* (1)');
+    expect(resSemanas.text).toContain('Balance: *+$ 30.000*');
+    // Total del mes debe sumar exactamente ambas semanas
+    expect(resSemanas.text).toContain('Total de Octubre 2026:');
+    expect(resSemanas.text).toContain('Ventas: *$ 55.000* (2)');
+    expect(resSemanas.text).toContain('Gastos: *$ 5.000* (1)');
+    expect(resSemanas.text).toContain('Resultado en caja: +$ 50.000');
+
+    // Botones de navegación en desglose de semanas:
+    const flatButtons = resSemanas.inlineKeyboard!.flat();
+    expect(flatButtons.find((b) => b.text.includes('Semanas mes ant.'))?.callbackData).toBe('stats:semanas:-1');
+    expect(flatButtons.find((b) => b.text.includes('Total del mes'))?.callbackData).toBe('stats:mes:0');
+  });
+
+  it('interpretación directa en texto: reconoce "mes pasado" y "semanas del mes"', async () => {
+    const f = setupFlow([]);
+    const ref = new Date('2026-10-11T14:00:00Z');
+
+    const resMesPasado = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'mes pasado',
+      now: ref,
+    });
+    expect(resMesPasado.text).toContain('Resumen de Septiembre 2026');
+
+    const resSemanas = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'semanas del mes',
+      now: ref,
+    });
+    expect(resSemanas.text).toContain('Semanas de Octubre 2026');
+  });
+
+  it('botón de la botonera persistente "📊 Estadísticas" abre el menú de estadísticas sin error', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '📊 Estadísticas',
+      now: NOW,
+    });
+    expect(res.text).toContain('Estadísticas de tu negocio');
+    expect(res.inlineKeyboard).toBeDefined();
+    const flat = res.inlineKeyboard!.flat();
+    expect(flat.some((b) => b.callbackData === 'stats:hoy')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:ayer')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:semana')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:mes:0')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:categorias')).toBe(true);
+    expect(flat.some((b) => b.callbackData === 'stats:movimientos')).toBe(true);
+  });
+
+  it('audio con silencios/pausas y multiplicadores: "vendí 8... mil pesos en coca cola y 15 mil en papa"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 8... mil pesos en coca cola y 15 mil en papa',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (coca cola)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('Total:* *$ 23.000* (2 ventas)');
+  });
+
+  it('audio de ventas múltiples con productos: "vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'vendí 8000 pesos en Coca Cola, 15000 en papa y 30000 en gaseosa',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (Coca Cola)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
+
+  describe('RBAC: Dueño vs Empleado', () => {
+    it('empleado: se le bloquea consultar_resumen por comando (/resumen, /estadisticas)', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resResumen = await handleText(f.deps, { resolution: f.resolution, text: '/resumen', now: NOW });
+      expect(resResumen.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+
+      const resStats = await handleText(f.deps, { resolution: f.resolution, text: '/estadisticas', now: NOW });
+      expect(resStats.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: se le bloquea consultar_resumen por texto ("caja", "balance", "estadisticas")', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resCaja = await handleText(f.deps, { resolution: f.resolution, text: 'caja hoy', now: NOW });
+      expect(resCaja.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+
+      const resStats = await handleText(f.deps, { resolution: f.resolution, text: 'estadísticas', now: NOW });
+      expect(resStats.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: se le bloquea callback con prefijo stats:', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      const resCb = await handleCallback(f.deps, { resolution: f.resolution, data: 'stats:hoy', now: NOW });
+      expect(resCb.text).toContain('Solo el dueño del negocio puede consultar las estadísticas');
+    });
+
+    it('empleado: menú inline (/menu) no incluye estadísticas pero sí movimientos y calculadora', () => {
+      const { cash } = setupServices();
+      const { template } = createKioscoTemplateWithCash(cash);
+      const menuEmp = template.getMenu?.('EMPLOYEE') ?? [];
+      expect(menuEmp.some((m) => m.action === 'consultar_resumen')).toBe(false);
+      expect(menuEmp.some((m) => m.action === 'registrar_venta')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'registrar_gasto')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'consultar_movimientos')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'calcular_precio')).toBe(true);
+      expect(menuEmp.some((m) => m.action === 'deshacer_ultimo')).toBe(true);
+
+      const menuOwner = template.getMenu?.('OWNER') ?? [];
+      expect(menuOwner.some((m) => m.action === 'consultar_resumen')).toBe(true);
+    });
+
+    it('empleado: replyMenu persistente reemplaza estadísticas por movimientos', () => {
+      const { cash } = setupServices();
+      const { template } = createKioscoTemplateWithCash(cash);
+      const replyEmp = template.getReplyMenu?.('EMPLOYEE') ?? [];
+      expect(replyEmp.some((m) => m.action === 'consultar_resumen')).toBe(false);
+      expect(replyEmp.some((m) => m.action === 'consultar_movimientos')).toBe(true);
+
+      const replyOwner = template.getReplyMenu?.('OWNER') ?? [];
+      expect(replyOwner.some((m) => m.action === 'consultar_resumen')).toBe(true);
+    });
+
+    it('empleado: tap en "📋 Movimientos" en barra persistente dispara últimos movimientos', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      await f.repo.addMovement({ businessId: BIZ, userId: ACTOR, kind: 'IN', amount: 3500, concept: 'Venta' });
+      const res = await handleText(f.deps, { resolution: f.resolution, text: '📋 Movimientos', now: NOW });
+      expect(res.text).toContain('Últimos movimientos');
+      expect(res.text).toContain('+$ 3.500');
+    });
+
+    it('empleado: PUEDE registrar ventas, gastos, calcular precio y deshacer', async () => {
+      const f = setupFlow([], 'EMPLOYEE');
+      // Venta
+      const resVenta = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 4200', now: NOW });
+      expect(resVenta.text).toContain('Venta registrada');
+      expect(f.repo.movements).toHaveLength(1);
+
+      // Gasto
+      const resGasto = await handleText(f.deps, { resolution: f.resolution, text: 'gasté 1500 en pan', now: NOW });
+      expect(resGasto.text).toContain('Gasto registrado');
+      expect(f.repo.movements).toHaveLength(2);
+
+      // Calcular precio
+      const resCalc = await handleText(f.deps, { resolution: f.resolution, text: 'costo 500 margen 50%', now: NOW });
+      expect(resCalc.text).toContain('Precio de venta: $ 1.000');
+
+      // Deshacer
+      const resUndo = await handleText(f.deps, { resolution: f.resolution, text: '/deshacer', now: NOW });
+      expect(resUndo.text).toContain('Se anuló el último movimiento');
+      expect(f.repo.movements).toHaveLength(1);
+    });
+  });
+
+  it('lote de ventas rápidas con productos sin verbo: "8000 gaseosa, 15000 papa, 30000 golosinas"', async () => {
+    const f = setupFlow([]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: '8000 gaseosa, 15000 papa, 30000 golosinas',
+      now: NOW,
+    });
+    expect(res.text).toContain('Confirmar ventas:');
+    expect(res.text).toContain('1. 🟢 *$ 8.000* (gaseosa)');
+    expect(res.text).toContain('2. 🟢 *$ 15.000* (papa)');
+    expect(res.text).toContain('3. 🟢 *$ 30.000* (golosinas)');
+    expect(res.text).toContain('Total:* *$ 53.000* (3 ventas)');
+  });
+
+  it('audio en modo libre con un solo gasto entra en confirmación registrar_lote con concepto y categoría en líneas separadas sin guardar antes', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // 1. Debe mostrar resumen claro con monto y concepto en 1 línea, sin categoría visible
+    expect(res.text).toContain('🎤 *Gasto detectado en el audio:*');
+    expect(res.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(res.text).not.toContain('Categoría:');
+    expect(res.inlineKeyboard).toBeDefined();
+    expect(res.inlineKeyboard?.[0]?.[0]?.callbackData).toBe('confirm:yes');
+    expect(res.inlineKeyboard?.[1]?.[0]?.callbackData).toBe('kiosco:correct_prompt');
+
+    // 2. NO debe haber mutado la base de datos todavía
+    expect(f.repo.movements).toHaveLength(0);
+
+    // 3. Confirmar mediante botón
+    const confirmed = await handleCallback(f.deps, {
+      resolution: f.resolution,
+      data: 'confirm:yes',
+      now: NOW,
+    });
+    expect(confirmed.text).toContain('✅ *Gasto registrado con éxito:*');
+    expect(confirmed.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(confirmed.text).not.toContain('Categoría:');
+
+    // 4. Se persistió el movimiento y la conversación quedó limpia (sin modo continuo)
+    expect(f.repo.movements).toHaveLength(1);
+    expect(f.repo.movements[0]).toMatchObject({
+      kind: 'OUT',
+      amount: 1000000,
+      concept: 'sueldo de empleado',
+      category: 'Sueldos',
+    });
+    const conv = await f.conversations.get(BIZ, ACTOR);
+    expect(conv).toBeNull();
+  });
+
+  it('audio en modo libre que devuelve registrar_gasto se convierte automáticamente a registrar_lote', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_gasto',
+        params: { monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+      },
+    ]);
+    const res = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // Debe haberse interceptado y solicitado confirmación
+    expect(res.text).toContain('🎤 *Gasto detectado en el audio:*');
+    expect(res.text).toContain('🔴 *$ 1.000.000* - sueldo de empleado');
+    expect(res.text).not.toContain('Categoría:');
+    expect(f.repo.movements).toHaveLength(0);
+  });
+
+  it('corrección natural "es 900000" en lote de un solo ítem actualiza el monto', async () => {
+    const f = setupFlow([
+      {
+        action: 'registrar_lote',
+        params: {
+          items: [
+            { tipo: 'GASTO', monto: 1000000, concepto: 'sueldo de empleado', categoria: 'Sueldos' },
+          ],
+        },
+      },
+    ]);
+    await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'Le pagué a un empleado el sueldo de un millón',
+      isVoice: true,
+      now: NOW,
+    });
+
+    // Corregir mediante texto natural
+    const corrected = await handleText(f.deps, {
+      resolution: f.resolution,
+      text: 'es 900000',
+      now: NOW,
+    });
+    expect(corrected.text).toContain('🔴 *$ 900.000* - sueldo de empleado');
   });
 });
 

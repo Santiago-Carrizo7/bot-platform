@@ -14,6 +14,8 @@ export interface AdminSessionPayload {
   exp: number;
   /** Fingerprint (8 hex de SHA-256) de la password vigente. */
   pwdFp: string;
+  /** Etiqueta del operador (máx 24 chars, solo para auditoría/trazabilidad). */
+  op?: string;
 }
 
 function sha256Hex(value: string): string {
@@ -38,17 +40,36 @@ function decodePayload(body: string): AdminSessionPayload | null {
     if (typeof parsed !== 'object' || parsed === null) return null;
     const candidate = parsed as Record<string, unknown>;
     if (typeof candidate.exp !== 'number' || typeof candidate.pwdFp !== 'string') return null;
-    return { exp: candidate.exp, pwdFp: candidate.pwdFp };
+    const op = typeof candidate.op === 'string' ? candidate.op.slice(0, 24) : undefined;
+    return op ? { exp: candidate.exp, pwdFp: candidate.pwdFp, op } : { exp: candidate.exp, pwdFp: candidate.pwdFp };
   } catch {
     return null;
   }
 }
 
+/** Etiqueta de operador: letras/números/espacio/guion, 1-24 chars. Vacío = anónimo. */
+export function sanitizeOperator(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().replace(/\s+/g, ' ').slice(0, 24);
+  if (!value) return undefined;
+  if (!/^[\p{L}\p{N} _.-]{1,24}$/u.test(value)) return undefined;
+  return value;
+}
+
 /** Cookie value: `<payload base64url>.<hmac base64url>`. */
-export function signSession(opts: { password: string; secret: string; now?: Date }): string {
+export function signSession(opts: { password: string; secret: string; now?: Date; operator?: string }): string {
   const now = (opts.now ?? new Date()).getTime();
-  const body = encodePayload({ exp: now + SESSION_TTL_SECONDS * 1000, pwdFp: passwordFingerprint(opts.password) });
+  const body = encodePayload({
+    exp: now + SESSION_TTL_SECONDS * 1000,
+    pwdFp: passwordFingerprint(opts.password),
+    ...(opts.operator ? { op: opts.operator } : {}),
+  });
   return `${body}.${hmac(body, opts.secret)}`;
+}
+
+/** Token CSRF derivado de la sesión (synchronizer sin store server-side). */
+export function csrfToken(sessionValue: string, secret: string): string {
+  return createHmac('sha256', secret).update(`csrf:${sessionValue}`, 'utf8').digest('base64url');
 }
 
 /** Devuelve el payload si la firma, la expiración y la password siguen vigentes. */
