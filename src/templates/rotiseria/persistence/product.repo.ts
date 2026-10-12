@@ -83,7 +83,11 @@ export class ProductRepository {
     });
   }
 
-  async deactivateProduct(id: string, tx?: Prisma.TransactionClient): Promise<RotiseriaProduct> {
+  async deactivateProduct(id: string, businessId: string, tx?: Prisma.TransactionClient): Promise<RotiseriaProduct> {
+    const existing = await this.findProductById(id, businessId);
+    if (!existing) {
+      throw new Error(`Producto ${id} no encontrado para el negocio ${businessId}`);
+    }
     return this.client(tx).rotiseriaProduct.update({
       where: { id },
       data: { isActive: false },
@@ -150,7 +154,11 @@ export class ProductRepository {
     });
   }
 
-  async deactivatePromo(id: string, tx?: Prisma.TransactionClient): Promise<RotiseriaPromo> {
+  async deactivatePromo(id: string, businessId: string, tx?: Prisma.TransactionClient): Promise<RotiseriaPromo> {
+    const existing = await this.findPromoById(id, businessId);
+    if (!existing) {
+      throw new Error(`Promo ${id} no encontrada para el negocio ${businessId}`);
+    }
     return this.client(tx).rotiseriaPromo.update({
       where: { id },
       data: { isActive: false },

@@ -58,6 +58,11 @@ export interface ActionDef<TInput = unknown> {
   description: string;
   kind: ActionKind;
   /**
+   * Si es true, la acción ejecuta directamente sin pedir confirmación previa
+   * (a menos que se invoque por voz/audio, donde la confirmación es obligatoria).
+   */
+  skipConfirmation?: boolean;
+  /**
    * Contrato validado SIEMPRE por código. Se tipa como ZodType<unknown> porque
    * los schemas con .default()/.optional() tienen Input distinto de Output.
    */

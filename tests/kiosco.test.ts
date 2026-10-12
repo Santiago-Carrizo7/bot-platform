@@ -257,6 +257,17 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
     expect(f.auditRepo.entries).toHaveLength(1);
     expect(f.auditRepo.entries[0]).toMatchObject({ action: 'sale.recorded', actorUserId: ACTOR });
     expect(f.repo.movements).toHaveLength(1);
+    // Disparo del trial en la primera venta real
+    expect(f.businesses.store.get(BIZ)?.trialStartedAt).toEqual(NOW);
+  });
+
+  it('negocio en READ_ONLY bloquea registro de ventas en kiosco', async () => {
+    const f = setupFlow([{ action: 'registrar_venta', params: { monto: 5000 } }]);
+    const biz = f.businesses.store.get(BIZ)!;
+    biz.status = 'READ_ONLY';
+    const res = await handleText(f.deps, { resolution: f.resolution, text: 'Vendí 5000', now: NOW });
+    expect(res.text).toContain('modo solo lectura');
+    expect(f.repo.movements).toHaveLength(0);
   });
 
   it('flujo gastos: registrar gasto registra directamente y categoriza', async () => {

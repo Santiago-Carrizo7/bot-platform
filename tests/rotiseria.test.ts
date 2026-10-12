@@ -128,8 +128,8 @@ class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
     return p;
   }
 
-  async deactivateProduct(id: string) {
-    const p = this.s.products.find((x) => x.id === id);
+  async deactivateProduct(id: string, businessId?: string) {
+    const p = this.s.products.find((x) => x.id === id && (!businessId || x.businessId === businessId));
     if (!p) throw new Error('no encontrado');
     p.isActive = false;
     return p;
@@ -180,8 +180,8 @@ class FakeRotiseriaProductRepo implements Partial<ProductRepository> {
     return pr;
   }
 
-  async deactivatePromo(id: string) {
-    const pr = this.s.promos.find((x) => x.id === id);
+  async deactivatePromo(id: string, businessId?: string) {
+    const pr = this.s.promos.find((x) => x.id === id && (!businessId || x.businessId === businessId));
     if (!pr) throw new Error('no encontrado');
     pr.isActive = false;
     return pr;

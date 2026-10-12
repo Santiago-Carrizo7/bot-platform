@@ -413,7 +413,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     name: 'registrar_venta',
     description:
       'Registra cobros y ventas de dinero en el mostrador. Permite ingresar importes de forma ágil y continua.',
-    kind: 'read',
+    kind: 'write',
+    skipConfirmation: true,
     input: RegistrarVentaInput,
     isContinuous: true,
     handler: async (ctx, initialData) => {
@@ -586,7 +587,8 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
     name: 'registrar_gasto',
     description:
       'Registra salidas de dinero, pagos a proveedores y gastos de servicios de forma ágil y continua.',
-    kind: 'read',
+    kind: 'write',
+    skipConfirmation: true,
     input: RegistrarGastoInput,
     isContinuous: true,
     handler: async (ctx, initialData) => {

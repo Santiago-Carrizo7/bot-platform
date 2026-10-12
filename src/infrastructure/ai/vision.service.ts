@@ -151,6 +151,7 @@ export class VisionService {
         Authorization: `Bearer ${candidate.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
     });
 
     if (!response.ok) {

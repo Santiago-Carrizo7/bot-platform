@@ -302,6 +302,9 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
   if (active && active.phase === 'COLLECTING' && active.actionName) {
     const currentAction = deps.template.actions.find((a) => a.name === active.actionName);
     if (currentAction?.isContinuous && currentAction.handleContinuousStep) {
+      if (currentAction.kind === 'write' && !access.canWrite) {
+        return md(MSG_READONLY_WRITE);
+      }
       const lower = trimmed.toLowerCase();
       const ctx: ActionContext = { tenant, actorUserId: resolution.user.id, now, isVoice: input.isVoice };
       if (lower === '/fin' || lower === 'fin' || lower === 'finalizar') {
@@ -321,6 +324,9 @@ export async function handleText(deps: FlowDeps, input: TextInput): Promise<BotR
         return res.reply;
       }
       const res = await currentAction.handleContinuousStep(ctx, trimmed, active.data);
+      if (currentAction.kind === 'write' && shouldStartTrial(tenant.business)) {
+        await deps.businesses.markTrialStarted(tenant.business.id, now);
+      }
       if (res.audit) {
         await deps.audit.log({
           businessId: tenant.business.id,
@@ -731,6 +737,9 @@ async function startAction(
   }
   if (action.isContinuous) {
     if (!access.canWrite) return md(MSG_READONLY_WRITE);
+    if (action.kind === 'write' && shouldStartTrial(tenant.business)) {
+      await deps.businesses.markTrialStarted(tenant.business.id, now);
+    }
     const ctx: ActionContext = { tenant, actorUserId: userId, now, isVoice };
     const result = await action.handler(ctx, initialData);
     if (result.audit) {
@@ -759,7 +768,8 @@ async function startAction(
   }
   const missing = missingFields(action.input, initialData);
   if (missing.length === 0) {
-    if (action.kind === 'write') {
+    const shouldConfirm = action.kind === 'write' && (!action.skipConfirmation || isVoice);
+    if (shouldConfirm) {
       return enterConfirming(deps, tenant, userId, action, initialData, now, isVoice);
     }
     return executeAction(deps, tenant, userId, action, initialData, now, access);
@@ -797,7 +807,8 @@ async function proceedWithAction(
   }
   const validation = action.input.safeParse(data);
   if (validation.success) {
-    if (action.kind === 'write') {
+    const shouldConfirm = action.kind === 'write' && (!action.skipConfirmation || opts.isVoice);
+    if (shouldConfirm) {
       return enterConfirming(deps, tenant, userId, action, validation.data, now, opts.isVoice);
     }
     return executeAction(deps, tenant, userId, action, validation.data, now, access);

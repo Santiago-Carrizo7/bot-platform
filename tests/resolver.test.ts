@@ -3,6 +3,7 @@ import { TenantResolver } from '../src/core/tenant/resolver.js';
 import { UserService } from '../src/core/identity/user.service.js';
 import { MembershipService } from '../src/core/identity/membership.service.js';
 import { InvitationService } from '../src/core/identity/invitation.service.js';
+import { BusinessService } from '../src/core/tenant/business.service.js';
 import { AuditService } from '../src/core/audit/audit.service.js';
 import { FakeAuditRepo, FakeBusinessRepo, FakeInvitationRepo, FakeMembershipRepo, FakeUserRepo, makeBusiness } from './fakes.js';
 
@@ -14,8 +15,9 @@ function setup() {
   const userService = new UserService(users);
   const membershipService = new MembershipService(membershipRepo);
   const invitationService = new InvitationService(new FakeInvitationRepo(), audit);
-  const resolver = new TenantResolver(userService, membershipService, membershipRepo, invitationService);
-  return { resolver, businesses, users, membershipRepo, invitationService };
+  const businessService = new BusinessService(businesses);
+  const resolver = new TenantResolver(userService, membershipService, membershipRepo, invitationService, businessService);
+  return { resolver, businesses, users, membershipRepo, invitationService, businessService };
 }
 
 describe('TenantResolver', () => {
@@ -69,5 +71,15 @@ describe('TenantResolver', () => {
     const r = await resolver.resolve({ telegramId: 'tg-5', botTemplateId: 'gastos' });
     expect(r.tenant?.business.id).toBe('biz-b');
     expect(r.memberships).toHaveLength(2);
+  });
+
+  it('rechaza invitación si pertenece a otro template', async () => {
+    const { resolver, businesses, invitationService } = setup();
+    const bizRotiseria = businesses.seed(makeBusiness({ id: 'biz-rotiseria', templateId: 'rotiseria' }));
+    const created = await invitationService.create(bizRotiseria.id, 'OWNER', { botUsername: 'b' });
+
+    await expect(
+      resolver.resolve({ telegramId: 'tg-99', botTemplateId: 'kiosco', startPayload: created.token })
+    ).rejects.toThrow('Esta invitación corresponde a otro de los bots de la plataforma (rotiseria).');
   });
 });

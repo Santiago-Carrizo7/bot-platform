@@ -149,6 +149,10 @@ export class DeliveryZoneRepository {
     data: UpdateDeliveryZoneData,
     tx?: Prisma.TransactionClient
   ): Promise<RotiseriaDeliveryZone> {
+    const existing = await this.findById(id, businessId, tx);
+    if (!existing) {
+      throw new Error(`Zona de entrega ${id} no encontrada para el negocio ${businessId}`);
+    }
     return this.client(tx).rotiseriaDeliveryZone.update({
       where: { id },
       data: {
@@ -163,6 +167,10 @@ export class DeliveryZoneRepository {
   }
 
   async deactivate(id: string, businessId: string, tx?: Prisma.TransactionClient): Promise<RotiseriaDeliveryZone> {
+    const existing = await this.findById(id, businessId, tx);
+    if (!existing) {
+      throw new Error(`Zona de entrega ${id} no encontrada para el negocio ${businessId}`);
+    }
     return this.client(tx).rotiseriaDeliveryZone.update({
       where: { id },
       data: { isActive: false },

@@ -54,6 +54,7 @@ export class OpenAICompatibleChatProvider implements IAIProvider {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
       });
 
       if (!response.ok) {

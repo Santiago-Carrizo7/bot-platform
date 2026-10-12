@@ -1,8 +1,10 @@
+import { AppError } from '../errors/errors.js';
 import type { MembershipWithBusiness, TenantContext, User } from './entities.js';
 import type { IMembershipRepository } from '../persistence/repositories.js';
 import type { InvitationService } from '../identity/invitation.service.js';
 import type { MembershipService } from '../identity/membership.service.js';
 import type { UserService } from '../identity/user.service.js';
+import type { BusinessService } from './business.service.js';
 
 export interface ResolveRequest {
   telegramId: string;
@@ -34,7 +36,8 @@ export class TenantResolver {
     private readonly users: UserService,
     private readonly memberships: MembershipService,
     private readonly membershipRepo: IMembershipRepository,
-    private readonly invitations: InvitationService
+    private readonly invitations: InvitationService,
+    private readonly businesses?: BusinessService
   ) {}
 
   async resolve(req: ResolveRequest): Promise<Resolution> {
@@ -42,6 +45,19 @@ export class TenantResolver {
     const user = await this.users.getOrCreateByTelegramId(req.telegramId);
 
     if (req.startPayload) {
+      if (this.businesses) {
+        const candidate = await this.invitations.findByToken(req.startPayload);
+        if (candidate) {
+          const biz = await this.businesses.getById(candidate.businessId);
+          if (biz && biz.templateId !== req.botTemplateId) {
+            throw new AppError(
+              `Esta invitación corresponde a otro de los bots de la plataforma (${biz.templateId}).`,
+              'INVALID_INVITATION_TEMPLATE',
+              400
+            );
+          }
+        }
+      }
       const invitation = await this.invitations.consume(req.startPayload, user.id, now);
       const membership = await this.memberships.ensureMembership(
         invitation.businessId,
@@ -53,6 +69,13 @@ export class TenantResolver {
       const withBusiness = all.find((m) => m.businessId === invitation.businessId);
       if (!withBusiness) {
         throw new Error('Membership recién creada no encontrada (inconsistencia interna)');
+      }
+      if (withBusiness.business.templateId !== req.botTemplateId) {
+        throw new AppError(
+          `Esta invitación corresponde a otro de los bots de la plataforma (${withBusiness.business.templateId}).`,
+          'INVALID_INVITATION_TEMPLATE',
+          400
+        );
       }
       return {
         user,

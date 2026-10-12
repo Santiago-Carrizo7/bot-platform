@@ -65,7 +65,7 @@ export class ProductService {
     if (!existing) {
       throw new AppError('Producto no encontrado.');
     }
-    return this.repo.deactivateProduct(id);
+    return this.repo.deactivateProduct(id, businessId);
   }
 
   async upsertBatchBebidas(
@@ -150,7 +150,7 @@ export class ProductService {
     if (!existing) {
       throw new AppError('Promo no encontrada.');
     }
-    return this.repo.deactivatePromo(id);
+    return this.repo.deactivatePromo(id, businessId);
   }
 
   async listPromos(businessId: string, options: { includeInactive?: boolean } = {}): Promise<RotiseriaPromo[]> {
