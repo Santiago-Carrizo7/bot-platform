@@ -437,6 +437,10 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           inlineKeyboard: [
             [{ text: '↩️ Deshacer última venta', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
           ],
+          continueInAction: {
+            name: 'registrar_venta',
+            data: { count: 1, total: amount, lastMovementId: movement.id },
+          },
           audit: {
             action: 'sale.recorded',
             entityType: 'money_movement',
@@ -614,6 +618,10 @@ export function buildKioscoActions(deps: KioscoActionDeps): ActionDef<unknown>[]
           inlineKeyboard: [
             [{ text: '↩️ Deshacer último gasto', callbackData: 'undo:ask' }, { text: '🏁 Finalizar', callbackData: 'continuous:fin' }],
           ],
+          continueInAction: {
+            name: 'registrar_gasto',
+            data: { count: 1, total: amount, lastMovementId: movement.id },
+          },
           audit: {
             action: 'expense.recorded',
             entityType: 'money_movement',
