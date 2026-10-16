@@ -115,7 +115,10 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
   • Anular venta ("anulá la última venta", "cancelá la venta", "me equivoqué en la venta") -> anular_venta.
   • Control de días / caja ("cuánto vendimos hoy", "cierre de anoche", "control de días", "caja") -> control_dias.
   • Estadísticas ("estadísticas", "cómo venimos", "más vendidos", "resumen semanal") -> consultar_estadisticas.
-  • Cambiar precio ("subir la docena a...", "cambiar precio de...") -> cambiar_precio.
+  • Catálogo y cambiar categoría ("catálogo", "/catalogo", "ver catálogo", "cambiar categoría", "cambiar de categoría", "mover a la categoría...", "modificar categoría") -> gestionar_catalogo con { nombre: "<nombre_producto>", nueva_categoria: "<nueva_categoria>" } (o sin parámetros para abrir el catálogo completo).
+    IMPORTANTE: Si el usuario pide cambiar, modificar o mover la CATEGORÍA de una comida o producto, NUNCA uses cambiar_precio; usá SIEMPRE gestionar_catalogo.
+  • Alta guiada de producto nuevo ("producto nuevo", "/producto_nuevo", "nuevo producto", "cargar producto") -> producto_nuevo.
+  • Cambiar precio ("subir la docena a...", "cambiar precio de...", "actualizar precio") -> cambiar_precio.
   • Menú ("ver menú", "precios", "carta") -> consultar_menu.
   • Bebidas ("bebidas", "ver bebidas", "refrescos", "carta de bebidas") -> gestionar_bebidas.
   • Configurar bebidas en lote ("cargar bebidas en lote", "actualizar bebidas", ej: "Coca 1.5L 3500, Fanta 1.5L 3500") -> configurar_bebidas_lote con { bebidas: [{ nombre, precio }] }.

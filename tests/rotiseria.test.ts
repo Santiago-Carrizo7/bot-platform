@@ -1398,6 +1398,8 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     // 3. menuCommands (comandos del menú azul de Telegram)
     expect(t.menuCommands).toEqual([
       { command: 'venta', description: '📝 Registrar venta' },
+      { command: 'catalogo', description: '📦 Administrar catálogo y productos' },
+      { command: 'producto_nuevo', description: '➕ Alta guiada de producto nuevo' },
       { command: 'promo', description: '🎁 Gestionar promociones' },
       { command: 'comida', description: '➕ Crear comida' },
       { command: 'precio', description: '🏷️ Modificar precios de la carta' },
@@ -1413,6 +1415,8 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     // 4. menu (inline de /menu)
     expect(t.menu.map((m) => m.action)).toEqual([
       'registrar_venta',
+      'gestionar_catalogo',
+      'producto_nuevo',
       'crear_editar_promo',
       'control_dias',
       'menu_estadisticas',

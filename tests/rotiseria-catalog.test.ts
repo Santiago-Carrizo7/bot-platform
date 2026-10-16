@@ -579,7 +579,7 @@ describe('Módulo de Administración de Catálogo, Productos y Categorías en ro
       expect(fakeDb.products.find((p) => p.id === p1.id)?.isActive).toBe(true);
     });
 
-    it('Flujo /catalogo: modificar categoría de un producto vía botones inline', async () => {
+    it('Flujo /catalogo: modificar categoría de un producto vía botones inline (callback corto seguro)', async () => {
       const { deps, resolution, catalogService, fakeDb } = setupCatalogTestEnv('OWNER');
 
       const prod = await catalogService.createProduct(BIZ, {
@@ -596,14 +596,71 @@ describe('Módulo de Administración de Catálogo, Productos y Categorías en ro
       });
       expect(editCat.text).toContain('Modificar categoría');
 
-      // 2. Asignar categoría existente o nueva vía callback
+      // 2. Asignar categoría vía callback corto seguro (<= 64 bytes)
       const setCat = await handleCallback(deps, {
         resolution,
-        data: `rotiseria:prod:set_cat:${prod.id}:parrilla`,
+        data: `rotiseria:cat_set:parrilla`,
         now: NOW,
       });
       expect(setCat.text).toContain('actualizada a *parrilla*');
       expect(fakeDb.products.find((p) => p.id === prod.id)?.category).toBe('parrilla');
+    });
+
+    it('Flujo /catalogo: escribir el nombre de la nueva categoría directamente por texto', async () => {
+      const { deps, resolution, catalogService, fakeDb } = setupCatalogTestEnv('OWNER');
+
+      const prod = await catalogService.createProduct(BIZ, {
+        name: 'Hamburguesa Doble Carne',
+        category: 'hamburguesas',
+        priceUnit: 8500,
+      });
+
+      // 1. Tocar 'Modificar categoría'
+      await handleCallback(deps, {
+        resolution,
+        data: `rotiseria:prod:edit_cat:${prod.id}`,
+        now: NOW,
+      });
+
+      // 2. Escribir directamente el nuevo nombre de categoría en el chat
+      const res = await handleText(deps, {
+        resolution,
+        text: 'especiales',
+        now: NOW,
+      });
+
+      expect(res.text).toContain('actualizada a *especiales*');
+      expect(fakeDb.products.find((p) => p.id === prod.id)?.category).toBe('especiales');
+    });
+
+    it('Flujo freestyle / texto: cambiar categoria de un producto con frase natural', async () => {
+      const { deps, resolution, catalogService, fakeDb } = setupCatalogTestEnv('OWNER');
+
+      const prod = await catalogService.createProduct(BIZ, {
+        name: 'Milanesa Napolitana',
+        category: 'minutas',
+        priceUnit: 9500,
+      });
+
+      // 1. Frase: "cambiar categoría de Milanesa Napolitana a platos del dia"
+      const res = await handleText(deps, {
+        resolution,
+        text: 'cambiar categoría de Milanesa Napolitana a platos del dia',
+        now: NOW,
+      });
+
+      expect(res.text).toContain('actualizada a *platos del dia*');
+      expect(fakeDb.products.find((p) => p.id === prod.id)?.category).toBe('platos del dia');
+
+      // 2. Frase: "mover Milanesa Napolitana a especiales"
+      const resMover = await handleText(deps, {
+        resolution,
+        text: 'mover Milanesa Napolitana a categoria gourmet',
+        now: NOW,
+      });
+
+      expect(resMover.text).toContain('actualizada a *gourmet*');
+      expect(fakeDb.products.find((p) => p.id === prod.id)?.category).toBe('gourmet');
     });
 
     it('Flujo /catalogo: cambiar precio de un producto existente', async () => {
