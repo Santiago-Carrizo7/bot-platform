@@ -188,3 +188,24 @@ export const GestionarBebidasInput = z.object({
 });
 export type GestionarBebidasInput = z.infer<typeof GestionarBebidasInput>;
 
+export const GestionarCatalogoInput = z.object({
+  categoria: z.string().trim().optional(),
+  producto_id: z.string().trim().optional(),
+  _newCategoryName: z.string().trim().optional(),
+  _priceUnit: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
+  _priceDozen: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),
+});
+export type GestionarCatalogoInput = z.infer<typeof GestionarCatalogoInput>;
+
+export const ProductoNuevoInput = z.object({
+  nombre: z.string().trim().optional(),
+  categoria: z.string().trim().optional(),
+  precio_unitario: z.number().positive('El precio unitario debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).optional(),
+  precio_docena: z.number().positive('El precio de docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),
+  precio_media_docena: z.number().positive('El precio de media docena debe ser mayor a 0').max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),
+  _step: z.string().optional(),
+  _awaitingNewCategoryText: z.boolean().optional(),
+});
+export type ProductoNuevoInput = z.infer<typeof ProductoNuevoInput>;
+
+

@@ -68,6 +68,14 @@ export class ProductService {
     return this.repo.deactivateProduct(id, businessId);
   }
 
+  async toggleProductStatus(id: string, businessId: string): Promise<RotiseriaProduct> {
+    const existing = await this.repo.findProductById(id, businessId);
+    if (!existing) {
+      throw new AppError('Producto no encontrado.');
+    }
+    return this.repo.toggleProductStatus(id, businessId);
+  }
+
   async upsertBatchBebidas(
     businessId: string,
     bebidas: Array<{ nombre: string; precio: number }>

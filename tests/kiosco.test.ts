@@ -608,7 +608,7 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
 
     // Confirmar sí anula
     const confirm = await handleCallback(f.deps, { resolution: f.resolution, data: 'undo:confirm', now: NOW });
-    expect(confirm.text).toContain('Se anuló el último movimiento');
+    expect(confirm.text).toContain('Se anuló la última venta');
     expect(confirm.text).toContain('$ 5.000');
     expect(f.repo.movements).toHaveLength(0);
   });
@@ -989,11 +989,13 @@ describe('template kiosco: flujo por bot (Telegram)', () => {
       const resVenta = await handleText(f.deps, { resolution: f.resolution, text: 'vendí 4200', now: NOW });
       expect(resVenta.text).toContain('Venta registrada');
       expect(f.repo.movements).toHaveLength(1);
+      await handleCallback(f.deps, { resolution: f.resolution, data: 'continuous:fin', now: NOW });
 
       // Gasto
       const resGasto = await handleText(f.deps, { resolution: f.resolution, text: 'gasté 1500 en pan', now: NOW });
       expect(resGasto.text).toContain('Gasto registrado');
       expect(f.repo.movements).toHaveLength(2);
+      await handleCallback(f.deps, { resolution: f.resolution, data: 'continuous:fin', now: NOW });
 
       // Calcular precio
       const resCalc = await handleText(f.deps, { resolution: f.resolution, text: 'costo 500 margen 50%', now: NOW });

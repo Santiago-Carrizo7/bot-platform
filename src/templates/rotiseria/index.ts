@@ -14,6 +14,12 @@ import { ProductService } from './domain/product.service.js';
 import { SaleService } from './domain/sale.service.js';
 import { StatsService } from './domain/stats.service.js';
 import { DeliveryZoneService } from './domain/delivery-zone.service.js';
+import { CatalogService } from './domain/catalog.service.js';
+import {
+  buildCatalogAdminActions,
+  handleAdminCallback,
+  handleAdminDirectInput,
+} from './handlers/admin.js';
 import { buildRotiseriaActions, ROTISERIA_MENU_HELP_TEXT } from './actions.js';
 import { buildRotiseriaSystemPrompt } from './prompts.js';
 import {
@@ -193,6 +199,8 @@ export function getRotiseriaMenu(role?: string): MenuItem[] {
     { label: '📋 Ver carta y promociones vigentes', action: 'consultar_carta' },
     { label: '🧾 Últimas ventas registradas', action: 'consultar_ventas' },
     { label: '➕ Crear comida', action: 'crear_producto' },
+    { label: '📦 Administrar catálogo', action: 'gestionar_catalogo' },
+    { label: '➕ Alta guiada de producto', action: 'producto_nuevo' },
   ];
 }
 
@@ -201,6 +209,7 @@ export interface RotiseriaTemplateDeps {
   products?: ProductService;
   sales?: SaleService;
   deliveryZones?: DeliveryZoneService;
+  catalog?: CatalogService;
 }
 
 export interface RotiseriaTemplateBundle {
@@ -223,6 +232,9 @@ const COMMANDS: CommandDef[] = [
   { command: 'menu', description: '✨ Funcionalidades disponibles', action: 'mostrar_menu', reply: ROTISERIA_MENU_HELP_TEXT },
   { command: 'producto', description: '➕ Crear comida', action: 'crear_producto' },
   { command: 'bebidas', description: '🥤 Bebidas y refrescos', action: 'gestionar_bebidas' },
+  { command: 'catalogo', description: '📦 Administrar catálogo y productos', action: 'gestionar_catalogo' },
+  { command: 'producto_nuevo', description: '➕ Alta guiada de producto nuevo', action: 'producto_nuevo' },
+  { command: 'nuevo_producto', description: '➕ Alta guiada de producto nuevo', action: 'producto_nuevo' },
 ];
 
 export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaTemplateBundle {
@@ -231,6 +243,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
   const deliveryZoneRepo = new DeliveryZoneRepository(deps.db);
 
   const products = deps.products ?? new ProductService(productRepo);
+  const catalog = deps.catalog ?? new CatalogService(deps.db);
   const stats = new StatsService(saleRepo);
   const sales = deps.sales ?? new SaleService(saleRepo, products, stats);
   const deliveryZones = deps.deliveryZones ?? new DeliveryZoneService(deliveryZoneRepo);
@@ -287,7 +300,10 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       if (lines.length === 0) return '';
       return lines.join('\n').slice(0, 1800);
     },
-    actions: buildRotiseriaActions({ products, sales, deliveryZones }),
+    actions: [
+      ...buildRotiseriaActions({ products, sales, deliveryZones }),
+      ...buildCatalogAdminActions({ catalog }),
+    ],
     commands: COMMANDS,
     welcomeHint: async (tenant) => {
       const existing = await products.listProducts(tenant.business.id, { limit: 1 });
@@ -299,6 +315,9 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     },
 
     interpretDirectly: (text, activeActionName, activeData) => {
+      const adminDirect = handleAdminDirectInput(text, activeActionName, activeData);
+      if (adminDirect) return adminDirect;
+
       const trimmed = text.trim();
       if (activeActionName === 'registrar_venta') {
         // Detección de fecha cuando se espera ingreso manual
@@ -691,6 +710,23 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     ],
 
     handleCallback: async (ctx, data, activeState, conversations, audit) => {
+      // 0. Administración de catálogo, productos y categorías
+      if (
+        data.startsWith('rotiseria:catalogo') ||
+        data.startsWith('rotiseria:prod:') ||
+        data.startsWith('rotiseria:prod_nuevo:')
+      ) {
+        const adminRes = await handleAdminCallback(
+          ctx,
+          data,
+          activeState,
+          conversations,
+          audit,
+          { catalog }
+        );
+        if (adminRes) return adminRes;
+      }
+
       // 1. Modificar pedido
       if (data === 'rotiseria:modificar') {
         const currentData = (activeState?.data ?? {}) as Record<string, unknown>;
@@ -2704,3 +2740,13 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     },
   };
 }
+
+export { CatalogService } from './domain/catalog.service.js';
+export {
+  buildCatalogAdminActions,
+  handleAdminCallback,
+  handleAdminDirectInput,
+  formatProductAdminCard,
+  formatCatalogView,
+} from './handlers/admin.js';
+

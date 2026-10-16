@@ -7,6 +7,15 @@ export interface CreateProductData {
   category?: string;
 }
 
+export interface CreateCatalogProductData {
+  name: string;
+  category?: string;
+  priceUnit: number;
+  priceDozen?: number | null;
+  priceHalfDozen?: number | null;
+  isActive?: boolean;
+}
+
 export interface UpdateProductData {
   name?: string;
   priceUnit?: number;
