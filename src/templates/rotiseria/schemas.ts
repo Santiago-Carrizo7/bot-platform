@@ -191,6 +191,8 @@ export type GestionarBebidasInput = z.infer<typeof GestionarBebidasInput>;
 export const GestionarCatalogoInput = z.object({
   categoria: z.string().trim().optional(),
   producto_id: z.string().trim().optional(),
+  nombre: z.string().trim().optional(),
+  nueva_categoria: z.string().trim().optional(),
   _newCategoryName: z.string().trim().optional(),
   _priceUnit: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).optional(),
   _priceDozen: z.number().positive().max(MAX_MONEY, MAX_MONEY_MSG).nullable().optional(),

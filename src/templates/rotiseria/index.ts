@@ -683,6 +683,8 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     getReplyMenuLayout: (role?: string) => getRotiseriaReplyMenuLayout(role),
     menu: [
       { label: '📝 Registrar venta', action: 'registrar_venta' },
+      { label: '📦 Administrar catálogo', action: 'gestionar_catalogo' },
+      { label: '➕ Alta guiada de producto', action: 'producto_nuevo' },
       { label: '🎁 Gestionar promociones', action: 'crear_editar_promo' },
       { label: '📅 Control de días recientes', action: 'control_dias' },
       { label: '📈 Estadísticas de ventas', action: 'menu_estadisticas' },
@@ -697,6 +699,8 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
     getMenu: (role?: string) => getRotiseriaMenu(role),
     menuCommands: [
       { command: 'venta', description: '📝 Registrar venta' },
+      { command: 'catalogo', description: '📦 Administrar catálogo y productos' },
+      { command: 'producto_nuevo', description: '➕ Alta guiada de producto nuevo' },
       { command: 'promo', description: '🎁 Gestionar promociones' },
       { command: 'comida', description: '➕ Crear comida' },
       { command: 'precio', description: '🏷️ Modificar precios de la carta' },
@@ -714,7 +718,8 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       if (
         data.startsWith('rotiseria:catalogo') ||
         data.startsWith('rotiseria:prod:') ||
-        data.startsWith('rotiseria:prod_nuevo:')
+        data.startsWith('rotiseria:prod_nuevo:') ||
+        data.startsWith('rotiseria:cat_')
       ) {
         const adminRes = await handleAdminCallback(
           ctx,

@@ -5,8 +5,9 @@
 
 ## Estado actual
 - Phase 0–3 + Sprint A + webhook en verde. Webhook en modo activo en Render.
-- Módulo Catálogo Rotisería: CatalogService, /catalogo, /producto_nuevo (OWNER) implementados.
-- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (290/290 tests) OK, `pnpm build` OK.
+- Módulo Catálogo Rotisería: CatalogService, /catalogo, /producto_nuevo en `menuCommands` y `menu`.
+- Fix: Cambiar categoría soporta botones inline (< 64 bytes), texto libre y frases naturales sin desvío a cambiar_precio.
+- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (292/292 tests) OK, `pnpm build` OK.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 
 ## Decisiones vigentes

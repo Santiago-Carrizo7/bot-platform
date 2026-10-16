@@ -1248,6 +1248,8 @@ export const ROTISERIA_MENU_HELP_TEXT = [
   '• /envios — Para configurar o ver los precios por barrio o zona de delivery.',
   '',
   '📋 *Tu carta:*',
+  '• /catalogo — Para ver el catálogo completo, activar/desactivar o cambiar categorías.',
+  '• /producto_nuevo — Alta guiada paso a paso de un nuevo producto.',
   '• /carta — Para ver las comidas y promos con sus precios actuales.',
   '• /precio — Para actualizar los precios rápido.',
   '• /comida — Para sumar un plato o producto nuevo.',

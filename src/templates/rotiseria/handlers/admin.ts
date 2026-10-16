@@ -149,9 +149,22 @@ export function buildCatalogAdminActions(deps: RotiseriaAdminDeps): ActionDef<un
       }
 
       const businessId = ctx.tenant.business.id;
+      const targetCategory = input._newCategoryName || input.nueva_categoria;
+      let targetProductId = input.producto_id;
 
-      if (input.producto_id && input._newCategoryName) {
-        const updated = await catalog.updateProductCategory(input.producto_id, input._newCategoryName);
+      if (!targetProductId && input.nombre) {
+        const found = await catalog.findProductByName(businessId, input.nombre);
+        if (found) {
+          targetProductId = found.id;
+        } else {
+          return {
+            reply: `⚠️ No se encontró el producto *${esc(input.nombre)}* en el catálogo.`,
+          };
+        }
+      }
+
+      if (targetProductId && targetCategory) {
+        const updated = await catalog.updateProductCategory(targetProductId, targetCategory);
         const card = formatProductAdminCard(
           updated,
           `✅ Categoría de *${esc(updated.name)}* actualizada a *${esc(updated.category)}*.`
@@ -168,8 +181,8 @@ export function buildCatalogAdminActions(deps: RotiseriaAdminDeps): ActionDef<un
         };
       }
 
-      if (input.producto_id && input._priceUnit !== undefined) {
-        const updated = await catalog.updateProductPrice(input.producto_id, {
+      if (targetProductId && input._priceUnit !== undefined) {
+        const updated = await catalog.updateProductPrice(targetProductId, {
           priceUnit: input._priceUnit,
           priceDozen: input._priceDozen,
         });
@@ -189,13 +202,39 @@ export function buildCatalogAdminActions(deps: RotiseriaAdminDeps): ActionDef<un
         };
       }
 
-      if (input.producto_id) {
-        const prod = await catalog.findProductById(input.producto_id, businessId);
+      if (targetProductId && !targetCategory && input._priceUnit === undefined) {
+        const prod = await catalog.findProductById(targetProductId, businessId);
         if (prod) {
-          const card = formatProductAdminCard(prod);
+          const categories = await catalog.listCategories(businessId);
+          const rows: InlineButton[][] = [];
+          for (const cat of categories) {
+            const icon = getCategoryIcon(cat);
+            rows.push([
+              {
+                text: `${icon} ${cat}`,
+                callbackData: `rotiseria:cat_set:${encodeURIComponent(cat)}`,
+              },
+            ]);
+          }
+          rows.push([
+            { text: '➕ Escribir nueva categoría', callbackData: 'rotiseria:cat_new' },
+          ]);
+          rows.push([
+            { text: '↩️ Volver', callbackData: `rotiseria:prod:ver:${prod.id}` },
+          ]);
+
           return {
-            reply: card.text,
-            inlineKeyboard: card.inlineKeyboard,
+            reply: [
+              `✏️ *Modificar categoría de ${esc(prod.name)}*`,
+              `Categoría actual: *${esc(prod.category)}*`,
+              '',
+              'Elegí una categoría existente o escribí el nombre de una nueva en el chat:',
+            ].join('\n'),
+            inlineKeyboard: rows,
+            continueInAction: {
+              name: 'gestionar_catalogo',
+              data: { _awaitingCategoryForId: prod.id, productName: prod.name },
+            },
           };
         }
       }
@@ -396,7 +435,12 @@ export async function handleAdminCallback(
   const businessId = ctx.tenant.business.id;
 
   // Verificación de rol OWNER para cualquier callback de administración
-  if (data.startsWith('rotiseria:catalogo') || data.startsWith('rotiseria:prod:') || data.startsWith('rotiseria:prod_nuevo:')) {
+  if (
+    data.startsWith('rotiseria:catalogo') ||
+    data.startsWith('rotiseria:prod:') ||
+    data.startsWith('rotiseria:prod_nuevo:') ||
+    data.startsWith('rotiseria:cat_')
+  ) {
     if (ctx.tenant.membership?.role !== 'OWNER') {
       return {
         text: '⚠️ Solo el dueño del negocio puede administrar el catálogo de productos.',
@@ -480,6 +524,18 @@ export async function handleAdminCallback(
       return { text: '⚠️ Producto no encontrado.', parseMode: 'Markdown' };
     }
 
+    if (conversations) {
+      await conversations.upsert({
+        businessId,
+        userId: ctx.actorUserId,
+        phase: 'COLLECTING',
+        actionName: 'gestionar_catalogo',
+        data: { _awaitingCategoryForId: id, productName: prod.name },
+        expiresAt: new Date(ctx.now.getTime() + 10 * 60_000),
+        updatedAt: ctx.now,
+      });
+    }
+
     const categories = await catalog.listCategories(businessId);
     const rows: InlineButton[][] = [];
 
@@ -488,13 +544,13 @@ export async function handleAdminCallback(
       rows.push([
         {
           text: `${icon} ${cat}`,
-          callbackData: `rotiseria:prod:set_cat:${id}:${encodeURIComponent(cat)}`,
+          callbackData: `rotiseria:cat_set:${encodeURIComponent(cat)}`,
         },
       ]);
     }
 
     rows.push([
-      { text: '➕ Escribir nueva categoría', callbackData: `rotiseria:prod:new_cat_prompt:${id}` },
+      { text: '➕ Escribir nueva categoría', callbackData: 'rotiseria:cat_new' },
     ]);
     rows.push([
       { text: '↩️ Volver', callbackData: `rotiseria:prod:ver:${id}` },
@@ -505,7 +561,7 @@ export async function handleAdminCallback(
         `✏️ *Modificar categoría de ${esc(prod.name)}*`,
         `Categoría actual: *${esc(prod.category)}*`,
         '',
-        'Elegí una categoría existente o tocá para escribir una nueva:',
+        'Elegí una categoría existente o escribí el nombre de una nueva en el chat:',
       ].join('\n'),
       parseMode: 'Markdown',
       inlineKeyboard: rows,
@@ -513,12 +569,31 @@ export async function handleAdminCallback(
   }
 
   // 6. Asignar categoría existente
-  if (data.startsWith('rotiseria:prod:set_cat:')) {
-    const parts = data.slice('rotiseria:prod:set_cat:'.length).split(':');
-    const id = parts[0];
-    const cat = decodeURIComponent(parts[1] || 'general');
+  if (data.startsWith('rotiseria:cat_set:') || data.startsWith('rotiseria:prod:set_cat:')) {
+    let cat = '';
+    let prodId: string | null = null;
 
-    const updated = await catalog.updateProductCategory(id, cat);
+    if (data.startsWith('rotiseria:cat_set:')) {
+      cat = decodeURIComponent(data.slice('rotiseria:cat_set:'.length));
+      prodId = activeState?.data?._awaitingCategoryForId ? String(activeState.data._awaitingCategoryForId) : null;
+    } else {
+      const parts = data.slice('rotiseria:prod:set_cat:'.length).split(':');
+      prodId = parts[0];
+      cat = decodeURIComponent(parts[1] || 'general');
+    }
+
+    if (!prodId) {
+      return {
+        text: '⚠️ No se pudo determinar el producto a modificar. Volvé a seleccionarlo desde /catalogo.',
+        parseMode: 'Markdown',
+      };
+    }
+
+    const updated = await catalog.updateProductCategory(prodId, cat);
+
+    if (conversations) {
+      await conversations.clear(businessId, ctx.actorUserId);
+    }
 
     if (audit) {
       await audit.log({
@@ -541,11 +616,15 @@ export async function handleAdminCallback(
   }
 
   // 7. Prompt para escribir nueva categoría
-  if (data.startsWith('rotiseria:prod:new_cat_prompt:')) {
-    const id = data.slice('rotiseria:prod:new_cat_prompt:'.length);
-    const prod = await catalog.findProductById(id, businessId);
+  if (data === 'rotiseria:cat_new' || data.startsWith('rotiseria:prod:new_cat_prompt:')) {
+    let id = activeState?.data?._awaitingCategoryForId ? String(activeState.data._awaitingCategoryForId) : '';
+    if (data.startsWith('rotiseria:prod:new_cat_prompt:')) {
+      id = data.slice('rotiseria:prod:new_cat_prompt:'.length);
+    }
+
+    const prod = id ? await catalog.findProductById(id, businessId) : null;
     if (!prod) {
-      return { text: '⚠️ Producto no encontrado.', parseMode: 'Markdown' };
+      return { text: '⚠️ Producto no encontrado. Volvé a seleccionarlo desde /catalogo.', parseMode: 'Markdown' };
     }
 
     if (conversations) {
@@ -786,15 +865,59 @@ export function handleAdminDirectInput(
   activeData?: Record<string, unknown>
 ): { actionName: string; params: Record<string, unknown> } | null {
   const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
 
   // Atajos directos a comandos de catálogo
-  if (trimmed.toLowerCase() === 'catalogo' || trimmed.toLowerCase() === '/catalogo') {
+  if (
+    lower === 'catalogo' ||
+    lower === '/catalogo' ||
+    lower === 'catálogo' ||
+    lower === '/catálogo' ||
+    lower === 'cambiar categoria' ||
+    lower === 'cambiar categoría' ||
+    lower === 'cambiar de categoria' ||
+    lower === 'cambiar de categoría' ||
+    lower === 'modificar categoria' ||
+    lower === 'modificar categoría'
+  ) {
     return { actionName: 'gestionar_catalogo', params: {} };
   }
+
+  // Patrón "cambiar categoría de X a Y" o "cambiar categoria de X a Y"
+  const mChangeCat = trimmed.match(
+    /^(?:cambiar|modificar)(?:\s+de)?\s+categor[ií]a(?:\s+de)?\s+(.+?)\s+a\s+(.+)$/i
+  );
+  if (mChangeCat) {
+    return {
+      actionName: 'gestionar_catalogo',
+      params: {
+        nombre: mChangeCat[1].trim(),
+        nueva_categoria: mChangeCat[2].trim().toLowerCase(),
+      },
+    };
+  }
+
+  // Patrón "mover X a [la] [categoría] Y"
+  const mMover = trimmed.match(
+    /^mover\s+(.+?)\s+a(?:\s+la)?(?:\s+categor[ií]a)?\s+(.+)$/i
+  );
+  if (mMover) {
+    return {
+      actionName: 'gestionar_catalogo',
+      params: {
+        nombre: mMover[1].trim(),
+        nueva_categoria: mMover[2].trim().toLowerCase(),
+      },
+    };
+  }
+
   if (
-    trimmed.toLowerCase() === 'producto_nuevo' ||
-    trimmed.toLowerCase() === '/producto_nuevo' ||
-    trimmed.toLowerCase() === '/nuevo_producto'
+    lower === 'producto_nuevo' ||
+    lower === '/producto_nuevo' ||
+    lower === 'nuevo_producto' ||
+    lower === '/nuevo_producto' ||
+    lower === 'cargar producto' ||
+    lower === 'nuevo producto'
   ) {
     return { actionName: 'producto_nuevo', params: {} };
   }

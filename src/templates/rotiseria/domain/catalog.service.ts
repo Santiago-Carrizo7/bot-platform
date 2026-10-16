@@ -161,6 +161,18 @@ export class CatalogService {
   }
 
   /**
+   * Busca un producto por nombre (case-insensitive) dentro del negocio.
+   */
+  async findProductByName(businessId: string, name: string): Promise<RotiseriaProduct | null> {
+    return this.db.rotiseriaProduct.findFirst({
+      where: {
+        businessId,
+        name: { equals: name.trim(), mode: 'insensitive' },
+      },
+    });
+  }
+
+  /**
    * Actualiza los precios de un producto.
    */
   async updateProductPrice(
@@ -224,3 +236,13 @@ export async function listCategories(
   const service = new CatalogService(db);
   return service.listCategories(businessId);
 }
+
+export async function findProductByName(
+  businessId: string,
+  name: string,
+  db?: DbClient
+): Promise<RotiseriaProduct | null> {
+  const service = new CatalogService(db);
+  return service.findProductByName(businessId, name);
+}
+
