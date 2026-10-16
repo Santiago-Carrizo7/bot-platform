@@ -1227,7 +1227,7 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
     // 3. Enviar fecha futura (debe rebotar)
     const futureErr = await handleText(f.deps, {
       resolution: f.resolution,
-      text: '15/10/2026',
+      text: '15/10/2030',
       now: NOW,
     });
     expect(futureErr.text).toContain('⚠️ La fecha no puede ser futura');

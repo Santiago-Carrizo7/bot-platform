@@ -7,6 +7,7 @@ export interface ProductListOptions {
   search?: string;
   category?: string;
   limit?: number;
+  includeInactive?: boolean;
 }
 
 export class ProductRepository {
@@ -52,11 +53,11 @@ export class ProductRepository {
   }
 
   async listProducts(businessId: string, options: ProductListOptions = {}): Promise<RotiseriaProduct[]> {
-    const { search, category, limit = 50 } = options;
+    const { search, category, limit = 50, includeInactive } = options;
     return this.db.rotiseriaProduct.findMany({
       where: {
         businessId,
-        isActive: true,
+        ...(includeInactive ? {} : { isActive: true }),
         ...(search ? { name: { contains: search.trim(), mode: 'insensitive' } } : {}),
         ...(category ? { category: { equals: category.trim(), mode: 'insensitive' } } : {}),
       },
@@ -91,6 +92,17 @@ export class ProductRepository {
     return this.client(tx).rotiseriaProduct.update({
       where: { id },
       data: { isActive: false },
+    });
+  }
+
+  async toggleProductStatus(id: string, businessId: string, tx?: Prisma.TransactionClient): Promise<RotiseriaProduct> {
+    const existing = await this.findProductById(id, businessId);
+    if (!existing) {
+      throw new Error(`Producto ${id} no encontrado para el negocio ${businessId}`);
+    }
+    return this.client(tx).rotiseriaProduct.update({
+      where: { id },
+      data: { isActive: !existing.isActive },
     });
   }
 
