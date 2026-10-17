@@ -33,6 +33,7 @@ import {
   formatTimeOnly,
   getCategoryIcon,
   formatDeliveryStatsSummary,
+  formatStatsReport,
 } from './format.js';
 import { calculatePricing } from './domain/pricing.js';
 import { getShiftDate } from './domain/shift.js';
@@ -1052,65 +1053,19 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         };
       }
 
-      // 8. Nivel 2: Métricas + Top 3 + Categorías + Bebidas
+      // 8. Nivel 2: Métricas + Top 3 + Categorías
       if (data.startsWith('rotiseria:stats:')) {
         const period = data.slice('rotiseria:stats:'.length);
         const tz = ctx.tenant.business.timezone ?? 'America/Argentina/Buenos_Aires';
         const st = await sales.getStatsSummary(ctx.tenant.business.id, period, ctx.now, tz);
 
-        const lines = [
-          `📈 *Estadísticas — ${esc(st.periodLabel)}*`,
-          '',
-          `💰 Facturación neta: *${formatCurrency(st.salesTotal)}*`,
-          `🧾 Cantidad de ventas: *${st.salesCount}* pedidos`,
-          
-          st.cancelledCount > 0 ? `↩️ Pedidos anulados: *${st.cancelledCount}*` : '',
-          '',
-          '🏆 *Top 3 productos más vendidos:*',
-        ];
-
-        if (st.top3Products.length > 0) {
-          for (const p of st.top3Products) {
-            lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
-          }
-        } else {
-          lines.push('• _Sin ventas registradas en este período_');
-        }
-
-        lines.push('', '📊 *Desglose por categorías:*');
-        if (st.categories.length > 0) {
-          for (const c of st.categories) {
-            lines.push(
-              `• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`
-            );
-          }
-        } else {
-          lines.push('• _Sin categorías en este período_');
-        }
-
-        if (st.promosSummary && st.promosSummary.promos.length > 0) {
-          lines.push('', '🎁 *Promos vendidas:*');
-          for (const pr of st.promosSummary.promos) {
-            lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
-          }
-          lines.push(
-            `Total combos: *${formatQty(st.promosSummary.totalQuantity)}* u. (*${formatCurrency(st.promosSummary.totalAmount)}*)`
-          );
-        }
-
-        if (st.drinksSummary && st.drinksSummary.totalQuantity > 0) {
-          lines.push('', '🥤 *Bebidas vendidas:*');
-          lines.push(
-            `Total: *${formatQty(st.drinksSummary.totalQuantity)}* u. (*${formatCurrency(st.drinksSummary.totalAmount)}*)`
-          );
-          if (st.drinksSummary.topDrink) {
-            lines.push(
-              `Más vendida: 🥇 *${esc(st.drinksSummary.topDrink.name)}* (*${formatQty(st.drinksSummary.topDrink.quantity)}* u.)`
-            );
-          }
-        }
+        const text = formatStatsReport(st);
 
         const buttons: InlineButton[][] = [];
+        buttons.push([
+          { text: '📅 Esta semana', callbackData: 'rotiseria:stats:esta_semana' },
+          { text: '📆 Este mes', callbackData: 'rotiseria:stats:este_mes' },
+        ]);
         if (st.drinksSummary && st.drinksSummary.totalQuantity > 0) {
           buttons.push([{ text: '🥤 Ver ranking de bebidas', callbackData: `rotiseria:stats_bebidas:${period}` }]);
         }
@@ -1121,7 +1076,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         buttons.push([{ text: '⬅️ Volver a períodos', callbackData: 'rotiseria:stats_menu' }]);
 
         return {
-          text: lines.filter(Boolean).join('\n'),
+          text,
           parseMode: 'Markdown',
           inlineKeyboard: buttons,
         };
