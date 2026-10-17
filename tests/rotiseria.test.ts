@@ -997,9 +997,9 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       data: 'rotiseria:stats:esta_semana',
       now: NOW,
     });
-    expect(l2.text).toContain('Facturación neta: *$ 24.000*');
-    expect(l2.text).toContain('Top 3 productos más vendidos');
-    expect(l2.text).toContain('Desglose por categorías');
+    expect(l2.text).toContain('Facturación estimada: $ 24.000');
+    expect(l2.text).toContain('Top 3 más vendidos:');
+    expect(l2.text).toContain('Desglose por categoría:');
 
     // Nivel 3: Selector de categorías
     const l3Menu = await handleCallback(f.deps, {
@@ -1664,9 +1664,9 @@ describe('rotiseria: flujo interactivo por bot (Telegram)', () => {
       data: 'rotiseria:stats:esta_semana',
       now: NOW,
     });
-    expect(statsDetail.text).toContain('🎁 *Promos vendidas:*');
-    expect(statsDetail.text).toContain('Promo 1*: 2 u. — *$ 32.000*');
-    expect(statsDetail.text).toContain('Total combos: *2* u. (*$ 32.000*)');
+    expect(statsDetail.text).toContain('Facturación estimada: $ 32.000');
+    expect(statsDetail.text).toContain('Total unidades vendidas: 2 u.');
+    expect(statsDetail.text).toContain('Promo 1: 2 u.');
   });
 
   it('historial de ventas interactivo (selector 5 vs 10 ventas)', async () => {
@@ -2970,7 +2970,7 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
         data: 'rotiseria:stats:esta_semana',
         now: NOW,
       });
-      expect(resStatsDetail.text).toContain('Facturación neta: *$ 15.000*');
+      expect(resStatsDetail.text).toContain('Facturación estimada: $ 15.000');
       expect(resStatsDetail.text).not.toContain('⛔');
 
       // 2. /dias
@@ -3071,9 +3071,7 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
         data: 'rotiseria:stats:esta_semana',
         now: NOW,
       });
-      expect(resStatsPeriod.text).toContain('🥤 *Bebidas vendidas:*');
-      expect(resStatsPeriod.text).toContain('Total: *6* u. (*$ 21.000*)');
-      expect(resStatsPeriod.text).toContain(`Más vendida: 🥇 *${esc('Coca-Cola 1.5L')}* (*4* u.)`);
+      expect(resStatsPeriod.text).toContain('Facturación estimada: $ 36.000');
       const flatStatsBtns = resStatsPeriod.inlineKeyboard?.flat() ?? [];
       expect(flatStatsBtns.some((b) => b.callbackData === 'rotiseria:stats_bebidas:esta_semana')).toBe(true);
     });

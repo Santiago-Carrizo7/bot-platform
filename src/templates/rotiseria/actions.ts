@@ -44,6 +44,7 @@ import {
   formatSaleNumber,
   formatSaleReceipt,
   formatSaleSummary,
+  formatStatsReport,
   formatTimeOnly,
   getCategoryIcon,
 } from './format.js';
@@ -598,51 +599,14 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       }
 
       const stats = await sales.getStatsSummary(ctx.tenant.business.id, input.periodo, ctx.now);
-
-      const lines: string[] = [
-        `📈 *Estadísticas — ${esc(stats.periodLabel)}*`,
-        '',
-        `💰 Total facturado: *${formatCurrency(stats.salesTotal)}*`,
-        `🧾 Cantidad de ventas: *${stats.salesCount}* pedidos`,
-        ...(stats.cancelledCount > 0 ? [`↩️ Pedidos anulados: *${stats.cancelledCount}*`] : []),
-      ];
-
-      if (stats.top3Products.length > 0) {
-        lines.push('', '', '🏆 *Top 3 productos más vendidos:*');
-        for (const p of stats.top3Products) {
-          lines.push(`• ${esc(p.name)}: *${formatQty(p.quantity)}* u. — *${formatCurrency(p.subtotal)}*`);
-        }
-      }
-
-      if (stats.categories.length > 0) {
-        lines.push('', '', '📊 *Desglose por categorías:*');
-        for (const c of stats.categories) {
-          lines.push(`• ${getCategoryIcon(c.category)} *${esc(c.category)}*: ${formatQty(c.quantity)} u. — *${formatCurrency(c.subtotal)}*`);
-        }
-      }
-
-      if (stats.promosSummary && stats.promosSummary.promos.length > 0) {
-        lines.push('', '🎁 *Promos vendidas:*');
-        for (const pr of stats.promosSummary.promos) {
-          lines.push(`• *${esc(pr.name)}*: ${formatQty(pr.quantity)} u. — *${formatCurrency(pr.subtotal)}*`);
-        }
-        lines.push(`Total combos: *${formatQty(stats.promosSummary.totalQuantity)}* u. (*${formatCurrency(stats.promosSummary.totalAmount)}*)`);
-      }
-
-      if (stats.drinksSummary && stats.drinksSummary.totalQuantity > 0) {
-        lines.push('', '🥤 *Bebidas vendidas:*');
-        lines.push(
-          `Total: *${formatQty(stats.drinksSummary.totalQuantity)}* u. (*${formatCurrency(stats.drinksSummary.totalAmount)}*)`
-        );
-        if (stats.drinksSummary.topDrink) {
-          lines.push(
-            `Más vendida: 🥇 *${esc(stats.drinksSummary.topDrink.name)}* (*${formatQty(stats.drinksSummary.topDrink.quantity)}* u. — *${formatCurrency(stats.drinksSummary.topDrink.subtotal)}*)`
-          );
-        }
-      }
+      const replyText = formatStatsReport(stats);
 
       const buttons: InlineButton[][] = [];
       const periodParam = input.periodo || 'esta_semana';
+      buttons.push([
+        { text: '📅 Esta semana', callbackData: 'rotiseria:stats:esta_semana' },
+        { text: '📆 Este mes', callbackData: 'rotiseria:stats:este_mes' },
+      ]);
       if (stats.drinksSummary && stats.drinksSummary.totalQuantity > 0) {
         buttons.push([
           { text: '🥤 Detalle de bebidas', callbackData: `rotiseria:stats_bebidas:${periodParam}` },
@@ -655,7 +619,7 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       }
       buttons.push([{ text: '🔄 Cambiar período', callbackData: 'rotiseria:stats_menu' }]);
 
-      return { reply: lines.join('\n'), inlineKeyboard: buttons };
+      return { reply: replyText, inlineKeyboard: buttons };
     },
   };
 

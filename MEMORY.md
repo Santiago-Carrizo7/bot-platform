@@ -6,7 +6,7 @@
 ## Estado actual
 - Phase 0–3 + Sprint A + webhook en verde. Webhook en modo activo en Render.
 - Módulo Catálogo Rotisería: CatalogService, /catalogo, /producto_nuevo en `menuCommands` y `menu`.
-- Fix: Cambiar categoría soporta botones inline (< 64 bytes), texto libre y frases naturales sin desvío a cambiar_precio.
+- Estadísticas Rotisería: formato simplificado y limpio (`formatStatsReport`) coincidente con diseño compacto (Facturación estimada, Unidades vendidas, Top 3, Desglose por categoría), conservando navegación por categorías.
 - Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (292/292 tests) OK, `pnpm build` OK.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 

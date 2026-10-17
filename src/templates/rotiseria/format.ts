@@ -1,5 +1,6 @@
 import { escapeMarkdown } from '../../core/messaging/markdown.js';
 import { getShiftDate } from './domain/shift.js';
+import type { StatsSummary } from './types.js';
 
 export function formatCurrency(amount: number | string): string {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
@@ -226,3 +227,54 @@ export function formatDeliveryStatsSummary(stats: {
 
   return lines.join('\n');
 }
+
+export function formatStatsReport(stats: StatsSummary): string {
+  let periodTitle = stats.periodLabel;
+  if (stats.periodKey === 'este_mes' || stats.periodKey === 'mes') {
+    periodTitle = 'Este mes';
+  } else if (stats.periodKey === 'esta_semana' || stats.periodKey === 'semana') {
+    periodTitle = 'Esta semana';
+  } else if (stats.periodKey === 'semana_cerrada') {
+    periodTitle = 'Semana cerrada';
+  } else if (stats.periodKey === 'historico') {
+    periodTitle = 'Histórico';
+  }
+
+  const totalUnits = stats.categories.reduce((acc, c) => acc + c.quantity, 0);
+
+  const lines: string[] = [
+    `📊 Reporte: ${esc(periodTitle)}`,
+    '',
+    `💰 Facturación estimada: ${formatCurrency(stats.salesTotal)}`,
+    `📦 Total unidades vendidas: ${formatQty(totalUnits)} u.`,
+    '',
+    '🏆 Top 3 más vendidos:',
+  ];
+
+  if (stats.top3Products.length > 0) {
+    stats.top3Products.slice(0, 3).forEach((p, idx) => {
+      lines.push(`${idx + 1}. ${esc(p.name)}: ${formatQty(p.quantity)} u.`);
+    });
+  } else {
+    lines.push('• Sin ventas registradas en este período');
+  }
+
+  lines.push('', '📁 Desglose por categoría:');
+
+  if (stats.categories.length > 0) {
+    const sortedCategories = [...stats.categories].sort(
+      (a, b) => b.quantity - a.quantity || b.subtotal - a.subtotal
+    );
+    for (const c of sortedCategories) {
+      const categoryName = c.category
+        ? c.category.charAt(0).toUpperCase() + c.category.slice(1)
+        : 'General';
+      lines.push(`• ${esc(categoryName)}: ${formatQty(c.quantity)} u.`);
+    }
+  } else {
+    lines.push('• Sin categorías en este período');
+  }
+
+  return lines.join('\n');
+}
+
