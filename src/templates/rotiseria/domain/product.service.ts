@@ -33,6 +33,21 @@ export function normalizeDrinkName(raw: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * Normalización canónica para matching tolerante: minúsculas, sin tildes,
+ * sin puntuación y sin conectores/preposiciones aislados.
+ */
+export function cleanString(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\b(?:de|del|y|con|la|las|el|los)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class ProductService {
   constructor(private readonly repo: ProductRepository) {}
 
@@ -215,6 +230,13 @@ export class ProductService {
           if (matchDrink) return matchDrink;
         }
 
+        // 1c. Paso A: match directo normalizado tolerante (sin conectores, tildes ni mayúsculas)
+        const cleanedRaw = cleanString(name.replace(/^\s*\d+\s+/, ''));
+        if (cleanedRaw) {
+          const direct = products.find((p) => cleanString(p.name) === cleanedRaw);
+          if (direct) return direct;
+        }
+
         // 2. Coincidencia limpia idéntica (ej. "1 de carne" o "carne" -> "Empanada de Carne" si cleanNeedle es idéntico)
         const cleaned = cleanNeedle(name);
         if (cleaned) {
@@ -241,6 +263,31 @@ export class ProductService {
             });
             if (exactFlavor) return exactFlavor;
             return tokenMatches[0];
+          }
+        }
+
+        // 3b. Paso B: token set (todos los tokens >2 chars de la búsqueda presentes en el nombre)
+        const searchTokens = cleanedRaw.split(' ').filter((t) => t.length > 2);
+        if (searchTokens.length > 0) {
+          const setMatches = products.filter((p) => {
+            const pTokens = cleanString(p.name).split(' ');
+            return searchTokens.every((t) => pTokens.includes(t));
+          });
+          if (setMatches.length === 1) return setMatches[0];
+        }
+
+        // 3c. Paso C: "media (de) [sabor]" -> único producto de tartas que contiene el sabor
+        const mediaMatch = /^media\s+(.+)$/.exec(cleanedRaw);
+        if (mediaMatch) {
+          const flavorTokens = mediaMatch[1].split(' ').filter((t) => t.length > 2 && t !== 'tarta');
+          if (flavorTokens.length > 0) {
+            const flavorMatches = products.filter((p) => {
+              const cp = cleanString(p.name);
+              if (!(p.category ?? '').toLowerCase().includes('tarta') && !cp.includes('tarta')) return false;
+              const pTokens = cp.split(' ');
+              return flavorTokens.every((t) => pTokens.includes(t));
+            });
+            if (flavorMatches.length === 1) return flavorMatches[0];
           }
         }
 

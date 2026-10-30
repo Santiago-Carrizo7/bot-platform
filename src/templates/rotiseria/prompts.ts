@@ -53,6 +53,13 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
     - "vendí una docena y 1 de carne" -> docena + sueltas del mismo sabor: total 13 de Carne (12 + 1).
     - Si dice solo "vendí una docena" (o "media docena") sin detallar sabores: extraé 12 unidades asociadas a la variedad principal de empanada de HINTS (ej: "Empanada de Carne").
     - Las palabras "docena", "media docena", "docenas", "empanada", "empanadas" NUNCA son nombres de productos ni deben ir jamás en "no_reconocidos".
+- DESAMBIGUACIÓN DE "MEDIA TARTA":
+  • Si en los HINTS existen productos que inician con "Media Tarta" (ej: "Media Tarta Choclo y Zanahoria", "Media Tarta de Brócoli"), la palabra "media" es parte del NOMBRE del producto: NO es la cantidad 0.5 ni una fracción.
+  • La cantidad es el número dictado: "1 media tarta..." -> cantidad: 1; "3 media tarta..." -> cantidad: 3; "media tarta..." sin número previo -> cantidad: 1.
+  • El nombre extraído DEBE ser siempre el nombre canónico del catálogo, sin importar si el usuario dijo o no "de", "con" o "y".
+  • Few-shots:
+    - "Vendí 1 media tarta de choclo y zanahoria" -> items: [{ nombre: "Media Tarta Choclo y Zanahoria", cantidad: 1 }].
+    - "3 media tarta de brócoli" -> items: [{ nombre: "Media Tarta de Brócoli", cantidad: 3 }].
 - Mapeo de términos gastronómicos populares:
   • "carne vacuna", "vacuna", "de vaca" -> Empanada de Carne.
   • "muzza" / "muzzarella" -> Pizza Muzzarella.
