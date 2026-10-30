@@ -2475,6 +2475,29 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       expect(lookup.findProduct('muzzarella')?.name).toBe('Pizza Muzzarella');
     });
 
+    it('findProduct resuelve "Media Tarta" tolerando conectores, mayúsculas y tildes', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Media Tarta Choclo y Zanahoria', priceUnit: 5000, category: 'tartas' });
+      await products.createProduct({ businessId: BIZ, name: 'Media Tarta de Brócoli', priceUnit: 5000, category: 'tartas' });
+      const lookup = await products.getCatalogLookup(BIZ);
+
+      expect(lookup.findProduct('Media tarta de choclo y zanahoria')?.name).toBe('Media Tarta Choclo y Zanahoria');
+      expect(lookup.findProduct('1 Media tarta de choclo zanahoria')?.name).toBe('Media Tarta Choclo y Zanahoria');
+      expect(lookup.findProduct('media tarta de brocoli')?.name).toBe('Media Tarta de Brócoli');
+      expect(lookup.findProduct('media de choclo')?.name).toBe('Media Tarta Choclo y Zanahoria');
+    });
+
+    it('"3 media tarta de brócoli" produce cantidad 3 y producto asignado', async () => {
+      const f = setupFlow([
+        { action: 'registrar_venta', params: { items: [{ nombre: 'Media Tarta de Brócoli', cantidad: 3 }] } },
+      ]);
+      await f.products.createProduct({ businessId: BIZ, name: 'Media Tarta de Brócoli', priceUnit: 5000, category: 'tartas' });
+      const reply = await handleText(f.deps, { resolution: f.resolution, text: '3 media tarta de brócoli', now: NOW });
+      expect(reply.text).toContain('Media Tarta de Brócoli');
+      expect(reply.text).toContain('3');
+      expect(reply.text).not.toContain('No reconocí');
+    });
+
     it('confirmación de flow emite el resumen completo del pedido con botones y pregunta amigable', async () => {
       const f = setupFlow([
         { action: 'registrar_venta', params: { items: [{ nombre: 'Empanada de Carne', cantidad: 12 }] } },
