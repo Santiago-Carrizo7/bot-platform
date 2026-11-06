@@ -805,7 +805,10 @@ async function proceedWithAction(
     await deps.conversations.clear(tenant.business.id, userId);
     return md(MSG_READONLY_WRITE);
   }
-  const validation = action.input.safeParse(data);
+  const effectiveData = action.preprocessInput
+    ? await action.preprocessInput(data, { tenant, actorUserId: userId, now })
+    : data;
+  const validation = action.input.safeParse(effectiveData);
   if (validation.success) {
     const shouldConfirm = action.kind === 'write' && (!action.skipConfirmation || opts.isVoice);
     if (shouldConfirm) {
@@ -942,7 +945,10 @@ async function confirmPending(
   if (overrideDate) {
     data.fecha = overrideDate.toISOString();
   }
-  const validation = action.input.safeParse(data);
+  const effectiveData = action.preprocessInput
+    ? await action.preprocessInput(data, { tenant, actorUserId: userId, now })
+    : data;
+  const validation = action.input.safeParse(effectiveData);
   if (!validation.success) {
     await deps.conversations.clear(tenant.business.id, userId);
     return md('Los datos pendientes ya no son válidos. Empecemos de nuevo.');

@@ -33,9 +33,21 @@ export function normalizeDrinkName(raw: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
+function singularizeToken(word: string): string {
+  if (word.length < 4) return word;
+  if (word === 'tres' || word === 'seis' || word === 'gratis') return word;
+  if (/(?:[nrldz]|ch)es$/.test(word)) {
+    return word.slice(0, -2);
+  }
+  if (word.endsWith('s') && !word.endsWith('ss')) {
+    return word.slice(0, -1);
+  }
+  return word;
+}
+
 /**
  * Normalización canónica para matching tolerante: minúsculas, sin tildes,
- * sin puntuación y sin conectores/preposiciones aislados.
+ * sin puntuación, sin conectores/preposiciones aislados y con lematización de plurales.
  */
 export function cleanString(raw: string): string {
   return raw
@@ -43,9 +55,13 @@ export function cleanString(raw: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\b(?:de|del|y|con|la|las|el|los)\b/g, ' ')
+    .replace(/\b(?:de|del|y|con|la|las|el|los|un|una|unos|unas)\b/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map(singularizeToken)
+    .join(' ');
 }
 
 export class ProductService {
@@ -192,7 +208,7 @@ export class ProductService {
 
   async getCatalogLookup(businessId: string): Promise<CatalogLookup> {
     const [products, promos] = await Promise.all([
-      this.repo.listProducts(businessId, { limit: 100 }),
+      this.repo.listProducts(businessId, { limit: 200 }),
       this.repo.listPromos(businessId),
     ]);
 
@@ -274,12 +290,16 @@ export class ProductService {
             return searchTokens.every((t) => pTokens.includes(t));
           });
           if (setMatches.length === 1) return setMatches[0];
+          if (setMatches.length > 1) {
+            setMatches.sort((a, b) => cleanString(a.name).split(' ').length - cleanString(b.name).split(' ').length);
+            return setMatches[0];
+          }
         }
 
-        // 3c. Paso C: "media (de) [sabor]" -> único producto de tartas que contiene el sabor
-        const mediaMatch = /^media\s+(.+)$/.exec(cleanedRaw);
+        // 3c. Paso C: "media (de) [sabor]" o "tarta (de) [sabor]" -> producto de tartas que contiene el sabor
+        const mediaMatch = /^(?:media|tarta)\s+(.+)$/.exec(cleanedRaw);
         if (mediaMatch) {
-          const flavorTokens = mediaMatch[1].split(' ').filter((t) => t.length > 2 && t !== 'tarta');
+          const flavorTokens = mediaMatch[1].split(' ').filter((t) => t.length > 2 && t !== 'tarta' && t !== 'media');
           if (flavorTokens.length > 0) {
             const flavorMatches = products.filter((p) => {
               const cp = cleanString(p.name);
@@ -287,7 +307,10 @@ export class ProductService {
               const pTokens = cp.split(' ');
               return flavorTokens.every((t) => pTokens.includes(t));
             });
-            if (flavorMatches.length === 1) return flavorMatches[0];
+            if (flavorMatches.length >= 1) {
+              flavorMatches.sort((a, b) => cleanString(a.name).split(' ').length - cleanString(b.name).split(' ').length);
+              return flavorMatches[0];
+            }
           }
         }
 

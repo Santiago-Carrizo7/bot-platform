@@ -2506,6 +2506,91 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       expect(reply.text).not.toContain('No reconocí');
     });
 
+    it('ROTISERIA_MENU_HELP_TEXT y comando /menu no contienen guiones bajos sin escapar que rompan Markdown V1', async () => {
+      const f = setupFlow([]);
+      const reply = await handleText(f.deps, { resolution: f.resolution, text: '/menu', now: NOW });
+      expect(reply.text).toContain('¿Qué podemos hacer juntos?');
+      // Todo '_' debe estar precedido por '\' para no abrir itálica impar en Telegram Markdown V1
+      const unescapedUnderscores = reply.text.match(/(?<!\\)_/g) ?? [];
+      expect(unescapedUnderscores.length % 2).toBe(0);
+      expect(reply.text).toContain('/producto\\_nuevo');
+    });
+
+    it('resolveHints incluye productos de categorías alfabéticamente tardías (tartas) con >40 productos', async () => {
+      const f = setupFlow([]);
+      for (let i = 1; i <= 40; i++) {
+        await f.products.createProduct({
+          businessId: BIZ,
+          name: `Empanada Especial Variedad ${i}`,
+          priceUnit: 2400,
+          priceDozen: 24000,
+          category: 'empanadas',
+        });
+      }
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Media Tarta Calabaza y Berenjena',
+        priceUnit: 14000,
+        category: 'tartas',
+      });
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Media Tarta Verdura',
+        priceUnit: 14000,
+        category: 'tartas',
+      });
+
+      const hints = await f.deps.template.resolveHints!(f.resolution.tenant!);
+      expect(hints).toContain('Media Tarta Calabaza y Berenjena');
+      expect(hints).toContain('Media Tarta Verdura');
+    });
+
+    it('rescata ítems de no_reconocidos mediante findProduct (incluyendo plurales y "tarta de verdura")', async () => {
+      const f = setupFlow([
+        {
+          action: 'registrar_venta',
+          params: {
+            items: [],
+            no_reconocidos: [
+              { texto: '1 media tartas de choclo y zanahoria', cantidad: 1, sugerencia: null },
+              { texto: 'tarta de verdura', cantidad: 1, sugerencia: null },
+              { texto: 'media tarta de calabaza y berenjena', cantidad: 1, sugerencia: null },
+            ],
+          },
+        },
+      ]);
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Media Tarta Choclo y Zanahoria',
+        priceUnit: 14000,
+        category: 'tartas',
+      });
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Media Tarta Verdura',
+        priceUnit: 14000,
+        category: 'tartas',
+      });
+      await f.products.createProduct({
+        businessId: BIZ,
+        name: 'Media Tarta Calabaza y Berenjena',
+        priceUnit: 14000,
+        category: 'tartas',
+      });
+
+      const reply = await handleText(f.deps, {
+        resolution: f.resolution,
+        text: 'vendi 1 media tartas de choclo y zanahoria, una tarta de verdura y una media tarta de calabaza y berenjena',
+        now: NOW,
+      });
+
+      expect(reply.text).not.toContain('No reconocí estos productos en la carta');
+      expect(reply.text).toContain('Media Tarta Choclo y Zanahoria');
+      expect(reply.text).toContain('Media Tarta Verdura');
+      expect(reply.text).toContain('Media Tarta Calabaza y Berenjena');
+      expect(reply.text).toContain('$ 42.000');
+    });
+
     it('confirmación de flow emite el resumen completo del pedido con botones y pregunta amigable', async () => {
       const f = setupFlow([
         { action: 'registrar_venta', params: { items: [{ nombre: 'Empanada de Carne', cantidad: 12 }] } },

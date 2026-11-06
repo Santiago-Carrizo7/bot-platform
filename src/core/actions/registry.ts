@@ -67,6 +67,14 @@ export interface ActionDef<TInput = unknown> {
    * los schemas con .default()/.optional() tienen Input distinto de Output.
    */
   input: z.ZodType<unknown>;
+  /**
+   * Pre-procesamiento opcional de los datos antes de validar con el schema Zod.
+   * Permite al template normalizar o rescatar campos usando servicios de dominio.
+   */
+  preprocessInput?: (
+    data: Record<string, unknown>,
+    ctx: ActionContext
+  ) => Promise<Record<string, unknown>> | Record<string, unknown>;
   /** Roles permitidos (por defecto ambos). */
   roles?: MembershipRole[];
   /** Texto introductorio al iniciar por menú/comando. */
