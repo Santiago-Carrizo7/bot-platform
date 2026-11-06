@@ -7,7 +7,10 @@
 - Phase 0–3 + Sprint A + webhook en verde. Webhook en modo activo en Render.
 - Módulo Catálogo Rotisería: CatalogService, /catalogo, /producto_nuevo en `menuCommands` y `menu`.
 - Estadísticas Rotisería: formato simplificado y limpio (`formatStatsReport`) coincidente con diseño compacto (Facturación estimada, Unidades vendidas, Top 3, Desglose por categoría), conservando navegación por categorías.
-- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (292/292 tests) OK, `pnpm build` OK.
+- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (295 tests) OK, `pnpm build` OK.
+- Normalizador tolerante de catálogo (`product.service.ts`) con `cleanString` (sin acentos, conectores de/del/y/con ni mayúsculas), match token set y fallback "media de [sabor]" para tartas.
+- Desambiguación "Media Tarta" en prompt (`prompts.ts`): evita cuantificador 0.5 y fuerza mapeo a producto canónico.
+- Script `scripts/limpiar-tartas-duplicadas.ts` con dry-run para desactivar (`isActive: false`) productos informales sin borrar historial.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
 
 ## Decisiones vigentes
