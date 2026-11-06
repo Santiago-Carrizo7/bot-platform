@@ -7,8 +7,8 @@
 - Phase 0–3 + Sprint A + webhook en verde. Webhook en modo activo en Render.
 - Módulo Catálogo Rotisería: CatalogService, /catalogo, /producto_nuevo en `menuCommands` y `menu`.
 - Estadísticas Rotisería: formato simplificado y limpio (`formatStatsReport`) coincidente con diseño compacto (Facturación estimada, Unidades vendidas, Top 3, Desglose por categoría), conservando navegación por categorías.
-- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (295 tests) OK, `pnpm build` OK.
-- Normalizador tolerante de catálogo (`product.service.ts`) con `cleanString` (sin acentos, conectores de/del/y/con ni mayúsculas), match token set y fallback "media de [sabor]" para tartas.
+- Quality gates al 100%: `pnpm typecheck` OK, `pnpm test` (298 tests) OK, `pnpm build` OK.
+- Normalizador tolerante de catálogo (`product.service.ts`) con `cleanString` (sin acentos, conectores ni plurales), rescate de `no_reconocidos` vía `ActionDef.preprocessInput`, y `resolveHints` ampliado a 8000 chars.
 - Desambiguación "Media Tarta" en prompt (`prompts.ts`): evita cuantificador 0.5 y fuerza mapeo a producto canónico.
 - Script `scripts/limpiar-tartas-duplicadas.ts` con dry-run para desactivar (`isActive: false`) productos informales sin borrar historial.
 - Stack: Node 20+ / pnpm / TS estricto / grammY / Prisma + PG16 / Zod / Express / vitest.
@@ -25,7 +25,7 @@
 - IA/Visión: timeout estricto de 20s en llamadas HTTP externas; Express con `trust proxy 1` y `helmet`.
 
 ## Gotchas
-- Telegram Markdown V1 rompe con `_` en URLs: enlaces deep link deben enviarse sin `parseMode: 'Markdown'`.
+- Telegram Markdown V1 rompe con `_` sin escapar en URLs y comandos (ej. `/producto\_nuevo`): enlaces deep link deben enviarse sin `parseMode: 'Markdown'` y comandos con `\_`.
 - Telegram 64-byte limit en callback_data: usar índices numéricos (`rotiseria:precio_item:${idx}`).
 - En Windows usar `pnpm.cmd` por soporte de OS. Para pnpm install/add usar BypassSandbox: true.
 

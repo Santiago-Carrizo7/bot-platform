@@ -56,7 +56,7 @@ REGLAS DE INTERPRETACIÓN GASTRONÓMICA:
 - DESAMBIGUACIÓN DE "MEDIA TARTA":
   • Si en los HINTS existen productos que inician con "Media Tarta" (ej: "Media Tarta Choclo y Zanahoria", "Media Tarta de Brócoli"), la palabra "media" es parte del NOMBRE del producto: NO es la cantidad 0.5 ni una fracción.
   • La cantidad es el número dictado: "1 media tarta..." -> cantidad: 1; "3 media tarta..." -> cantidad: 3; "media tarta..." sin número previo -> cantidad: 1.
-  • El nombre extraído DEBE ser siempre el nombre canónico del catálogo, sin importar si el usuario dijo o no "de", "con" o "y".
+  • El nombre extraído DEBE ser siempre el nombre canónico del catálogo, sin importar si el usuario dijo o no "de", "con" o "y", o si usó plural ("media tartas", "medias tartas") o dijo solo "tarta de [sabor]" (ej: "tarta de verdura" -> "Media Tarta Verdura"; "media tarta de calabaza y berenjena" -> "Media Tarta Calabaza y Berenjena"). NUNCA lo mandes a no_reconocidos si el sabor existe en HINTS.
   • Few-shots:
     - "Vendí 1 media tarta de choclo y zanahoria" -> items: [{ nombre: "Media Tarta Choclo y Zanahoria", cantidad: 1 }].
     - "3 media tarta de brócoli" -> items: [{ nombre: "Media Tarta de Brócoli", cantidad: 3 }].

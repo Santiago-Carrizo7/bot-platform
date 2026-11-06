@@ -270,7 +270,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       buildRotiseriaSystemPrompt(businessName, referenceDate, hints),
     resolveHints: async (tenant) => {
       const [productList, promoList, zoneList] = await Promise.all([
-        products.listProducts(tenant.business.id, { limit: 100 }),
+        products.listProducts(tenant.business.id, { limit: 200 }),
         products.listPromos(tenant.business.id),
         deliveryZones.listActive(tenant.business.id),
       ]);
@@ -286,7 +286,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
         lines.push('Productos:');
         for (const p of productList) {
           const docena = p.priceDozen ? `, docena ${formatCurrency(Number(p.priceDozen))}` : '';
-          lines.push(`- ${p.name} (unidad ${formatCurrency(Number(p.priceUnit))}${docena})`);
+          lines.push(`- ${p.name} (${formatCurrency(Number(p.priceUnit))}${docena})`);
         }
       }
       if (zoneList.length > 0) {
@@ -299,7 +299,7 @@ export function createRotiseriaTemplate(deps: RotiseriaTemplateDeps): RotiseriaT
       }
 
       if (lines.length === 0) return '';
-      return lines.join('\n').slice(0, 1800);
+      return lines.join('\n').slice(0, 8000);
     },
     actions: [
       ...buildRotiseriaActions({ products, sales, deliveryZones }),
