@@ -2487,6 +2487,14 @@ describe('rotiseria: productos no catalogados y anulación de 10 ventas', () => 
       expect(lookup.findProduct('media de choclo')?.name).toBe('Media Tarta Choclo y Zanahoria');
     });
 
+    it('findProduct("tarta de choclo") resuelve al único "Media Tarta Choclo y Zanahoria" y "tarta de verdura" no inventa', async () => {
+      const { products } = setupServices();
+      await products.createProduct({ businessId: BIZ, name: 'Media Tarta Choclo y Zanahoria', priceUnit: 5000, category: 'tartas' });
+      const lookup = await products.getCatalogLookup(BIZ);
+      expect(lookup.findProduct('tarta de choclo')?.name).toBe('Media Tarta Choclo y Zanahoria');
+      expect(lookup.findProduct('tarta de verdura')).toBeUndefined();
+    });
+
     it('"3 media tarta de brócoli" produce cantidad 3 y producto asignado', async () => {
       const f = setupFlow([
         { action: 'registrar_venta', params: { items: [{ nombre: 'Media Tarta de Brócoli', cantidad: 3 }] } },
