@@ -62,7 +62,7 @@ export class ProductRepository {
         ...(category ? { category: { equals: category.trim(), mode: 'insensitive' } } : {}),
       },
       orderBy: [{ category: 'asc' }, { name: 'asc' }],
-      take: Math.min(limit, 100),
+      take: Math.min(limit, 200),
     });
   }
 

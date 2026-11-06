@@ -1,5 +1,5 @@
 import type { ActionDef, ActionContext, InlineButton } from '../../core/actions/registry.js';
-import type { ProductService } from './domain/product.service.js';
+import { cleanString, type ProductService } from './domain/product.service.js';
 import type { SaleService } from './domain/sale.service.js';
 import type { DeliveryZoneService } from './domain/delivery-zone.service.js';
 import {
@@ -75,6 +75,55 @@ export function buildRotiseriaActions(deps: RotiseriaActionDeps): ActionDef<unkn
       'Registra una venta de rotisería con empanadas, pizzas, sándwiches o promos. Datos: items (lista de {nombre, cantidad}), zona_envio (opcional), flete_monto (opcional), nota (opcional), fecha (opcional, YYYY-MM-DD). El total y docenas los calcula automáticamente el sistema.',
     kind: 'write',
     input: RegistrarVentaInput,
+    preprocessInput: async (raw, ctx) => {
+      const next: Record<string, unknown> = { ...raw };
+      const hasItems = Array.isArray(next.items) && next.items.length > 0;
+      const hasNoRec = Array.isArray(next.no_reconocidos) && next.no_reconocidos.length > 0;
+      if (!hasItems && !hasNoRec) return next;
+
+      const catalog = await products.getCatalogLookup(ctx.tenant.business.id);
+      const currentItems: Array<Record<string, unknown>> = hasItems
+        ? (next.items as unknown[]).map((it: any) =>
+            typeof it === 'object' && it !== null ? { ...it } : { nombre: String(it), cantidad: 1 }
+          )
+        : [];
+
+      if (hasNoRec) {
+        const remainingNoRec: unknown[] = [];
+        for (const nr of next.no_reconocidos as unknown[]) {
+          const texto =
+            typeof nr === 'object' && nr !== null ? String((nr as any).texto ?? '').trim() : String(nr ?? '').trim();
+          const rawCant = typeof nr === 'object' && nr !== null ? Number((nr as any).cantidad) : NaN;
+          const sugerencia = typeof nr === 'object' && nr !== null ? (nr as any).sugerencia : undefined;
+          const hasSuggestion = typeof sugerencia === 'string' && sugerencia.trim() !== '';
+
+          if (!texto) continue;
+
+          const matched = catalog.findProduct(texto) ?? catalog.findPromo(texto);
+          const cleanedQuery = cleanString(texto.replace(/^\s*\d+\s+/, ''));
+          const cleanedTarget = matched ? cleanString(matched.name) : '';
+          const queryTokens = cleanedQuery.split(' ').filter((t) => t.length > 2);
+          const targetTokens = cleanedTarget.split(' ');
+          const isCleanMatch =
+            Boolean(matched) &&
+            Boolean(cleanedQuery) &&
+            (cleanedTarget === cleanedQuery ||
+              (queryTokens.length > 0 && queryTokens.every((t) => targetTokens.includes(t))));
+
+          if (matched && (!hasSuggestion || isCleanMatch)) {
+            const leadNum = /^(\d+)\s+/.exec(texto);
+            const cantidad = !isNaN(rawCant) && rawCant > 0 ? rawCant : leadNum ? parseInt(leadNum[1], 10) : 1;
+            currentItems.push({ nombre: matched.name, cantidad });
+          } else {
+            remainingNoRec.push(nr);
+          }
+        }
+        next.items = currentItems;
+        next.no_reconocidos = remainingNoRec.length > 0 ? remainingNoRec : undefined;
+      }
+
+      return next;
+    },
     intro:
       'Para registrar una venta decime qué y cuánto. Ejemplo: *"1 docena de carne y una muzza"* o *"8 empanadas de carne y 4 de pollo con envío a tal lado"*.',
     fieldPrompts: {
@@ -1213,7 +1262,7 @@ export const ROTISERIA_MENU_HELP_TEXT = [
   '',
   '📋 *Tu carta:*',
   '• /catalogo — Para ver el catálogo completo, activar/desactivar o cambiar categorías.',
-  '• /producto_nuevo — Alta guiada paso a paso de un nuevo producto.',
+  '• /producto\\_nuevo — Alta guiada paso a paso de un nuevo producto.',
   '• /carta — Para ver las comidas y promos con sus precios actuales.',
   '• /precio — Para actualizar los precios rápido.',
   '• /comida — Para sumar un plato o producto nuevo.',
